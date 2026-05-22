@@ -1,0 +1,463 @@
+/**
+ * Copyright (c) 2021 Alban Fichet <alban dot fichet at gmx dot fr>
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *
+ *  * Redistributions of source code must retain the above copyright
+ * notice, this list of conditions and the following disclaimer.
+ *  * Redistributions in binary form must reproduce the above
+ * copyright notice, this list of conditions and the following
+ * disclaimer in the documentation and/or other materials provided
+ * with the distribution.
+ *  * Neither the name of the organization(s) nor the names of its
+ * contributors may be used to endorse or promote products derived
+ * from this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
+ * FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
+ * COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
+ * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+ * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+ * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
+ * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
+ * OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+QWidget
+{
+    color: rgb(32, 35, 40);
+    background-color: rgb(246, 247, 249);
+}
+
+QMainWindow#MainWindow[windowFrameActive="true"]
+{
+    background-color: rgb(236, 239, 243);
+    border: 1px solid rgb(182, 188, 198);
+}
+
+QMainWindow#MainWindow[windowFrameActive="false"]
+{
+    border: 0px;
+}
+
+QStatusBar#statusbar
+{
+    background-color: rgb(236, 239, 243);
+}
+
+QStatusBar#statusbar QLabel
+{
+    background-color: transparent;
+}
+
+QStatusBar#statusbar::item
+{
+    border: 0px;
+}
+
+QWidget#customTitleBar
+{
+    background-color: rgb(236, 239, 243);
+}
+
+QWidget#customTitleBar QLabel
+{
+    background-color: transparent;
+    color: rgb(32, 35, 40);
+}
+
+QWidget#customTitleBar QMenuBar
+{
+    background-color: transparent;
+    color: rgb(32, 35, 40);
+}
+
+QWidget#customTitleBar QMenuBar::item
+{
+    margin-top: 3px;
+    padding: 3px 10px 4px 10px;
+}
+
+QWidget#customTitleBar QMenuBar::item:selected,
+QWidget#customTitleBar QToolButton:hover
+{
+    background-color: rgb(218, 223, 231);
+}
+
+QWidget#customTitleBar QToolButton
+{
+    border: none;
+    background-color: transparent;
+}
+
+QWidget#customTitleBar QToolButton#titleCloseButton:hover
+{
+    background-color: rgb(221, 58, 47);
+}
+
+QWidget:disabled
+{
+    color: rgb(135, 141, 150);
+}
+
+QWidget:item:hover
+{
+    background-color: rgb(54, 169, 228);
+}
+
+QTabBar::tab
+{
+    border: 0px;
+    border-radius: 0px;
+    padding-left: 10px;
+    padding-right: 10px;
+    padding-top: 10px;
+    padding-bottom: 10px;
+    margin-right: -1px;
+    margin-left: -1px;
+}
+
+QTabBar::tab:selected
+{
+    background-color: rgb(246, 247, 249);
+    border: 0px;
+    border-top: 2px solid rgb(54, 169, 228);
+    border-left: 0.5px solid rgb(182, 188, 198);
+    border-right: 0.5px solid rgb(182, 188, 198);
+    margin-right: 0px;
+    margin-left: 0px;
+}
+
+QTabBar::tab:!selected
+{
+    background-color: rgb(224, 228, 234);
+    border-left: 1px solid rgb(182, 188, 198);
+    border-right: 1px solid rgb(182, 188, 198);
+}
+
+QTabBar::tab:!selected:hover
+{
+    background-color: rgb(235, 238, 242);
+}
+
+QTabBar::close-button,
+QMdiSubWindow::close-button
+{
+    image: url(:/light_flat/icons/close-tab.svg);
+    width: 16px;
+    height: 16px;
+}
+
+QTabBar::close-button:hover,
+QMdiSubWindow::close-button:hover
+{
+    background-color: rgb(218, 223, 231);
+}
+
+QMenu
+{
+    border: 1px solid rgb(182, 188, 198);
+}
+
+QMenu::item
+{
+    background-color: transparent;
+}
+
+QMenuBar::item:selected
+{
+    background-color: rgb(218, 223, 231);
+}
+
+QMenu::item::selected,
+QMenuBar::item:pressed
+{
+    color: white;
+    background-color: rgb(54, 169, 228);
+}
+
+QMenu::separator
+{
+    background-color: rgb(205, 211, 220);
+    height: 1px;
+    margin-left: 0;
+    margin-right: 0;
+}
+
+QTreeView
+{
+    alternate-background-color: rgb(238, 241, 245);
+}
+
+QComboBox
+{
+    selection-background-color: rgb(54, 169, 228);
+}
+
+QPushButton
+{
+    border-radius: 4px;
+    padding-left: 10px;
+    padding-right: 10px;
+    padding-top: 2px;
+    padding-bottom: 2px;
+    min-height: 18px;
+}
+
+QPushButton:disabled
+{
+    border: 1px solid rgb(205, 211, 220);
+    background-color: rgb(246, 247, 249);
+}
+
+QPushButton:enabled
+{
+    border: 1px solid rgb(154, 162, 174);
+    background-color: rgb(232, 236, 241);
+}
+
+QPushButton:enabled:hover
+{
+    border: 1px solid rgb(72, 79, 90);
+    background-color: rgb(218, 223, 231);
+}
+
+QPushButton:enabled:pressed
+{
+    border: 1px solid rgb(72, 79, 90);
+    background-color: rgb(205, 211, 220);
+}
+
+QSpinBox,
+QDoubleSpinBox,
+QComboBox
+{
+    border-radius: 4px;
+    padding-left: 10px;
+    padding-right: 10px;
+    padding-top: 1px;
+    padding-bottom: 1px;
+    height: 18px;
+}
+
+QSpinBox:disabled,
+QDoubleSpinBox:disabled,
+QComboBox:disabled
+{
+    border: 1px solid rgb(205, 211, 220);
+}
+
+QSpinBox:enabled,
+QDoubleSpinBox:enabled,
+QComboBox:enabled
+{
+    border: 1px solid rgb(154, 162, 174);
+}
+
+QSpinBox:enabled:hover,
+QDoubleSpinBox:enabled:hover,
+QComboBox:enabled:hover
+{
+    border: 1px solid rgb(72, 79, 90);
+}
+
+QSpinBox:pressed,
+QDoubleSpinBox:pressed,
+QComboBox:pressed
+{
+    border: 1px solid rgb(72, 79, 90);
+}
+
+QComboBox::drop-down
+{
+    border-top-right-radius: 2px;
+    border-bottom-right-radius: 2px;
+    image: url(:/dark_flat/icons/down-scroll.svg);
+    margin-top: -1px;
+    margin-bottom: -1px;
+    margin-right: -1px;
+    padding-left: 6px;
+    padding-right: 6px;
+    height: 20px;
+    width: 10px;
+}
+
+QSpinBox::up-button,
+QDoubleSpinBox::up-button
+{
+    border-top-right-radius: 2px;
+    image: url(:/dark_flat/icons/up-scroll.svg);
+    width: 8px;
+    height: 7px;
+    padding: 1px;
+    margin-top: -1px;
+    margin-right: -1px;
+}
+
+QSpinBox::down-button,
+QDoubleSpinBox::down-button
+{
+    border-bottom-right-radius: 2px;
+    image: url(:/dark_flat/icons/down-scroll.svg);
+    width: 8px;
+    height: 7px;
+    padding: 1px;
+    margin-bottom: -1px;
+    margin-right: -1px;
+}
+
+QSpinBox::up-button:enabled,
+QSpinBox::down-button:enabled,
+QDoubleSpinBox::up-button:enabled,
+QDoubleSpinBox::down-button:enabled,
+QComboBox::drop-down:enabled
+{
+    border: 1px solid rgb(154, 162, 174);
+    background-color: rgb(96, 105, 116);
+}
+
+QSpinBox::up-button:enabled:hover,
+QSpinBox::down-button:enabled:hover,
+QDoubleSpinBox::up-button:enabled:hover,
+QDoubleSpinBox::down-button:enabled:hover,
+QComboBox::drop-down:enabled:hover
+{
+    border: 1px solid rgb(72, 79, 90);
+    background-color: rgb(72, 79, 90);
+}
+
+QHeaderView:section
+{
+    border: 1px solid rgb(154, 162, 174);
+    background-color: rgb(224, 228, 234);
+    padding-left: 3px;
+    padding-right: 3px;
+    margin-bottom: 5px;
+}
+
+QScrollBar:vertical,
+QScrollBar:horizontal
+{
+    background-color: rgb(224, 228, 234);
+}
+
+QScrollBar:handle::horizontal,
+QScrollBar:add-line:horizontal,
+QScrollBar:sub-line:horizontal,
+QScrollBar:handle::vertical,
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical
+{
+    background-color: rgb(96, 105, 116);
+}
+
+QScrollBar:horizontal
+{
+    height: 15px;
+    margin: 0px 15px 0 15px;
+}
+
+QScrollBar:vertical
+{
+    width: 15px;
+    margin: 15px 0 15px 0;
+}
+
+QScrollBar::handle:horizontal:pressed,
+QScrollBar::add-line:horizontal:pressed,
+QScrollBar::sub-line:horizontal:pressed,
+QScrollBar::handle:vertical:pressed,
+QScrollBar::add-line:vertical:pressed,
+QScrollBar::sub-line:vertical:pressed
+{
+    background-color: rgb(54, 169, 228);
+}
+
+QScrollBar:horizontal,
+QScrollBar:vertical
+{
+    border: 1px solid rgb(182, 188, 198);
+}
+
+QScrollBar::handle:horizontal,
+QScrollBar::handle:horizontal::pressed,
+QScrollBar::handle:vertical,
+QScrollBar::handle:vertical::pressed
+{
+    border-radius: 0px;
+}
+
+QScrollBar::add-line:horizontal,
+QScrollBar::sub-line:horizontal,
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical
+{
+    border-radius: 0px;
+    border: 1px solid rgb(182, 188, 198);
+    width: 13px;
+    height: 13px;
+    subcontrol-origin: margin;
+}
+
+QScrollBar::add-line:horizontal
+{
+    subcontrol-position: right;
+}
+
+QScrollBar::sub-line:horizontal
+{
+    subcontrol-position: left;
+}
+
+QScrollBar::add-line:vertical
+{
+    subcontrol-position: bottom;
+}
+
+QScrollBar::sub-line:vertical
+{
+    subcontrol-position: top;
+}
+
+QScrollBar::add-page:horizontal,
+QScrollBar::sub-page:horizontal,
+QScrollBar::add-page:vertical,
+QScrollBar::sub-page:vertical
+{
+    background: none;
+}
+
+QScrollBar::right-arrow:horizontal
+{
+    width: 7px;
+    height: 7px;
+    image: url(:/dark_flat/icons/right-scroll.svg);
+}
+
+QScrollBar::left-arrow:horizontal
+{
+    width: 7px;
+    height: 7px;
+    image: url(:/dark_flat/icons/left-scroll.svg);
+}
+
+QScrollBar::up-arrow:vertical
+{
+    width: 7px;
+    height: 7px;
+    image: url(:/dark_flat/icons/up-scroll.svg);
+}
+
+QScrollBar::down-arrow:vertical
+{
+    width: 7px;
+    height: 7px;
+    image: url(:/dark_flat/icons/down-scroll.svg);
+}
