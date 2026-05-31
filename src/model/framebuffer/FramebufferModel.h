@@ -38,6 +38,7 @@
 #include <QRect>
 #include <QVector>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 class FramebufferModel: public QObject
@@ -49,6 +50,7 @@ class FramebufferModel: public QObject
     virtual ~FramebufferModel();
 
     const QImage& getLoadedImage() const { return m_image; }
+    const std::vector<float>& getRawPixels() const { return m_pixelBuffer; }
 
     bool isImageLoaded() const { return m_isImageLoaded; }
 
@@ -66,6 +68,7 @@ class FramebufferModel: public QObject
     bool     hasFiniteSamples() const { return m_hasFiniteSamples; }
 
     virtual std::string getColorInfo(int x, int y) const = 0;
+    virtual std::vector<std::string> rawChannelNames() const = 0;
 
   signals:
     void imageChanged();

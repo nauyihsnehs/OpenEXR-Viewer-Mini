@@ -28,6 +28,7 @@
      <string>&amp;File</string>
     </property>
     <addaction name="action_Open"/>
+    <addaction name="action_Save"/>
     <addaction name="action_CopyImage"/>
     <addaction name="action_CopyImageFullResolution"/>
     <addaction name="action_Refresh"/>
@@ -40,6 +41,13 @@
     <property name="title">
      <string>&amp;View</string>
     </property>
+    <widget class="QMenu" name="menu_Mode">
+     <property name="title">
+      <string>&amp;Mode</string>
+     </property>
+     <addaction name="action_ModeExposure"/>
+     <addaction name="action_ModeToneMapping"/>
+    </widget>
     <widget class="QMenu" name="menu_LayerView">
      <property name="title">
       <string>Layer view</string>
@@ -65,6 +73,7 @@
      <addaction name="action_ThemeLight"/>
      <addaction name="action_ThemeDark"/>
     </widget>
+    <addaction name="menu_Mode"/>
     <addaction name="menu_LayerView"/>
     <addaction name="menu_Show"/>
     <addaction name="menu_Theme"/>
@@ -108,6 +117,36 @@
    </property>
    <property name="shortcut">
     <string>Ctrl+Shift+C</string>
+   </property>
+  </action>
+  <action name="action_Save">
+   <property name="enabled">
+    <bool>false</bool>
+   </property>
+   <property name="text">
+    <string>&amp;Save...</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+S</string>
+   </property>
+  </action>
+  <action name="action_ModeExposure">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="checked">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>Exposure</string>
+   </property>
+  </action>
+  <action name="action_ModeToneMapping">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>Tone mapping</string>
    </property>
   </action>
   <action name="action_Tabbed">

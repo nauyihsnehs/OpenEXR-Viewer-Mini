@@ -38,36 +38,102 @@
 
 #include <Imath/ImathBox.h>
 
+#include <QFile>
+
+#include <memory>
+#include <stdexcept>
+
+
+class QFileIStream: public Imf::IStream
+{
+  public:
+    QFileIStream(const QByteArray& filename, QFile& file)
+      : Imf::IStream(filename.constData())
+      , m_file(file)
+    {}
+
+    bool read(char c[], int n) override
+    {
+        return m_file.read(c, n) == n;
+    }
+
+    uint64_t tellg() override
+    {
+        return static_cast<uint64_t>(m_file.pos());
+    }
+
+    void seekg(uint64_t pos) override
+    {
+        m_file.seek(static_cast<qint64>(pos));
+    }
+
+    bool isMemoryMapped() const override { return false; }
+
+  private:
+    QFile& m_file;
+};
+
 
 OpenEXRImage::OpenEXRImage(const QString& filename, QObject* parent)
   : QObject(parent)
   , m_filename(filename)
   , m_isStream(false)
-  , m_exrIn(new Imf::MultiPartInputFile(filename.toStdString().c_str()))
+  , m_file(nullptr)
+  , m_stream(nullptr)
+  , m_exrIn(nullptr)
   , m_headerModel(nullptr)
   , m_layerModel(nullptr)
 {
-    m_headerModel = new HeaderModel(*m_exrIn, m_exrIn->parts(), this);
-    m_headerModel->addFile(*m_exrIn, filename);
+    std::unique_ptr<QFile> file(new QFile(filename));
 
-    m_layerModel = new LayerModel(*m_exrIn, this);
+    if (!file->open(QFile::ReadOnly)) {
+        throw std::runtime_error(
+          QString("Cannot read image file \"%1\". %2.")
+            .arg(filename, file->errorString())
+            .toStdString());
+    }
+
+    m_streamName = filename.toUtf8();
+
+    std::unique_ptr<Imf::IStream> stream(new QFileIStream(m_streamName, *file));
+    std::unique_ptr<Imf::MultiPartInputFile> exrIn(
+      new Imf::MultiPartInputFile(*stream));
+    std::unique_ptr<HeaderModel> headerModel(
+      new HeaderModel(*exrIn, exrIn->parts(), this));
+    std::unique_ptr<LayerModel> layerModel(new LayerModel(*exrIn, this));
+
+    headerModel->addFile(*exrIn, filename);
+
+    m_file        = file.release();
+    m_stream      = stream.release();
+    m_exrIn       = exrIn.release();
+    m_headerModel = headerModel.release();
+    m_layerModel  = layerModel.release();
 }
 
 
 OpenEXRImage::OpenEXRImage(std::istream& stream, QObject* parent)
   : QObject(parent)
   , m_isStream(true)
-  //  , m_exrIn(StdIStream(stream))
+  , m_file(nullptr)
+  , m_stream(nullptr)
+  , m_exrIn(nullptr)
   , m_headerModel(nullptr)
   , m_layerModel(nullptr)
 {
-    StdIStream s(stream);
-    m_exrIn = new Imf::MultiPartInputFile(s);
+    std::unique_ptr<Imf::IStream> inputStream(new StdIStream(stream));
+    std::unique_ptr<Imf::MultiPartInputFile> exrIn(
+      new Imf::MultiPartInputFile(*inputStream));
+    std::unique_ptr<HeaderModel> headerModel(
+      new HeaderModel(*exrIn, exrIn->parts(), this));
+    std::unique_ptr<LayerModel> layerModel(new LayerModel(*exrIn, this));
 
-    m_headerModel = new HeaderModel(*m_exrIn, m_exrIn->parts(), this);
-    m_headerModel->addFile(*m_exrIn, "Stream");
+    headerModel->addFile(*exrIn, "Stream");
 
-    m_layerModel = new LayerModel(*m_exrIn, this);
+    m_stream      = inputStream.release();
+    m_exrIn       = exrIn.release();
+    m_headerModel = headerModel.release();
+    m_layerModel  = layerModel.release();
 }
 
 
@@ -76,4 +142,6 @@ OpenEXRImage::~OpenEXRImage()
     delete m_headerModel;
     delete m_layerModel;
     delete m_exrIn;
+    delete m_stream;
+    delete m_file;
 }

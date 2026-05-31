@@ -32,6 +32,8 @@
 
 #pragma once
 
+#include <QEvent>
+#include <QPoint>
 #include <QWidget>
 
 #include <model/framebuffer/YFramebufferModel.h>
@@ -54,7 +56,11 @@ class YFramebufferWidget: public QWidget
 
   signals:
     void openFileOnDropEvent(const QString& filename);
-    void fileInfoRequested(QWidget* widget);
+    void fileInfoHoverRequested(QWidget* widget, const QPoint& position);
+    void fileInfoHoverLeft();
+
+  protected:
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
   private slots:
     void onQueryPixelInfo(int x, int y);
@@ -71,8 +77,8 @@ class YFramebufferWidget: public QWidget
 
     void on_cbScale_stateChanged(int arg1);
     void updateZoomLevelText(double zoom);
+    void updateFramebufferSummary();
     void on_zoomButton_clicked();
-    void on_fileInfoButton_clicked();
 
   private:
     Ui::YFramebufferWidget* ui;

@@ -45,6 +45,21 @@ class RGBFramebufferModel: public FramebufferModel
         Layer_YC,
     };
 
+    enum PreviewMode
+    {
+        Preview_Exposure,
+        Preview_ToneMapping,
+    };
+
+    enum ToneMappingMethod
+    {
+        Tone_Reinhard,
+        Tone_ACES,
+        Tone_Filmic,
+        Tone_Log,
+        Tone_Clamp,
+    };
+
     RGBFramebufferModel(
       const std::string& parentLayerName,
       LayerType          layerType = Layer_RGB,
@@ -61,9 +76,13 @@ class RGBFramebufferModel: public FramebufferModel
     virtual float getGreenInfo(int x, int y) const;
     virtual float getBlueInfo(int x, int y) const;
     virtual float getAlphaInfo(int x, int y) const;
+    virtual std::vector<std::string> rawChannelNames() const;
 
   public slots:
+    void setPreviewMode(PreviewMode mode);
+    void setToneMappingMethod(ToneMappingMethod method);
     void setExposure(double value);
+    void setToneParameters(double p0, double p1, double p2, double p3);
 
   protected:
     void updateImage();
@@ -72,5 +91,8 @@ class RGBFramebufferModel: public FramebufferModel
     int         m_partID;
     std::string m_parentLayer;
     LayerType   m_layerType;
+    PreviewMode m_previewMode;
+    ToneMappingMethod m_toneMappingMethod;
     double      m_exposure;
+    double      m_toneParams[4];
 };

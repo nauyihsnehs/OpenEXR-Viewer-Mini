@@ -320,17 +320,9 @@ void GraphicsView::dropEvent(QDropEvent* ev)
     QList<QUrl> urls = ev->mimeData()->urls();
 
     if (!urls.empty()) {
-        QString filename = urls[0].toString();
-        QString startFileTypeString =
-#ifdef _WIN32
-          "file:///";
-#else
-          "file://";
-#endif
+        const QString filename = urls[0].toLocalFile();
 
-        if (filename.startsWith(startFileTypeString)) {
-            filename = filename.remove(0, startFileTypeString.length());
-
+        if (!filename.isEmpty()) {
             emit openFileOnDropEvent(filename);
         }
     }

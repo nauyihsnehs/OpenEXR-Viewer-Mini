@@ -37,6 +37,8 @@
 #include <QFuture>
 #include <QtConcurrent/QtConcurrent>
 
+#include <cmath>
+
 #include <OpenEXR/ImfChromaticitiesAttribute.h>
 #include <OpenEXR/ImfFrameBuffer.h>
 #include <OpenEXR/ImfHeader.h>
@@ -45,12 +47,172 @@
 
 #include <Imath/ImathBox.h>
 
+static float clampPreview(float value, float minimum, float maximum)
+{
+    if (value < minimum) return minimum;
+    if (value > maximum) return maximum;
+
+    return value;
+}
+
+
+static float safeToneInput(float value)
+{
+    if (!std::isfinite(value) || value < 0.f) return 0.f;
+
+    return clampPreview(value, 0.f, 1.e10f);
+}
+
+
+static float positiveToneParam(float value)
+{
+    return value > 0.001f ? value : 0.001f;
+}
+
+
+static float reinhardTone(float value, float key, float shoulder)
+{
+    const float scaled = value * positiveToneParam(key);
+    const float rolloff = positiveToneParam(shoulder);
+    const float rolloff2 = rolloff * rolloff;
+
+    return scaled * (1.f + scaled / rolloff2) / (1.f + scaled);
+}
+
+
+static float acesFittedTone(float value, float shoulder, float toe)
+{
+    const float shoulderStrength = positiveToneParam(shoulder);
+    const float toeStrength = positiveToneParam(toe);
+    const float a = 2.51f;
+    const float b = 0.03f * toeStrength;
+    const float c = 2.43f * shoulderStrength;
+    const float d = 0.59f;
+    const float e = 0.14f * toeStrength;
+
+    return value * (a * value + b) / (value * (c * value + d) + e);
+}
+
+
+static float hablePartial(
+  float value, float shoulderStrength, float linearStrength, float linearAngle,
+  float toeStrength)
+{
+    const float a = shoulderStrength;
+    const float b = positiveToneParam(linearStrength);
+    const float c = linearAngle;
+    const float d = positiveToneParam(toeStrength);
+    const float e = 0.02f;
+    const float f = 0.30f;
+
+    return (
+      value * (a * value + c * b) + d * e)
+      / (value * (a * value + b) + d * f)
+      - e / f;
+}
+
+
+static float filmicTone(
+  float value, float shoulderStrength, float linearStrength, float linearAngle,
+  float toeStrength)
+{
+    const float whiteCurve = hablePartial(
+      11.2f,
+      shoulderStrength,
+      linearStrength,
+      linearAngle,
+      toeStrength);
+
+    if (!std::isfinite(whiteCurve) || whiteCurve <= 0.f) return 0.f;
+
+    return hablePartial(
+      value,
+      shoulderStrength,
+      linearStrength,
+      linearAngle,
+      toeStrength)
+      / whiteCurve;
+}
+
+
+static float logTone(float value, float range, float compression)
+{
+    const float compressedValue = value * positiveToneParam(compression);
+    const float compressedRange =
+      positiveToneParam(range) * positiveToneParam(compression);
+    const float scale = std::log1p(compressedRange);
+
+    if (!std::isfinite(scale) || scale <= 0.f) return 0.f;
+
+    return std::log1p(compressedValue) / scale;
+}
+
+
+static float clampTone(float value, float minimum, float maximum)
+{
+    const float lower = minimum;
+    const float upper = maximum > lower ? maximum : lower + 0.001f;
+    const float clamped = clampPreview(value, lower, upper);
+
+    return (clamped - lower) / (upper - lower);
+}
+
+
+static float applyToneMapping(
+  float value,
+  RGBFramebufferModel::ToneMappingMethod method,
+  float p0,
+  float p1,
+  float p2,
+  float p3)
+{
+    switch (method) {
+        case RGBFramebufferModel::Tone_ACES:
+            return acesFittedTone(value, p0, p1);
+
+        case RGBFramebufferModel::Tone_Filmic:
+            return filmicTone(value, p0, p1, p2, p3);
+
+        case RGBFramebufferModel::Tone_Log:
+            return logTone(value, p0, p1);
+
+        case RGBFramebufferModel::Tone_Clamp:
+            return clampTone(value, p0, p1);
+
+        case RGBFramebufferModel::Tone_Reinhard:
+        default:
+            return reinhardTone(value, p0, p1);
+    }
+}
+
+
+static float toneMappedSRGB(
+  float value,
+  RGBFramebufferModel::ToneMappingMethod method,
+  float p0,
+  float p1,
+  float p2,
+  float p3)
+{
+    const float source = safeToneInput(value);
+
+    float mapped = applyToneMapping(source, method, p0, p1, p2, p3);
+
+    if (!std::isfinite(mapped)) mapped = 0.f;
+
+    return ColorTransform::to_sRGB(clampPreview(mapped, 0.f, 1.f));
+}
+
+
 RGBFramebufferModel::RGBFramebufferModel(
   const std::string& parentLayerName, LayerType layerType, QObject* parent)
   : FramebufferModel(parent)
   , m_parentLayer(parentLayerName)
   , m_layerType(layerType)
+  , m_previewMode(Preview_Exposure)
+  , m_toneMappingMethod(Tone_Reinhard)
   , m_exposure(0.)
+  , m_toneParams{ 0.18, 4., 0., 0. }
 {}
 
 RGBFramebufferModel::~RGBFramebufferModel() {}
@@ -462,11 +624,54 @@ float RGBFramebufferModel::getAlphaInfo(int x, int y) const
 }
 
 
+std::vector<std::string> RGBFramebufferModel::rawChannelNames() const
+{
+    return { "R", "G", "B", "A" };
+}
+
+
 void RGBFramebufferModel::setExposure(double value)
 {
     if (m_exposure == value) return;
 
     m_exposure = value;
+    updateImage();
+}
+
+
+void RGBFramebufferModel::setPreviewMode(PreviewMode mode)
+{
+    if (m_previewMode == mode) return;
+
+    m_previewMode = mode;
+    updateImage();
+}
+
+
+void RGBFramebufferModel::setToneMappingMethod(ToneMappingMethod method)
+{
+    if (m_toneMappingMethod == method) return;
+
+    m_toneMappingMethod = method;
+    updateImage();
+}
+
+
+void RGBFramebufferModel::setToneParameters(
+  double p0, double p1, double p2, double p3)
+{
+    if (
+      m_toneParams[0] == p0
+      && m_toneParams[1] == p1
+      && m_toneParams[2] == p2
+      && m_toneParams[3] == p3) {
+        return;
+    }
+
+    m_toneParams[0] = p0;
+    m_toneParams[1] = p1;
+    m_toneParams[2] = p2;
+    m_toneParams[3] = p3;
     updateImage();
 }
 
@@ -484,7 +689,13 @@ void RGBFramebufferModel::updateImage()
         m_imageEditingWatcher->waitForFinished();
     }
 
-    float m_exposure_mul = std::exp2(m_exposure);
+    const PreviewMode previewMode = m_previewMode;
+    const ToneMappingMethod toneMappingMethod = m_toneMappingMethod;
+    const float exposureMul = std::exp2(m_exposure);
+    const float toneParam0 = m_toneParams[0];
+    const float toneParam1 = m_toneParams[1];
+    const float toneParam2 = m_toneParams[2];
+    const float toneParam3 = m_toneParams[3];
 
     QFuture<void> imageConverting = QtConcurrent::run([=]() {
         for (int y = 0; y < m_image.height(); y++) {
@@ -492,12 +703,37 @@ void RGBFramebufferModel::updateImage()
 
             #pragma omp parallel for
             for (int x = 0; x < m_image.width(); x++) {
-                const float r = ColorTransform::to_sRGB(
-                  m_exposure_mul * m_pixelBuffer[4 * (y * m_width + x) + 0]);
-                const float g = ColorTransform::to_sRGB(
-                  m_exposure_mul * m_pixelBuffer[4 * (y * m_width + x) + 1]);
-                const float b = ColorTransform::to_sRGB(
-                  m_exposure_mul * m_pixelBuffer[4 * (y * m_width + x) + 2]);
+                const float sourceR = m_pixelBuffer[4 * (y * m_width + x) + 0];
+                const float sourceG = m_pixelBuffer[4 * (y * m_width + x) + 1];
+                const float sourceB = m_pixelBuffer[4 * (y * m_width + x) + 2];
+
+                float r = ColorTransform::to_sRGB(exposureMul * sourceR);
+                float g = ColorTransform::to_sRGB(exposureMul * sourceG);
+                float b = ColorTransform::to_sRGB(exposureMul * sourceB);
+
+                if (previewMode == Preview_ToneMapping) {
+                    r = toneMappedSRGB(
+                      sourceR,
+                      toneMappingMethod,
+                      toneParam0,
+                      toneParam1,
+                      toneParam2,
+                      toneParam3);
+                    g = toneMappedSRGB(
+                      sourceG,
+                      toneMappingMethod,
+                      toneParam0,
+                      toneParam1,
+                      toneParam2,
+                      toneParam3);
+                    b = toneMappedSRGB(
+                      sourceB,
+                      toneMappingMethod,
+                      toneParam0,
+                      toneParam1,
+                      toneParam2,
+                      toneParam3);
+                }
 
                 const float a = m_pixelBuffer[4 * (y * m_width + x) + 3];
 

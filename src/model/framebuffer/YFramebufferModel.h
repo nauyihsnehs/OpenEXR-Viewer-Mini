@@ -50,6 +50,7 @@ class YFramebufferModel: public FramebufferModel
     int                getPartId() const { return m_partID; }
 
     virtual std::string getColorInfo(int x, int y) const;
+    virtual std::vector<std::string> rawChannelNames() const;
 
   public slots:
     void setMinValue(double value);

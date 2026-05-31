@@ -33,6 +33,10 @@
 #include <view/mainwindow.h>
 #include <config.h>
 #include <QApplication>
+#include <QStringList>
+
+#include <cstdlib>
+#include <iostream>
 
 #if defined(WIN32)
 
@@ -57,15 +61,17 @@ int main(int argc, char* argv[])
     MainWindow w;
     w.show();
 
-    if (argc > 1) {
-        if (strcmp(argv[1], "--") == 0) {
+    const QStringList arguments = QApplication::arguments();
+
+    if (arguments.size() > 1) {
+        if (arguments[1] == "--") {
             std::cerr << "Reading from stdin not yet supported." << std::endl;
             exit(1);
             // Read from stdin
             w.open(std::cin);
         } else {
-            for (int i = 1; i < argc; i++) {
-                w.open(argv[i]);
+            for (int i = 1; i < arguments.size(); i++) {
+                w.open(arguments[i]);
             }
         }
     }

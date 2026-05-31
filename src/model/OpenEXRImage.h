@@ -32,14 +32,18 @@
 
 #pragma once
 
+#include <QByteArray>
 #include <QObject>
 #include <QAbstractItemModel>
 
+#include <OpenEXR/ImfIO.h>
 #include <OpenEXR/ImfMultiPartInputFile.h>
 
 #include <model/attribute/HeaderModel.h>
 #include <model/attribute/LayerModel.h>
 #include <model/framebuffer/FramebufferModel.h>
+
+class QFile;
 
 class OpenEXRImage: public QObject
 {
@@ -63,6 +67,10 @@ class OpenEXRImage: public QObject
   private:
     QString m_filename;
     bool    m_isStream;
+
+    QByteArray    m_streamName;
+    QFile*        m_file;
+    Imf::IStream* m_stream;
 
     Imf::MultiPartInputFile* m_exrIn;
 

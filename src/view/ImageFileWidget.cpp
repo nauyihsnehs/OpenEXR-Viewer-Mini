@@ -32,8 +32,10 @@
 
 #include "ImageFileWidget.h"
 
+#include <QAbstractItemModel>
 #include <QEvent>
 #include <QFileInfo>
+#include <QItemSelectionModel>
 #include <QList>
 #include <QVBoxLayout>
 #include <QDir>
@@ -44,9 +46,11 @@
 #include <QStringList>
 #include <QTabBar>
 #include <QTimer>
+#include <QToolTip>
 
 #include <model/OpenEXRImage.h>
 #include <model/attribute/LayerItem.h>
+#include <model/attribute/LayerModel.h>
 #include <model/framebuffer/FramebufferModel.h>
 
 #include <OpenEXR/ImfHeader.h>
@@ -54,6 +58,7 @@
 #include <vector>
 
 #include "GraphicsView.h"
+#include "FramebufferInfo.h"
 #include "RGBFramebufferWidget.h"
 #include "YFramebufferWidget.h"
 
@@ -73,6 +78,18 @@ static void setSubWindowFrameVisible(QMdiSubWindow* subWindow, bool visible)
     if (flags == updated) return;
 
     subWindow->setWindowFlags(updated);
+}
+
+
+static QString cleanLayerTitle(QString title)
+{
+    title = title.trimmed();
+
+    const QString prefix = "Layer:";
+    const int prefixIndex = title.indexOf(prefix);
+    if (prefixIndex >= 0) title.remove(prefixIndex, prefix.size());
+
+    return title.simplified();
 }
 
 
@@ -172,28 +189,11 @@ static QString compressionDescription(Imf::Compression compression)
 }
 
 
-static QString datasetValueText(const FramebufferModel* model, bool minValue)
-{
-    if (!model || !model->hasFiniteSamples()) return "n/a";
-
-    const double value =
-      minValue ? model->getDatasetMin() : model->getDatasetMax();
-
-    return QString::number(value, 'g', 6);
-}
-
-
-static QString framebufferSizeText(const FramebufferModel* model)
-{
-    if (!model || !model->isImageLoaded()) return "n/a";
-
-    return QString("%1 x %2").arg(model->width()).arg(model->height());
-}
-
 ImageFileWidget::ImageFileWidget(const QString& filename, QWidget* parent)
   : QWidget(parent)
   , m_img(nullptr)
   , m_openedFolder(QDir::homePath())
+  , m_rgbPreviewMode(RGBFramebufferModel::Preview_Exposure)
   , m_previewTabbed(true)
   , m_isStream(false)
 {
@@ -216,6 +216,7 @@ ImageFileWidget::ImageFileWidget(std::istream& stream, QWidget* parent)
   : QWidget(parent)
   , m_img(nullptr)
   , m_openedFolder(QDir::homePath())
+  , m_rgbPreviewMode(RGBFramebufferModel::Preview_Exposure)
   , m_previewTabbed(true)
   , m_isStream(true)
 {
@@ -257,7 +258,7 @@ void ImageFileWidget::refresh()
 void ImageFileWidget::setTabbed()
 {
     m_previewTabbed = true;
-    updatePreviewTabBarVisibility();
+    syncTabbedPreviewPresentation();
 }
 
 
@@ -270,7 +271,6 @@ void ImageFileWidget::setCascade()
         subWindow->show();
     }
     m_mdiArea->cascadeSubWindows();
-    updatePreviewTabBarVisibility();
 }
 
 
@@ -283,7 +283,6 @@ void ImageFileWidget::setTiled()
         subWindow->show();
     }
     m_mdiArea->tileSubWindows();
-    updatePreviewTabBarVisibility();
 }
 
 
@@ -311,8 +310,7 @@ void ImageFileWidget::setupLayout()
     m_mdiArea->setTabsClosable(true);
     m_mdiArea->setDocumentMode(true);
     m_mdiArea->setBackground(QBrush(QColor(80, 80, 80)));
-    installPreviewTabBarEventFilter();
-    updatePreviewTabBarVisibility();
+    syncTabbedPreviewPresentation();
 
     connect(
       m_mdiArea,
@@ -350,47 +348,45 @@ bool ImageFileWidget::eventFilter(QObject* watched, QEvent* event)
 }
 
 
-void ImageFileWidget::installPreviewTabBarEventFilter()
+void ImageFileWidget::configurePreviewTabBar()
 {
     QTabBar* tabBar = m_mdiArea->findChild<QTabBar*>();
 
-    if (tabBar) tabBar->installEventFilter(this);
+    if (!tabBar) return;
+
+    tabBar->installEventFilter(this);
 }
 
 
-void ImageFileWidget::updatePreviewTabBarVisibility()
+void ImageFileWidget::syncTabbedPreviewPresentation()
 {
-    QList<QMdiSubWindow*> subWindows = m_mdiArea->subWindowList();
+    if (!m_previewTabbed) return;
 
-    if (!m_previewTabbed) {
-        QTabBar* tabBar = m_mdiArea->findChild<QTabBar*>();
-        if (tabBar) tabBar->setVisible(false);
-        return;
-    }
+    QList<QMdiSubWindow*> subWindows = m_mdiArea->subWindowList();
 
     if (subWindows.size() > 1) {
         for (QMdiSubWindow* subWindow : subWindows) {
             setSubWindowFrameVisible(subWindow, true);
         }
 
-        m_mdiArea->setViewMode(QMdiArea::TabbedView);
+        if (m_mdiArea->viewMode() != QMdiArea::TabbedView) {
+            m_mdiArea->setViewMode(QMdiArea::TabbedView);
+        }
+
         m_mdiArea->setTabsMovable(true);
         m_mdiArea->setTabsClosable(true);
-        installPreviewTabBarEventFilter();
+        configurePreviewTabBar();
 
         for (QMdiSubWindow* subWindow : subWindows) {
             subWindow->showMaximized();
         }
 
-        QTabBar* tabBar = m_mdiArea->findChild<QTabBar*>();
-        if (tabBar) tabBar->setVisible(true);
         return;
     }
 
-    m_mdiArea->setViewMode(QMdiArea::SubWindowView);
-
-    QTabBar* tabBar = m_mdiArea->findChild<QTabBar*>();
-    if (tabBar) tabBar->setVisible(false);
+    if (m_mdiArea->viewMode() != QMdiArea::SubWindowView) {
+        m_mdiArea->setViewMode(QMdiArea::SubWindowView);
+    }
 
     for (QMdiSubWindow* subWindow : subWindows) {
         setSubWindowFrameVisible(subWindow, false);
@@ -503,7 +499,8 @@ void ImageFileWidget::openLayer(const LayerItem* item)
         if (w->windowTitle() == title) {
             m_mdiArea->setActiveSubWindow(w);
             w->setFocus();
-            updatePreviewTabBarVisibility();
+            syncTabbedPreviewPresentation();
+            syncActiveLayerSelection();
             emit activeFramebufferChanged();
             return;
         }
@@ -546,10 +543,17 @@ void ImageFileWidget::openLayer(const LayerItem* item)
 
             QObject::connect(
               graphicView,
-              SIGNAL(fileInfoRequested(QWidget*)),
+              SIGNAL(fileInfoHoverRequested(QWidget*,QPoint)),
               this,
-              SLOT(onFileInfoRequested(QWidget*)));
+              SLOT(onFileInfoHoverRequested(QWidget*,QPoint)));
 
+            QObject::connect(
+              graphicView,
+              SIGNAL(fileInfoHoverLeft()),
+              this,
+              SLOT(onFileInfoHoverLeft()));
+
+            graphicView->setPreviewMode(m_rgbPreviewMode);
             graphicView->setModel(imageModel);
 
             imageModel->load(
@@ -589,10 +593,17 @@ void ImageFileWidget::openLayer(const LayerItem* item)
 
             QObject::connect(
               graphicView,
-              SIGNAL(fileInfoRequested(QWidget*)),
+              SIGNAL(fileInfoHoverRequested(QWidget*,QPoint)),
               this,
-              SLOT(onFileInfoRequested(QWidget*)));
+              SLOT(onFileInfoHoverRequested(QWidget*,QPoint)));
 
+            QObject::connect(
+              graphicView,
+              SIGNAL(fileInfoHoverLeft()),
+              this,
+              SLOT(onFileInfoHoverLeft()));
+
+            graphicView->setPreviewMode(m_rgbPreviewMode);
             graphicView->setModel(imageModel);
 
             imageModel->load(
@@ -634,10 +645,17 @@ void ImageFileWidget::openLayer(const LayerItem* item)
 
             QObject::connect(
               graphicView,
-              SIGNAL(fileInfoRequested(QWidget*)),
+              SIGNAL(fileInfoHoverRequested(QWidget*,QPoint)),
               this,
-              SLOT(onFileInfoRequested(QWidget*)));
+              SLOT(onFileInfoHoverRequested(QWidget*,QPoint)));
 
+            QObject::connect(
+              graphicView,
+              SIGNAL(fileInfoHoverLeft()),
+              this,
+              SLOT(onFileInfoHoverLeft()));
+
+            graphicView->setPreviewMode(m_rgbPreviewMode);
             graphicView->setModel(imageModel);
 
             imageModel->load(
@@ -678,9 +696,15 @@ void ImageFileWidget::openLayer(const LayerItem* item)
 
             QObject::connect(
               graphicViewBW,
-              SIGNAL(fileInfoRequested(QWidget*)),
+              SIGNAL(fileInfoHoverRequested(QWidget*,QPoint)),
               this,
-              SLOT(onFileInfoRequested(QWidget*)));
+              SLOT(onFileInfoHoverRequested(QWidget*,QPoint)));
+
+            QObject::connect(
+              graphicViewBW,
+              SIGNAL(fileInfoHoverLeft()),
+              this,
+              SLOT(onFileInfoHoverLeft()));
 
             graphicViewBW->setModel(imageModelBW);
 
@@ -708,19 +732,16 @@ void ImageFileWidget::openLayer(const LayerItem* item)
           this,
           SLOT(onSubWindowDestroyed()));
 
-        switch (m_mdiArea->viewMode()) {
-            case QMdiArea::TabbedView:
-                subWindow->showMaximized();
-                break;
-
-            case QMdiArea::SubWindowView:
-                subWindow->resize(800, 600);
-                subWindow->show();
-                break;
+        if (m_previewTabbed) {
+            subWindow->showMaximized();
+        } else {
+            setSubWindowFrameVisible(subWindow, true);
+            subWindow->resize(800, 600);
+            subWindow->show();
         }
 
-        installPreviewTabBarEventFilter();
-        updatePreviewTabBarVisibility();
+        syncTabbedPreviewPresentation();
+        syncActiveLayerSelection();
         emit activeFramebufferChanged();
     }
 }
@@ -767,6 +788,19 @@ bool ImageFileWidget::hasActiveFramebuffer() const
 }
 
 
+void ImageFileWidget::setRgbPreviewMode(RGBFramebufferModel::PreviewMode mode)
+{
+    m_rgbPreviewMode = mode;
+
+    for (QMdiSubWindow* subWindow: m_mdiArea->subWindowList()) {
+        RGBFramebufferWidget* rgbWidget =
+          qobject_cast<RGBFramebufferWidget*>(subWindow->widget());
+
+        if (rgbWidget) rgbWidget->setPreviewMode(mode);
+    }
+}
+
+
 QString ImageFileWidget::framebufferStatusText(QMdiSubWindow* subWindow) const
 {
     const QString path = m_isStream ? tr("Stream") : m_openedFilename;
@@ -782,8 +816,8 @@ QString ImageFileWidget::framebufferStatusText(QMdiSubWindow* subWindow) const
     fields << subWindow->property("pixelType").toString();
     fields << subWindow->property("compressionShort").toString();
     fields << framebufferSizeText(model);
-    fields << "min " + datasetValueText(model, true);
-    fields << "max " + datasetValueText(model, false);
+    fields << "min " + framebufferDatasetValueText(model, true);
+    fields << "max " + framebufferDatasetValueText(model, false);
 
     return fields.join(" | ");
 }
@@ -811,8 +845,8 @@ QString ImageFileWidget::framebufferStatusToolTip(QMdiSubWindow* subWindow) cons
     lines << "Pixel type: " + subWindow->property("pixelType").toString();
     lines << "Compression: " + subWindow->property("compression").toString();
     lines << "Size: " + framebufferSizeText(model);
-    lines << "Min value: " + datasetValueText(model, true);
-    lines << "Max value: " + datasetValueText(model, false);
+    lines << "Min value: " + framebufferDatasetValueText(model, true);
+    lines << "Max value: " + framebufferDatasetValueText(model, false);
 
     if (loaded) {
         lines << "NaN count: " + QString::number(model->getDatasetNaNCount());
@@ -829,6 +863,22 @@ QString ImageFileWidget::framebufferStatusToolTip(QMdiSubWindow* subWindow) cons
 QString ImageFileWidget::activeFramebufferStatusToolTip() const
 {
     return framebufferStatusToolTip(m_mdiArea->activeSubWindow());
+}
+
+
+QString ImageFileWidget::activeLayerTitleText() const
+{
+    QModelIndex index = activeLayerIndex();
+    QString title = layerTitleText(index).trimmed();
+
+    if (title.isEmpty()) {
+        QMdiSubWindow* subWindow = m_mdiArea->activeSubWindow();
+        if (subWindow) title = cleanLayerTitle(subWindow->windowTitle());
+    }
+
+    if (title == "RGB") return QString();
+
+    return title;
 }
 
 
@@ -884,6 +934,81 @@ void ImageFileWidget::updatePropertiesVisibility()
       !m_attributesTreeView->isHidden() || !m_layersTreeView->isHidden();
 
     m_splitterProperties->setVisible(showProperties);
+}
+
+
+QModelIndex ImageFileWidget::activeLayerIndex() const
+{
+    QMdiSubWindow* subWindow = m_mdiArea->activeSubWindow();
+
+    if (!subWindow) return QModelIndex();
+
+    return findLayerIndexByTitle(QModelIndex(), subWindow->windowTitle());
+}
+
+
+QModelIndex ImageFileWidget::findLayerIndexByTitle(
+  const QModelIndex& parent,
+  const QString& title) const
+{
+    QAbstractItemModel* model = m_layersTreeView->model();
+
+    if (!model) return QModelIndex();
+
+    for (int row = 0; row < model->rowCount(parent); row++) {
+        QModelIndex index = model->index(row, LayerModel::LAYER, parent);
+        LayerItem* item = static_cast<LayerItem*>(index.internalPointer());
+
+        if (item && getTitle(item) == title) return index;
+
+        QModelIndex child = findLayerIndexByTitle(index, title);
+        if (child.isValid()) return child;
+    }
+
+    return QModelIndex();
+}
+
+
+QString ImageFileWidget::layerTitleText(const QModelIndex& index) const
+{
+    if (!index.isValid()) return QString();
+
+    const QAbstractItemModel* model = index.model();
+    const QModelIndex parent = index.parent();
+    const QString layer =
+      model->data(model->index(index.row(), LayerModel::LAYER, parent))
+        .toString()
+        .trimmed();
+    const QString type =
+      model->data(model->index(index.row(), LayerModel::TYPE, parent))
+        .toString()
+        .trimmed();
+
+    if (layer.isEmpty()) return type;
+    if (type.isEmpty() || type == layer) return layer;
+
+    return layer + " " + type;
+}
+
+
+void ImageFileWidget::syncActiveLayerSelection()
+{
+    QItemSelectionModel* selection = m_layersTreeView->selectionModel();
+
+    if (!selection) return;
+
+    QModelIndex index = activeLayerIndex();
+
+    if (!index.isValid()) {
+        selection->clear();
+        return;
+    }
+
+    selection->select(
+      index,
+      QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+    selection->setCurrentIndex(index, QItemSelectionModel::NoUpdate);
+    m_layersTreeView->scrollTo(index);
 }
 
 
@@ -1088,33 +1213,45 @@ void ImageFileWidget::onOpenFileDropEvent(const QString& filename)
 }
 
 
-void ImageFileWidget::onFileInfoRequested(QWidget* widget)
+void ImageFileWidget::onFileInfoHoverRequested(
+  QWidget* widget, const QPoint& position)
 {
     if (!widget) return;
 
     for (QMdiSubWindow* subWindow : m_mdiArea->subWindowList()) {
         if (subWindow->widget() != widget) continue;
 
-        m_mdiArea->setActiveSubWindow(subWindow);
-
-        QMessageBox msgBox(this);
-        msgBox.setWindowTitle(tr("File Info"));
-        msgBox.setText(framebufferStatusToolTip(subWindow));
-        msgBox.setTextFormat(Qt::PlainText);
-        msgBox.exec();
+        QToolTip::showText(
+          position,
+          framebufferStatusToolTip(subWindow),
+          widget);
         return;
     }
 }
 
 
+void ImageFileWidget::onFileInfoHoverLeft()
+{
+    QToolTip::hideText();
+}
+
+
 void ImageFileWidget::onActiveSubWindowChanged(QMdiSubWindow*)
 {
-    updatePreviewTabBarVisibility();
+    syncActiveLayerSelection();
     emit activeFramebufferChanged();
 }
 
 
 void ImageFileWidget::onSubWindowDestroyed()
 {
-    QTimer::singleShot(0, this, SLOT(updatePreviewTabBarVisibility()));
+    QTimer::singleShot(0, this, SLOT(syncAfterSubWindowDestroyed()));
+}
+
+
+void ImageFileWidget::syncAfterSubWindowDestroyed()
+{
+    syncTabbedPreviewPresentation();
+    syncActiveLayerSelection();
+    emit activeFramebufferChanged();
 }

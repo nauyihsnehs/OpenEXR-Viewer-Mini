@@ -33,6 +33,10 @@
 #include "YFramebufferWidget.h"
 #include "ui_YFramebufferWidget.h"
 
+#include "ComboBoxBehavior.h"
+#include "FramebufferInfo.h"
+
+#include <QPoint>
 #include <QStyle>
 #include <QtGlobal>
 
@@ -47,6 +51,9 @@ YFramebufferWidget::YFramebufferWidget(QWidget* parent)
     ui->setupUi(this);
     ui->fileInfoButton->setIcon(
       style()->standardIcon(QStyle::SP_MessageBoxInformation));
+    ui->fileInfoButton->setToolTip(QString());
+    ui->fileInfoButton->installEventFilter(this);
+    updateFramebufferSummary();
 
     // clang-format off
     connect(
@@ -66,6 +73,7 @@ YFramebufferWidget::YFramebufferWidget(QWidget* parent)
         ui->cbColormap->addItem(QString::fromStdString(
           ColormapModule::toString((ColormapModule::Map)i)));
     }
+    applyComboBoxBehavior(this);
 }
 
 
@@ -80,6 +88,34 @@ void YFramebufferWidget::setModel(YFramebufferModel* model)
 {
     m_model = model;
     ui->graphicsView->setModel(model);
+    connect(
+      m_model,
+      SIGNAL(imageLoaded()),
+      this,
+      SLOT(updateFramebufferSummary()));
+    updateFramebufferSummary();
+}
+
+
+bool YFramebufferWidget::eventFilter(QObject* watched, QEvent* event)
+{
+    if (watched == ui->fileInfoButton) {
+        if (event->type() == QEvent::Enter) {
+            const QPoint position =
+              ui->fileInfoButton->mapToGlobal(QPoint(
+                ui->fileInfoButton->width() + 8,
+                ui->fileInfoButton->height() / 2));
+            emit fileInfoHoverRequested(this, position);
+        }
+
+        if (event->type() == QEvent::Leave) {
+            emit fileInfoHoverLeft();
+        }
+
+        return QWidget::eventFilter(watched, event);
+    }
+
+    return QWidget::eventFilter(watched, event);
 }
 
 
@@ -144,7 +180,13 @@ void YFramebufferWidget::on_cbScale_stateChanged(int arg1)
 void YFramebufferWidget::updateZoomLevelText(double zoom)
 {
     m_zoomLevel = zoom;
-    ui->zoomButton->setText(tr("Zoom: %1%").arg(qRound(zoom * 100.)));
+    ui->zoomButton->setText(tr("Zoom %1%").arg(qRound(zoom * 100.)));
+}
+
+
+void YFramebufferWidget::updateFramebufferSummary()
+{
+    ui->framebufferSummaryLabel->setText(framebufferSummaryText(m_model));
 }
 
 
@@ -156,10 +198,4 @@ void YFramebufferWidget::on_zoomButton_clicked()
     }
 
     ui->graphicsView->setZoomLevel(1.);
-}
-
-
-void YFramebufferWidget::on_fileInfoButton_clicked()
-{
-    emit fileInfoRequested(this);
 }

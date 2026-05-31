@@ -174,6 +174,13 @@ std::string YFramebufferModel::getColorInfo(int x, int y) const
     return ss.str();
 }
 
+
+std::vector<std::string> YFramebufferModel::rawChannelNames() const
+{
+    return { m_layer.empty() ? "Y" : m_layer };
+}
+
+
 void YFramebufferModel::setMinValue(double value)
 {
     m_min = value;

@@ -1,0 +1,212 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>SaveImageDialog</class>
+ <widget class="QDialog" name="SaveImageDialog">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>520</width>
+    <height>390</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>Save Image</string>
+  </property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <item>
+    <layout class="QFormLayout" name="topFormLayout">
+     <property name="fieldGrowthPolicy">
+      <enum>QFormLayout::ExpandingFieldsGrow</enum>
+     </property>
+     <item row="0" column="0">
+      <widget class="QLabel" name="targetLabel">
+       <property name="text">
+        <string>Target:</string>
+       </property>
+      </widget>
+     </item>
+     <item row="0" column="1">
+      <widget class="QComboBox" name="targetCombo"/>
+     </item>
+     <item row="1" column="0">
+      <widget class="QLabel" name="formatLabel">
+       <property name="text">
+        <string>Format:</string>
+       </property>
+      </widget>
+     </item>
+     <item row="1" column="1">
+      <widget class="QComboBox" name="formatCombo"/>
+     </item>
+     <item row="2" column="0">
+      <widget class="QLabel" name="pathLabel">
+       <property name="text">
+        <string>Path:</string>
+       </property>
+      </widget>
+     </item>
+     <item row="2" column="1">
+      <layout class="QHBoxLayout" name="pathLayout">
+       <item>
+        <widget class="QLineEdit" name="pathEdit"/>
+       </item>
+       <item>
+        <widget class="QPushButton" name="browseButton">
+         <property name="text">
+          <string>Browse...</string>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </item>
+    </layout>
+   </item>
+   <item>
+    <widget class="QStackedWidget" name="parameterStack">
+     <widget class="QWidget" name="previewPage">
+      <layout class="QFormLayout" name="previewLayout">
+       <item row="0" column="0">
+        <widget class="QLabel" name="sizeLabel">
+         <property name="text">
+          <string>Size:</string>
+         </property>
+        </widget>
+       </item>
+       <item row="0" column="1">
+        <widget class="QComboBox" name="sizeCombo"/>
+       </item>
+       <item row="1" column="0">
+        <widget class="QLabel" name="qualityLabel">
+         <property name="text">
+          <string>Quality:</string>
+         </property>
+        </widget>
+       </item>
+       <item row="1" column="1">
+        <widget class="QSpinBox" name="qualitySpinBox"/>
+       </item>
+       <item row="2" column="0">
+        <widget class="QLabel" name="bracketCountLabel">
+         <property name="text">
+          <string>Count:</string>
+         </property>
+        </widget>
+       </item>
+       <item row="2" column="1">
+        <widget class="QComboBox" name="bracketCountCombo"/>
+       </item>
+       <item row="3" column="0">
+        <widget class="QLabel" name="bracketStepLabel">
+         <property name="text">
+          <string>Step EV:</string>
+         </property>
+        </widget>
+       </item>
+       <item row="3" column="1">
+        <widget class="QDoubleSpinBox" name="bracketStepSpinBox"/>
+       </item>
+       <item row="4" column="0">
+        <widget class="QLabel" name="bracketCenterLabel">
+         <property name="text">
+          <string>Center EV:</string>
+         </property>
+        </widget>
+       </item>
+       <item row="4" column="1">
+        <widget class="QDoubleSpinBox" name="bracketCenterSpinBox"/>
+       </item>
+      </layout>
+     </widget>
+     <widget class="QWidget" name="exrPage">
+      <layout class="QFormLayout" name="exrLayout">
+       <item row="0" column="0">
+        <widget class="QLabel" name="compressionLabel">
+         <property name="text">
+          <string>Compression:</string>
+         </property>
+        </widget>
+       </item>
+       <item row="0" column="1">
+        <widget class="QComboBox" name="compressionCombo"/>
+       </item>
+       <item row="1" column="0">
+        <widget class="QLabel" name="pixelTypeLabel">
+         <property name="text">
+          <string>Pixel type:</string>
+         </property>
+        </widget>
+       </item>
+       <item row="1" column="1">
+        <widget class="QComboBox" name="pixelTypeCombo"/>
+       </item>
+       <item row="2" column="0">
+        <widget class="QLabel" name="channelScopeLabel">
+         <property name="text">
+          <string>Channels:</string>
+         </property>
+        </widget>
+       </item>
+       <item row="2" column="1">
+        <widget class="QComboBox" name="channelScopeCombo"/>
+       </item>
+       <item row="3" column="0">
+        <widget class="QLabel" name="metadataLabel">
+         <property name="text">
+          <string>Metadata:</string>
+         </property>
+        </widget>
+       </item>
+       <item row="3" column="1">
+        <widget class="QComboBox" name="metadataCombo"/>
+       </item>
+       <item row="4" column="0">
+        <widget class="QLabel" name="multipartLabel">
+         <property name="text">
+          <string>Multipart:</string>
+         </property>
+        </widget>
+       </item>
+       <item row="4" column="1">
+        <widget class="QComboBox" name="multipartCombo"/>
+       </item>
+      </layout>
+     </widget>
+     <widget class="QWidget" name="hdrPage">
+      <layout class="QVBoxLayout" name="hdrLayout">
+       <item>
+        <widget class="QLabel" name="hdrInfoLabel">
+         <property name="wordWrap">
+          <bool>true</bool>
+         </property>
+         <property name="text">
+          <string>HDR saves RGB radiance data. Alpha is ignored; single-channel data is copied to RGB.</string>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+    </widget>
+   </item>
+   <item>
+    <widget class="QLabel" name="statusLabel">
+     <property name="text">
+      <string>Ready</string>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QDialogButtonBox" name="buttonBox">
+     <property name="orientation">
+      <enum>Qt::Horizontal</enum>
+     </property>
+     <property name="standardButtons">
+      <set>QDialogButtonBox::Cancel|QDialogButtonBox::Save</set>
+     </property>
+    </widget>
+   </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

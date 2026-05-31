@@ -73,6 +73,7 @@ class MainWindow: public QMainWindow
 
   private slots:
     void on_action_Open_triggered();
+    void on_action_Save_triggered();
     void on_action_Quit_triggered();
     void on_action_CopyImage_triggered();
     void on_action_CopyImageFullResolution_triggered();
@@ -122,6 +123,8 @@ class MainWindow: public QMainWindow
     void on_action_ShowDisplayWindow_toggled(bool checked);
     void on_action_ShowAttributes_toggled(bool checked);
     void on_action_ShowLayers_toggled(bool checked);
+    void on_action_ModeExposure_triggered();
+    void on_action_ModeToneMapping_triggered();
     void on_action_ThemeLight_triggered();
     void on_action_ThemeDark_triggered();
 
@@ -137,7 +140,9 @@ class MainWindow: public QMainWindow
     void applyPanelVisibility(ImageFileWidget* widget) const;
     void applyPanelVisibilityToAllTabs() const;
     void setupTitleBar();
+    void setupPreviewModeActions();
     void setupThemeActions();
+    void applyRgbPreviewMode(RGBFramebufferModel::PreviewMode mode);
     void applyTheme(const QString& themeName);
     QString normalizedThemeName(const QString& themeName) const;
     QString themeStyleSheetPath(const QString& themeName) const;
@@ -162,6 +167,7 @@ class MainWindow: public QMainWindow
 
     QString m_currentTheme;
     QString m_currentOpenedFolder;
+    RGBFramebufferModel::PreviewMode m_rgbPreviewMode;
 
     QByteArray m_splitterImageState;
     QByteArray m_splitterPropertiesState;

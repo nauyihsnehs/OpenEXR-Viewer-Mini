@@ -32,10 +32,12 @@
 
 #pragma once
 
+#include <QPoint>
 #include <QWidget>
 #include <model/framebuffer/RGBFramebufferModel.h>
 
 class QEvent;
+class QDoubleSpinBox;
 
 namespace Ui
 {
@@ -52,10 +54,12 @@ class RGBFramebufferWidget: public QWidget
 
     void setModel(RGBFramebufferModel* model);
     const FramebufferModel* framebufferModel() const { return m_model; }
+    void setPreviewMode(RGBFramebufferModel::PreviewMode mode);
 
   signals:
     void openFileOnDropEvent(const QString& filename);
-    void fileInfoRequested(QWidget* widget);
+    void fileInfoHoverRequested(QWidget* widget, const QPoint& position);
+    void fileInfoHoverLeft();
 
   protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
@@ -67,18 +71,49 @@ class RGBFramebufferWidget: public QWidget
 
     void on_slExposure_valueChanged(int value);
     void on_exposureButton_clicked();
+    void on_cbToneMappingMethod_currentIndexChanged(int index);
+    void on_sbToneParam0_valueChanged(double value);
+    void on_slToneParam0_valueChanged(int value);
+    void on_toneParamButton0_clicked();
+    void on_sbToneParam1_valueChanged(double value);
+    void on_slToneParam1_valueChanged(int value);
+    void on_toneParamButton1_clicked();
+    void on_sbToneParam2_valueChanged(double value);
+    void on_slToneParam2_valueChanged(int value);
+    void on_toneParamButton2_clicked();
+    void on_sbToneParam3_valueChanged(double value);
+    void on_slToneParam3_valueChanged(int value);
+    void on_toneParamButton3_clicked();
 
     void onOpenFileOnDropEvent(const QString& filename);
     void onControlWheel(int delta);
     void updateZoomLevelText(double zoom);
+    void updateFramebufferSummary();
     void on_zoomButton_clicked();
-    void on_fileInfoButton_clicked();
 
   private:
     void setExposure(double value);
-    void setExposureCompact(bool compact);
+    void setSpinBoxCompact(QDoubleSpinBox* spinBox, bool compact);
+    void installCompactSpinBox(QDoubleSpinBox* spinBox);
+    QDoubleSpinBox* compactSpinBox(QObject* watched) const;
+    void updateToneMappingControls();
+    void configureToneParam(
+      int index,
+      const QString& label,
+      double minimum,
+      double maximum,
+      double step,
+      double value);
+    void hideToneParams(int firstHiddenIndex);
+    void setToneParamValue(int index, double value);
+    void resetToneParam(int index);
+    void syncToneParamsToModel();
+    QDoubleSpinBox* toneParamSpinBox(int index) const;
+    RGBFramebufferModel::ToneMappingMethod currentToneMappingMethod() const;
 
     Ui::RGBFramebufferWidget* ui;
     RGBFramebufferModel*      m_model;
+    RGBFramebufferModel::PreviewMode m_previewMode;
+    double                    m_toneParamDefaults[4];
     double                    m_zoomLevel;
 };

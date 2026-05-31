@@ -19,6 +19,8 @@ About::About(QWidget* parent): QDialog(parent), ui(new Ui::About)
         "pixel type, and dataset min/max information.</li>"
         "<li>Switch light/dark themes and copy the active image to the "
         "clipboard.</li>"
+        "<li>Save the current preview or active framebuffer data from the "
+        "save window.</li>"
         "</ul>"
         "<h2>Basic Use</h2>"
         "<ol>"
@@ -39,7 +41,7 @@ About::About(QWidget* parent): QDialog(parent), ui(new Ui::About)
         "</ul>"
         "<h2>Shortcuts</h2>"
         "<ul>"
-        "<li>Ctrl+O open, Ctrl+W close, F5 refresh, Esc quit.</li>"
+        "<li>Ctrl+O open, Ctrl+S save, Ctrl+W close, F5 refresh, Esc quit.</li>"
         "<li>Ctrl+C copy scaled image, Ctrl+Shift+C copy full resolution.</li>"
         "<li>Ctrl+T tabbed, Ctrl+Y cascaded, Ctrl+U tiled.</li>"
         "</ul>"));

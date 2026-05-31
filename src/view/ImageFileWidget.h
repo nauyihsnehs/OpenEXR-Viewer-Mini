@@ -36,10 +36,13 @@
 
 #include <QMdiArea>
 #include <QMdiSubWindow>
+#include <QModelIndex>
+#include <QPoint>
 #include <QSplitter>
 #include <QTreeView>
 
 #include <model/OpenEXRImage.h>
+#include <model/framebuffer/RGBFramebufferModel.h>
 
 class QEvent;
 class FramebufferModel;
@@ -85,8 +88,11 @@ class ImageFileWidget: public QWidget
     bool isDataWindowVisible() const;
     bool isDisplayWindowVisible() const;
     const FramebufferModel* activeFramebufferModel() const;
+    OpenEXRImage* sourceImage() const { return m_img; }
     QString activeFramebufferStatusText() const;
     QString activeFramebufferStatusToolTip() const;
+    QString activeLayerTitleText() const;
+    void setRgbPreviewMode(RGBFramebufferModel::PreviewMode mode);
 
   signals:
     void openFileOnDropEvent(const QString& filename);
@@ -132,17 +138,25 @@ class ImageFileWidget: public QWidget
     void onOpenFileDropEvent(const QString& filename);
     void onActiveSubWindowChanged(QMdiSubWindow* subWindow);
     void onSubWindowDestroyed();
-    void onFileInfoRequested(QWidget* widget);
-    void updatePreviewTabBarVisibility();
+    void onFileInfoHoverRequested(QWidget* widget, const QPoint& position);
+    void onFileInfoHoverLeft();
+    void syncTabbedPreviewPresentation();
+    void syncAfterSubWindowDestroyed();
 
   private:
-    void installPreviewTabBarEventFilter();
+    void configurePreviewTabBar();
+    void syncActiveLayerSelection();
     void updatePropertiesVisibility();
 
     GraphicsView* activeGraphicsView() const;
     const FramebufferModel* framebufferModel(QMdiSubWindow* subWindow) const;
     QString framebufferStatusText(QMdiSubWindow* subWindow) const;
     QString framebufferStatusToolTip(QMdiSubWindow* subWindow) const;
+    QModelIndex activeLayerIndex() const;
+    QModelIndex findLayerIndexByTitle(
+      const QModelIndex& parent,
+      const QString& title) const;
+    QString layerTitleText(const QModelIndex& index) const;
 
     QSplitter* m_splitterImageView;
     QSplitter* m_splitterProperties;
@@ -154,6 +168,7 @@ class ImageFileWidget: public QWidget
     QString       m_openedFolder;
     QString       m_openedFilename;
 
+    RGBFramebufferModel::PreviewMode m_rgbPreviewMode;
     bool m_previewTabbed;
     bool m_isStream;
 };

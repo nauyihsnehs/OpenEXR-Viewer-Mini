@@ -33,6 +33,8 @@
 #include "mainwindow.h"
 #include "./ui_mainwindow.h"
 #include <view/about.h>
+#include <view/ImageSave.h>
+#include <view/SaveImageDialog.h>
 
 #include <cassert>
 
@@ -41,6 +43,7 @@
 #include <QClipboard>
 #include <QColor>
 #include <QDebug>
+#include <QDir>
 #include <QEvent>
 #include <QFile>
 #include <QFileDialog>
@@ -55,6 +58,7 @@
 #include <QPainter>
 #include <QPen>
 #include <QPixmap>
+#include <QPushButton>
 #include <QResizeEvent>
 #include <QSizePolicy>
 #include <QStyle>
@@ -62,6 +66,7 @@
 #include <QTabBar>
 #include <QTextStream>
 #include <QToolButton>
+#include <QUrl>
 #include <QVariant>
 
 #ifdef _WIN32
@@ -86,6 +91,35 @@ static const int s_windowResizeBorder = 8;
 static const int s_clipboardMaxWidth = 1024;
 static const char* s_darkTheme = "dark";
 static const char* s_lightTheme = "light";
+
+
+static ImageSave::ConflictPolicy conflictChoice(
+  QWidget* parent,
+  const QStringList& paths)
+{
+    QMessageBox box(parent);
+    box.setWindowTitle(QObject::tr("Save Image"));
+    box.setIcon(QMessageBox::Warning);
+    box.setText(QObject::tr("The output file already exists."));
+    box.setInformativeText(paths.join("\n"));
+
+    QPushButton* overwriteButton =
+      box.addButton(QObject::tr("Overwrite"), QMessageBox::AcceptRole);
+    QPushButton* renameButton =
+      box.addButton(QObject::tr("Auto Rename"), QMessageBox::ActionRole);
+    box.addButton(QMessageBox::Cancel);
+
+    box.exec();
+
+    if (box.clickedButton() == overwriteButton) {
+        return ImageSave::ConflictOverwrite;
+    }
+    if (box.clickedButton() == renameButton) {
+        return ImageSave::ConflictRename;
+    }
+
+    return ImageSave::ConflictCancel;
+}
 
 
 enum TitleButtonIcon
@@ -217,6 +251,7 @@ MainWindow::MainWindow(QWidget* parent)
   , m_closeButton(nullptr)
   , m_currentTheme(s_darkTheme)
   , m_currentOpenedFolder()
+  , m_rgbPreviewMode(RGBFramebufferModel::Preview_Exposure)
   , m_splitterImageState()
   , m_splitterPropertiesState()
   , m_titleDragPosition()
@@ -225,11 +260,13 @@ MainWindow::MainWindow(QWidget* parent)
     ui->setupUi(this);
     setAttribute(Qt::WA_StyledBackground, true);
     setupTitleBar();
+    setupPreviewModeActions();
     setupThemeActions();
     setAcceptDrops(true);
 
     m_openFileTabs->setMovable(true);
     m_openFileTabs->setTabsClosable(true);
+    m_openFileTabs->setTabBarAutoHide(true);
 
     // clang-format off
     connect(m_openFileTabs, SIGNAL(currentChanged(int)),
@@ -328,6 +365,43 @@ void MainWindow::setupThemeActions()
     ui->action_ThemeLight->setCheckable(true);
     ui->action_ThemeDark->setCheckable(true);
     ui->action_ThemeDark->setChecked(true);
+}
+
+
+void MainWindow::setupPreviewModeActions()
+{
+    QActionGroup* modeGroup = new QActionGroup(this);
+    modeGroup->setExclusive(true);
+    modeGroup->addAction(ui->action_ModeExposure);
+    modeGroup->addAction(ui->action_ModeToneMapping);
+
+    ui->action_ModeExposure->setCheckable(true);
+    ui->action_ModeToneMapping->setCheckable(true);
+    ui->action_ModeExposure->setChecked(true);
+}
+
+
+void MainWindow::applyRgbPreviewMode(RGBFramebufferModel::PreviewMode mode)
+{
+    m_rgbPreviewMode = mode;
+
+    ui->action_ModeExposure->blockSignals(true);
+    ui->action_ModeToneMapping->blockSignals(true);
+
+    ui->action_ModeExposure->setChecked(
+      mode == RGBFramebufferModel::Preview_Exposure);
+    ui->action_ModeToneMapping->setChecked(
+      mode == RGBFramebufferModel::Preview_ToneMapping);
+
+    ui->action_ModeExposure->blockSignals(false);
+    ui->action_ModeToneMapping->blockSignals(false);
+
+    for (int i = 0; i < m_openFileTabs->count(); i++) {
+        ImageFileWidget* widget =
+          qobject_cast<ImageFileWidget*>(m_openFileTabs->widget(i));
+
+        if (widget) widget->setRgbPreviewMode(mode);
+    }
 }
 
 
@@ -521,6 +595,7 @@ void MainWindow::updateShowActions()
 
     ui->action_ShowDataWindow->setEnabled(enabled);
     ui->action_ShowDisplayWindow->setEnabled(enabled);
+    ui->action_Save->setEnabled(copyEnabled);
     ui->action_CopyImage->setEnabled(copyEnabled);
     ui->action_CopyImageFullResolution->setEnabled(copyEnabled);
 
@@ -536,22 +611,28 @@ void MainWindow::updateShowActions()
 
 void MainWindow::updateFileTabPresentation()
 {
-    const int count = m_openFileTabs->count();
-    QTabBar* tabBar = m_openFileTabs->findChild<QTabBar*>(
-      QString(), Qt::FindDirectChildrenOnly);
-
-    if (tabBar) tabBar->setVisible(count > 1);
-
+    const int index = m_openFileTabs->currentIndex();
     QString title;
 
-    if (count == 1) title = m_openFileTabs->tabText(0).trimmed();
-
-    if (m_windowTitleLabel) {
-        m_windowTitleLabel->setText(title);
-        m_windowTitleLabel->setToolTip(title);
+    if (index >= 0) {
+        title = m_openFileTabs->tabText(index).trimmed();
     }
 
-    setWindowTitle(title.isEmpty() ? tr("OpenEXR Viewer") : title);
+    ImageFileWidget* widget = currentFileWidget();
+    const QString layer = widget ? widget->activeLayerTitleText() : QString();
+    QString displayTitle = title;
+
+    if (!displayTitle.isEmpty() && !layer.isEmpty()) {
+        displayTitle += " (" + layer + ")";
+    }
+
+    if (m_windowTitleLabel) {
+        m_windowTitleLabel->setText(displayTitle);
+        m_windowTitleLabel->setToolTip(displayTitle);
+    }
+
+    setWindowTitle(
+      displayTitle.isEmpty() ? tr("OpenEXR Viewer") : displayTitle);
 }
 
 
@@ -596,6 +677,7 @@ void MainWindow::open(std::istream& stream)
     ImageFileWidget* fileWidget = new ImageFileWidget(stream, m_openFileTabs);
     fileWidget->setSplitterImageState(m_splitterImageState);
     fileWidget->setSplitterPropertiesState(m_splitterPropertiesState);
+    fileWidget->setRgbPreviewMode(m_rgbPreviewMode);
     applyPanelVisibility(fileWidget);
 
     m_openFileTabs->addTab(fileWidget, "Stream");
@@ -613,8 +695,14 @@ void MainWindow::open(std::istream& stream)
       SIGNAL(activeFramebufferChanged()),
       this,
       SLOT(updateShowActions()));
+    connect(
+      fileWidget,
+      &ImageFileWidget::activeFramebufferChanged,
+      this,
+      &MainWindow::updateFileTabPresentation);
 
     updateShowActions();
+    updateFileTabPresentation();
 }
 
 
@@ -625,6 +713,7 @@ void MainWindow::open(const QString& filename)
     ImageFileWidget* fileWidget = new ImageFileWidget(filename, m_openFileTabs);
     fileWidget->setSplitterImageState(m_splitterImageState);
     fileWidget->setSplitterPropertiesState(m_splitterPropertiesState);
+    fileWidget->setRgbPreviewMode(m_rgbPreviewMode);
     applyPanelVisibility(fileWidget);
 
     m_openFileTabs->addTab(fileWidget, filename_no_path);
@@ -642,8 +731,14 @@ void MainWindow::open(const QString& filename)
       SIGNAL(activeFramebufferChanged()),
       this,
       SLOT(updateShowActions()));
+    connect(
+      fileWidget,
+      &ImageFileWidget::activeFramebufferChanged,
+      this,
+      &MainWindow::updateFileTabPresentation);
 
     updateShowActions();
+    updateFileTabPresentation();
 }
 
 
@@ -658,6 +753,57 @@ void MainWindow::on_action_Open_triggered()
     if (filename.size() != 0) {
         open(filename);
     }
+}
+
+
+void MainWindow::on_action_Save_triggered()
+{
+    ImageFileWidget* widget = currentFileWidget();
+    const FramebufferModel* model =
+      widget ? widget->activeFramebufferModel() : nullptr;
+
+    if (!model || !model->isImageLoaded()) return;
+
+    QString folder = m_currentOpenedFolder.isEmpty()
+      ? QDir::homePath()
+      : m_currentOpenedFolder;
+    QString base = "image";
+
+    if (widget && !widget->isStream()) {
+        QFileInfo info(widget->getOpenedFilename());
+        if (!info.completeBaseName().isEmpty()) base = info.completeBaseName();
+        if (!info.absolutePath().isEmpty()) folder = info.absolutePath();
+    }
+
+    SaveImageDialog dialog(QDir(folder).filePath(base + ".png"), this);
+
+    ImageSave::Source source;
+    source.activeModel = model;
+    source.sourceImage = widget ? widget->sourceImage() : nullptr;
+
+    connect(
+      &dialog,
+      &SaveImageDialog::saveRequested,
+      this,
+      [this, &dialog, source]() {
+          ImageSave::Options options = dialog.options();
+          ImageSave::Result saveResult = ImageSave::save(source, options);
+
+          if (saveResult.status == ImageSave::StatusConflict) {
+              options.conflict = conflictChoice(this, saveResult.paths);
+              saveResult = ImageSave::save(source, options);
+          }
+
+          const bool saved = saveResult.status == ImageSave::StatusSaved;
+          dialog.setStatus(saveResult.message, !saved);
+
+          if (saved && !saveResult.paths.isEmpty()) {
+              m_currentOpenedFolder =
+                QFileInfo(saveResult.paths.front()).absolutePath();
+          }
+      });
+
+    dialog.exec();
 }
 
 
@@ -868,16 +1014,9 @@ void MainWindow::dropEvent(QDropEvent* ev)
     QList<QUrl> urls = ev->mimeData()->urls();
 
     for (const QUrl& url: urls) {
-        QString filename = url.toString();
-        const QString startFileTypeString =
-#ifdef _WIN32
-          "file:///";
-#else
-          "file://";
-#endif
+        const QString filename = url.toLocalFile();
 
-        if (filename.startsWith(startFileTypeString)) {
-            filename = filename.remove(0, startFileTypeString.length());
+        if (!filename.isEmpty()) {
             open(filename);
         }
     }
@@ -1022,6 +1161,18 @@ void MainWindow::on_action_ShowAttributes_toggled(bool)
 void MainWindow::on_action_ShowLayers_toggled(bool)
 {
     applyPanelVisibilityToAllTabs();
+}
+
+
+void MainWindow::on_action_ModeExposure_triggered()
+{
+    applyRgbPreviewMode(RGBFramebufferModel::Preview_Exposure);
+}
+
+
+void MainWindow::on_action_ModeToneMapping_triggered()
+{
+    applyRgbPreviewMode(RGBFramebufferModel::Preview_ToneMapping);
 }
 
 
