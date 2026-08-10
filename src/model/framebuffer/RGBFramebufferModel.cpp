@@ -31,6 +31,7 @@
  */
 
 #include "RGBFramebufferModel.h"
+#include "ToneMapping.h"
 
 #include <util/ColorTransform.h>
 
@@ -47,162 +48,6 @@
 
 #include <Imath/ImathBox.h>
 
-static float clampPreview(float value, float minimum, float maximum)
-{
-    if (value < minimum) return minimum;
-    if (value > maximum) return maximum;
-
-    return value;
-}
-
-
-static float safeToneInput(float value)
-{
-    if (!std::isfinite(value) || value < 0.f) return 0.f;
-
-    return clampPreview(value, 0.f, 1.e10f);
-}
-
-
-static float positiveToneParam(float value)
-{
-    return value > 0.001f ? value : 0.001f;
-}
-
-
-static float reinhardTone(float value, float key, float shoulder)
-{
-    const float scaled = value * positiveToneParam(key);
-    const float rolloff = positiveToneParam(shoulder);
-    const float rolloff2 = rolloff * rolloff;
-
-    return scaled * (1.f + scaled / rolloff2) / (1.f + scaled);
-}
-
-
-static float acesFittedTone(float value, float shoulder, float toe)
-{
-    const float shoulderStrength = positiveToneParam(shoulder);
-    const float toeStrength = positiveToneParam(toe);
-    const float a = 2.51f;
-    const float b = 0.03f * toeStrength;
-    const float c = 2.43f * shoulderStrength;
-    const float d = 0.59f;
-    const float e = 0.14f * toeStrength;
-
-    return value * (a * value + b) / (value * (c * value + d) + e);
-}
-
-
-static float hablePartial(
-  float value, float shoulderStrength, float linearStrength, float linearAngle,
-  float toeStrength)
-{
-    const float a = shoulderStrength;
-    const float b = positiveToneParam(linearStrength);
-    const float c = linearAngle;
-    const float d = positiveToneParam(toeStrength);
-    const float e = 0.02f;
-    const float f = 0.30f;
-
-    return (
-      value * (a * value + c * b) + d * e)
-      / (value * (a * value + b) + d * f)
-      - e / f;
-}
-
-
-static float filmicTone(
-  float value, float shoulderStrength, float linearStrength, float linearAngle,
-  float toeStrength)
-{
-    const float whiteCurve = hablePartial(
-      11.2f,
-      shoulderStrength,
-      linearStrength,
-      linearAngle,
-      toeStrength);
-
-    if (!std::isfinite(whiteCurve) || whiteCurve <= 0.f) return 0.f;
-
-    return hablePartial(
-      value,
-      shoulderStrength,
-      linearStrength,
-      linearAngle,
-      toeStrength)
-      / whiteCurve;
-}
-
-
-static float logTone(float value, float range, float compression)
-{
-    const float compressedValue = value * positiveToneParam(compression);
-    const float compressedRange =
-      positiveToneParam(range) * positiveToneParam(compression);
-    const float scale = std::log1p(compressedRange);
-
-    if (!std::isfinite(scale) || scale <= 0.f) return 0.f;
-
-    return std::log1p(compressedValue) / scale;
-}
-
-
-static float clampTone(float value, float minimum, float maximum)
-{
-    const float lower = minimum;
-    const float upper = maximum > lower ? maximum : lower + 0.001f;
-    const float clamped = clampPreview(value, lower, upper);
-
-    return (clamped - lower) / (upper - lower);
-}
-
-
-static float applyToneMapping(
-  float value,
-  RGBFramebufferModel::ToneMappingMethod method,
-  float p0,
-  float p1,
-  float p2,
-  float p3)
-{
-    switch (method) {
-        case RGBFramebufferModel::Tone_ACES:
-            return acesFittedTone(value, p0, p1);
-
-        case RGBFramebufferModel::Tone_Filmic:
-            return filmicTone(value, p0, p1, p2, p3);
-
-        case RGBFramebufferModel::Tone_Log:
-            return logTone(value, p0, p1);
-
-        case RGBFramebufferModel::Tone_Clamp:
-            return clampTone(value, p0, p1);
-
-        case RGBFramebufferModel::Tone_Reinhard:
-        default:
-            return reinhardTone(value, p0, p1);
-    }
-}
-
-
-static float toneMappedSRGB(
-  float value,
-  RGBFramebufferModel::ToneMappingMethod method,
-  float p0,
-  float p1,
-  float p2,
-  float p3)
-{
-    const float source = safeToneInput(value);
-
-    float mapped = applyToneMapping(source, method, p0, p1, p2, p3);
-
-    if (!std::isfinite(mapped)) mapped = 0.f;
-
-    return ColorTransform::to_sRGB(clampPreview(mapped, 0.f, 1.f));
-}
-
 
 RGBFramebufferModel::RGBFramebufferModel(
   const std::string& parentLayerName, LayerType layerType, QObject* parent)
@@ -212,10 +57,19 @@ RGBFramebufferModel::RGBFramebufferModel(
   , m_previewMode(Preview_Exposure)
   , m_toneMappingMethod(Tone_Reinhard)
   , m_exposure(0.)
-  , m_toneParams{ 0.18, 4., 0., 0. }
+  , m_toneParams {0.18, 4., 0., 0.}
+  , m_falseColorMin(0.)
+  , m_falseColorMax(1.)
+  , m_luminanceMin(0.)
+  , m_luminanceMax(0.)
+  , m_hasFiniteLuminanceSamples(false)
+  , m_falseColorMap(ColormapModule::create(ColormapModule::TURBO))
 {}
 
-RGBFramebufferModel::~RGBFramebufferModel() {}
+RGBFramebufferModel::~RGBFramebufferModel()
+{
+    waitForBackgroundTasks();
+}
 
 void RGBFramebufferModel::load(
   Imf::MultiPartInputFile& file, int partId, bool hasAlpha)
@@ -340,7 +194,7 @@ void RGBFramebufferModel::load(
 
                     Imath::M44f conversionMatrix = RGB_XYZ * XYZ_RGB;
 
-                    #pragma omp parallel for
+#pragma omp parallel for
                     for (int y = 0; y < m_height; y++) {
                         for (int x = 0; x < m_width; x++) {
                             const float r
@@ -406,12 +260,12 @@ void RGBFramebufferModel::load(
                     part.setFrameBuffer(framebuffer);
                     part.readPixels(datW.min.y, datW.max.y);
 
-                    // Filling missing values for chroma in the image
-                    // TODO: now, naive reconstruction.
-                    // Use later Imf::RgbaYca::reconstructChromaHoriz and
-                    // Imf::RgbaYca::reconstructChromaVert to reconstruct missing
-                    // pixels
-                    #pragma omp parallel for
+// Filling missing values for chroma in the image
+// TODO: now, naive reconstruction.
+// Use later Imf::RgbaYca::reconstructChromaHoriz and
+// Imf::RgbaYca::reconstructChromaVert to reconstruct missing
+// pixels
+#pragma omp parallel for
                     for (int y = 0; y < m_height; y++) {
                         for (int x = 0; x < m_width; x++) {
                             const float l = yBuffer[y * m_width + x];
@@ -454,8 +308,8 @@ void RGBFramebufferModel::load(
 
                     Imath::V3f yw = Imf::RgbaYca::computeYw(chromaticities);
 
-                    // Proceed to the YCA -> RGBA conversion
-                    #pragma omp parallel for
+// Proceed to the YCA -> RGBA conversion
+#pragma omp parallel for
                     for (int y = 0; y < m_height; y++) {
                         Imf::RgbaYca::YCAtoRGBA(
                           yw,
@@ -464,8 +318,8 @@ void RGBFramebufferModel::load(
                           &buff1[y * m_width]);
                     }
 
-                    // Fix over saturated pixels
-                    #pragma omp parallel for
+// Fix over saturated pixels
+#pragma omp parallel for
                     for (int y = 0; y < m_height; y++) {
                         const Imf::Rgba* scanlines[3];
 
@@ -497,7 +351,7 @@ void RGBFramebufferModel::load(
 
                     Imath::M44f conversionMatrix = RGB_XYZ * XYZ_RGB;
 
-                    #pragma omp parallel for
+#pragma omp parallel for
                     for (int y = 0; y < m_height; y++) {
                         for (int x = 0; x < m_width; x++) {
                             Imath::V3f rgb(
@@ -533,7 +387,7 @@ void RGBFramebufferModel::load(
                     part.setFrameBuffer(framebuffer);
                     part.readPixels(datW.min.y, datW.max.y);
 
-                    #pragma omp parallel for
+#pragma omp parallel for
                     for (int i = 0; i < m_height * m_width; i++) {
                         m_pixelBuffer[4 * i + 1] = m_pixelBuffer[4 * i + 0];
                         m_pixelBuffer[4 * i + 2] = m_pixelBuffer[4 * i + 0];
@@ -543,13 +397,31 @@ void RGBFramebufferModel::load(
             }
 
             resetDatasetStats();
+            m_luminanceMin              = 0.;
+            m_luminanceMax              = 0.;
+            m_hasFiniteLuminanceSamples = false;
 
-            const int statsChannels =
-              m_layerType == Layer_Y ? 1 : 3;
+            const int statsChannels = m_layerType == Layer_Y ? 1 : 3;
 
             for (int i = 0; i < m_width * m_height; i++) {
                 for (int c = 0; c < statsChannels; c++) {
                     collectDatasetStats(m_pixelBuffer[4 * i + c]);
+                }
+
+                const float y = ToneMapping::luminance(
+                  m_pixelBuffer[4 * i + 0],
+                  m_pixelBuffer[4 * i + 1],
+                  m_pixelBuffer[4 * i + 2]);
+
+                if (std::isfinite(y)) {
+                    if (!m_hasFiniteLuminanceSamples) {
+                        m_luminanceMin              = y;
+                        m_luminanceMax              = y;
+                        m_hasFiniteLuminanceSamples = true;
+                    }
+
+                    if (y < m_luminanceMin) m_luminanceMin = y;
+                    if (y > m_luminanceMax) m_luminanceMax = y;
                 }
             }
 
@@ -579,7 +451,11 @@ std::string RGBFramebufferModel::getColorInfo(int x, int y) const
        << " R: " << m_pixelBuffer[4 * (y * width() + x) + 0]
        << " G: " << m_pixelBuffer[4 * (y * width() + x) + 1]
        << " B: " << m_pixelBuffer[4 * (y * width() + x) + 2]
-       << " A: " << m_pixelBuffer[4 * (y * width() + x) + 3];
+       << " A: " << m_pixelBuffer[4 * (y * width() + x) + 3] << " Y: "
+       << ToneMapping::luminance(
+            m_pixelBuffer[4 * (y * width() + x) + 0],
+            m_pixelBuffer[4 * (y * width() + x) + 1],
+            m_pixelBuffer[4 * (y * width() + x) + 2]);
 
     return ss.str();
 }
@@ -626,7 +502,7 @@ float RGBFramebufferModel::getAlphaInfo(int x, int y) const
 
 std::vector<std::string> RGBFramebufferModel::rawChannelNames() const
 {
-    return { "R", "G", "B", "A" };
+    return {"R", "G", "B", "A"};
 }
 
 
@@ -657,13 +533,39 @@ void RGBFramebufferModel::setToneMappingMethod(ToneMappingMethod method)
 }
 
 
+void RGBFramebufferModel::setFalseColorColormap(ColormapModule::Map map)
+{
+    if (!m_isImageLoaded && !m_falseColorMap) {
+        m_falseColorMap.reset(ColormapModule::create(map));
+        return;
+    }
+
+    if (m_imageEditingWatcher->isRunning()) {
+        m_imageEditingWatcher->cancel();
+        m_imageEditingWatcher->waitForFinished();
+    }
+
+    m_falseColorMap.reset(ColormapModule::create(map));
+
+    updateImage();
+}
+
+
+void RGBFramebufferModel::setFalseColorRange(double min, double max)
+{
+    if (m_falseColorMin == min && m_falseColorMax == max) return;
+
+    m_falseColorMin = min;
+    m_falseColorMax = max;
+    updateImage();
+}
+
+
 void RGBFramebufferModel::setToneParameters(
   double p0, double p1, double p2, double p3)
 {
     if (
-      m_toneParams[0] == p0
-      && m_toneParams[1] == p1
-      && m_toneParams[2] == p2
+      m_toneParams[0] == p0 && m_toneParams[1] == p1 && m_toneParams[2] == p2
       && m_toneParams[3] == p3) {
         return;
     }
@@ -689,44 +591,55 @@ void RGBFramebufferModel::updateImage()
         m_imageEditingWatcher->waitForFinished();
     }
 
-    const PreviewMode previewMode = m_previewMode;
+    const PreviewMode       previewMode       = m_previewMode;
     const ToneMappingMethod toneMappingMethod = m_toneMappingMethod;
-    const float exposureMul = std::exp2(m_exposure);
-    const float toneParam0 = m_toneParams[0];
-    const float toneParam1 = m_toneParams[1];
-    const float toneParam2 = m_toneParams[2];
-    const float toneParam3 = m_toneParams[3];
+    const float             exposureMul       = std::exp2(m_exposure);
+    const float             toneParam0        = m_toneParams[0];
+    const float             toneParam1        = m_toneParams[1];
+    const float             toneParam2        = m_toneParams[2];
+    const float             toneParam3        = m_toneParams[3];
+    const float             falseColorMin     = m_falseColorMin;
+    const float             falseColorMax = m_falseColorMax > m_falseColorMin
+                                              ? m_falseColorMax
+                                              : m_falseColorMin + 0.001;
+    const Colormap*         falseColorMap = m_falseColorMap.get();
+    const int               width         = m_width;
+    const int               height        = m_height;
+    const QImage::Format    format        = m_image.format();
+    const quint64           generation    = nextRenderGeneration();
 
     QFuture<void> imageConverting = QtConcurrent::run([=]() {
-        for (int y = 0; y < m_image.height(); y++) {
-            unsigned char* line = m_image.scanLine(y);
+        QImage image(width, height, format);
 
-            #pragma omp parallel for
-            for (int x = 0; x < m_image.width(); x++) {
-                const float sourceR = m_pixelBuffer[4 * (y * m_width + x) + 0];
-                const float sourceG = m_pixelBuffer[4 * (y * m_width + x) + 1];
-                const float sourceB = m_pixelBuffer[4 * (y * m_width + x) + 2];
+        for (int y = 0; y < height; y++) {
+            unsigned char* line = image.scanLine(y);
+
+#pragma omp parallel for
+            for (int x = 0; x < width; x++) {
+                const float sourceR = m_pixelBuffer[4 * (y * width + x) + 0];
+                const float sourceG = m_pixelBuffer[4 * (y * width + x) + 1];
+                const float sourceB = m_pixelBuffer[4 * (y * width + x) + 2];
 
                 float r = ColorTransform::to_sRGB(exposureMul * sourceR);
                 float g = ColorTransform::to_sRGB(exposureMul * sourceG);
                 float b = ColorTransform::to_sRGB(exposureMul * sourceB);
 
                 if (previewMode == Preview_ToneMapping) {
-                    r = toneMappedSRGB(
+                    r = ToneMapping::toSrgb(
                       sourceR,
                       toneMappingMethod,
                       toneParam0,
                       toneParam1,
                       toneParam2,
                       toneParam3);
-                    g = toneMappedSRGB(
+                    g = ToneMapping::toSrgb(
                       sourceG,
                       toneMappingMethod,
                       toneParam0,
                       toneParam1,
                       toneParam2,
                       toneParam3);
-                    b = toneMappedSRGB(
+                    b = ToneMapping::toSrgb(
                       sourceB,
                       toneMappingMethod,
                       toneParam0,
@@ -735,12 +648,28 @@ void RGBFramebufferModel::updateImage()
                       toneParam3);
                 }
 
-                const float a = m_pixelBuffer[4 * (y * m_width + x) + 3];
+                if (previewMode == Preview_FalseColor && falseColorMap) {
+                    const float sourceY
+                      = ToneMapping::luminance(sourceR, sourceG, sourceB);
+                    float RGB[3] = {0.f, 0.f, 0.f};
 
-                line[4 * x + 0] = qMax(0, qMin(255, int(255.f * r)));
-                line[4 * x + 1] = qMax(0, qMin(255, int(255.f * g)));
-                line[4 * x + 2] = qMax(0, qMin(255, int(255.f * b)));
-                line[4 * x + 3] = qMax(0, qMin(255, int(255.f * a)));
+                    falseColorMap->getRGBValue(
+                      std::isfinite(sourceY) ? sourceY : falseColorMin,
+                      falseColorMin,
+                      falseColorMax,
+                      RGB);
+
+                    r = RGB[0];
+                    g = RGB[1];
+                    b = RGB[2];
+                }
+
+                const float a = m_pixelBuffer[4 * (y * width + x) + 3];
+
+                line[4 * x + 0] = ToneMapping::toByte(r);
+                line[4 * x + 1] = ToneMapping::toByte(g);
+                line[4 * x + 2] = ToneMapping::toByte(b);
+                line[4 * x + 3] = ToneMapping::toByte(a);
             }
 
             if (m_imageEditingWatcher->isCanceled()) {
@@ -748,10 +677,8 @@ void RGBFramebufferModel::updateImage()
             }
         }
 
-        // We do not notify any canceled process: this would result in
-        // potentially corrupted conversion
         if (!m_imageEditingWatcher->isCanceled()) {
-            emit imageChanged();
+            emit imageRendered(image, generation);
         }
     });
 

@@ -37,6 +37,7 @@
 #include <QObject>
 #include <QRect>
 #include <QVector>
+#include <QtGlobal>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -49,7 +50,7 @@ class FramebufferModel: public QObject
     FramebufferModel(QObject* parent = nullptr);
     virtual ~FramebufferModel();
 
-    const QImage& getLoadedImage() const { return m_image; }
+    const QImage&             getLoadedImage() const { return m_image; }
     const std::vector<float>& getRawPixels() const { return m_pixelBuffer; }
 
     bool isImageLoaded() const { return m_isImageLoaded; }
@@ -67,16 +68,19 @@ class FramebufferModel: public QObject
     uint64_t getDatasetInfCount() const { return m_datasetInfCount; }
     bool     hasFiniteSamples() const { return m_hasFiniteSamples; }
 
-    virtual std::string getColorInfo(int x, int y) const = 0;
-    virtual std::vector<std::string> rawChannelNames() const = 0;
+    virtual std::string              getColorInfo(int x, int y) const = 0;
+    virtual std::vector<std::string> rawChannelNames() const          = 0;
 
   signals:
     void imageChanged();
     void imageLoaded();
-    void exposureChanged(double exposure);
     void loadFailed(QString message);
+    void imageRendered(const QImage& image, quint64 generation);
 
   protected:
+    void    waitForBackgroundTasks();
+    quint64 nextRenderGeneration();
+
     std::vector<float> m_pixelBuffer;
     QImage             m_image;
 
@@ -85,8 +89,6 @@ class FramebufferModel: public QObject
     int m_width, m_height;
 
     bool m_isImageLoaded;
-
-    double m_exposure;
 
     QFutureWatcher<void>* m_imageLoadingWatcher;
     QFutureWatcher<void>* m_imageEditingWatcher;
@@ -103,4 +105,10 @@ class FramebufferModel: public QObject
 
     void resetDatasetStats();
     void collectDatasetStats(double value);
+
+  private slots:
+    void publishRenderedImage(const QImage& image, quint64 generation);
+
+  private:
+    quint64 m_renderGeneration;
 };

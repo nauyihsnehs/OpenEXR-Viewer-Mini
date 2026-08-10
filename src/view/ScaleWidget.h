@@ -35,6 +35,8 @@
 #include <QWidget>
 #include <util/ColormapModule.h>
 
+#include <memory>
+
 class ScaleWidget: public QWidget
 {
     Q_OBJECT
@@ -54,9 +56,9 @@ class ScaleWidget: public QWidget
     void resizeEvent(QResizeEvent* e) override;
 
   private:
-    double    m_min;
-    double    m_max;
-    Colormap* m_cmap;
+    double                    m_min;
+    double                    m_max;
+    std::unique_ptr<Colormap> m_cmap;
 
     int m_width, m_height;
 };

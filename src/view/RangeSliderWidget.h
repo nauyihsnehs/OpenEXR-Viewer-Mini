@@ -1,5 +1,5 @@
 /**
- * Copyright (c) 2021 - 2023 Alban Fichet <alban dot fichet at gmx dot fr>
+ * Copyright (c) 2021 Alban Fichet <alban dot fichet at gmx dot fr>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -32,61 +32,51 @@
 
 #pragma once
 
-#include <QAbstractItemModel>
+#include <QWidget>
 
-#include <memory>
+class QMouseEvent;
 
-
-#include <model/attribute/LayerItem.h>
-
-#include <OpenEXR/ImfMultiPartInputFile.h>
-
-class LayerModel: public QAbstractItemModel
+class RangeSliderWidget: public QWidget
 {
     Q_OBJECT
+
   public:
-    enum LayerInfo
-    {
-        LAYER = 0,
-        TYPE,
-        PIXELTYPE,
-        N_LAYER_INFO
-    };
+    explicit RangeSliderWidget(QWidget* parent = nullptr);
 
-    LayerModel(Imf::MultiPartInputFile& file, QObject* parent);
+    QSize minimumSizeHint() const override;
+    QSize sizeHint() const override;
 
-    ~LayerModel();
+  signals:
+    void rangeChanged(double min, double max);
 
-    LayerItem*       getRoot() const { return m_rootItem.get(); }
-    const LayerItem* defaultDisplayLayer() const;
-    const LayerItem*
-    findChannel(int part, const std::string& channelName) const;
+  public slots:
+    void setBounds(double min, double max);
+    void setRange(double min, double max);
 
-    /**
-     * Qt logic for accessing the model
-     */
-    QVariant data(const QModelIndex& index, int role) const override;
-
-    Qt::ItemFlags flags(const QModelIndex& index) const override;
-
-    QVariant headerData(
-      int             section,
-      Qt::Orientation orientation,
-      int             role = Qt::DisplayRole) const override;
-
-    QModelIndex index(
-      int                row,
-      int                column,
-      const QModelIndex& parent = QModelIndex()) const override;
-
-    QModelIndex parent(const QModelIndex& index) const override;
-
-    int rowCount(const QModelIndex& parent = QModelIndex()) const override;
-
-    int columnCount(const QModelIndex& parent = QModelIndex()) const override;
+  protected:
+    void mouseMoveEvent(QMouseEvent* event) override;
+    void mousePressEvent(QMouseEvent* event) override;
+    void mouseReleaseEvent(QMouseEvent* event) override;
+    void paintEvent(QPaintEvent* event) override;
 
   private:
-    std::unique_ptr<LayerItem> m_rootItem;
+    enum Handle
+    {
+        Handle_None,
+        Handle_Min,
+        Handle_Max
+    };
 
-    Imf::MultiPartInputFile& m_fileHandle;
+    double valueFromPosition(int x) const;
+    int positionFromValue(double value) const;
+    int trackLeft() const;
+    int trackRight() const;
+    void setRangeFromHandle(Handle handle, double value);
+    Handle nearestHandle(int x) const;
+
+    double m_boundMin;
+    double m_boundMax;
+    double m_min;
+    double m_max;
+    Handle m_activeHandle;
 };

@@ -70,8 +70,9 @@ YFramebufferWidget::YFramebufferWidget(QWidget* parent)
     // clang-format on
 
     for (int i = 0; i < ColormapModule::N_MAPS; i++) {
-        ui->cbColormap->addItem(QString::fromStdString(
-          ColormapModule::toString((ColormapModule::Map)i)));
+        ui->cbColormap->addItem(
+          QString::fromStdString(
+            ColormapModule::toString((ColormapModule::Map)i)));
     }
     applyComboBoxBehavior(this);
 }
@@ -80,13 +81,13 @@ YFramebufferWidget::YFramebufferWidget(QWidget* parent)
 YFramebufferWidget::~YFramebufferWidget()
 {
     delete ui;
-    if (m_model) delete m_model;
 }
 
 
 void YFramebufferWidget::setModel(YFramebufferModel* model)
 {
     m_model = model;
+    if (m_model && m_model->parent() != this) m_model->setParent(this);
     ui->graphicsView->setModel(model);
     connect(
       m_model,
@@ -101,11 +102,10 @@ bool YFramebufferWidget::eventFilter(QObject* watched, QEvent* event)
 {
     if (watched == ui->fileInfoButton) {
         if (event->type() == QEvent::Enter) {
-            const QPoint position =
-              ui->fileInfoButton->mapToGlobal(QPoint(
-                ui->fileInfoButton->width() + 8,
-                ui->fileInfoButton->height() / 2));
-            emit fileInfoHoverRequested(this, position);
+            const QPoint position = ui->fileInfoButton->mapToGlobal(QPoint(
+              ui->fileInfoButton->width() + 8,
+              ui->fileInfoButton->height() / 2));
+            emit         fileInfoHoverRequested(this, position);
         }
 
         if (event->type() == QEvent::Leave) {

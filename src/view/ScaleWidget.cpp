@@ -66,12 +66,7 @@ void ScaleWidget::setMax(double value)
 
 void ScaleWidget::setColormap(ColormapModule::Map map)
 {
-    if (m_cmap) {
-        delete m_cmap;
-        m_cmap = nullptr;
-    }
-
-    m_cmap = ColormapModule::create(map);
+    m_cmap.reset(ColormapModule::create(map));
 
     update();
 }

@@ -42,7 +42,6 @@ FramebufferModel::FramebufferModel(QObject* parent)
   , m_width(0)
   , m_height(0)
   , m_isImageLoaded(false)
-  , m_exposure(0)
   , m_imageLoadingWatcher(new QFutureWatcher<void>(this))
   , m_imageEditingWatcher(new QFutureWatcher<void>(this))
   , m_pixelAspectRatio(1.f)
@@ -51,7 +50,15 @@ FramebufferModel::FramebufferModel(QObject* parent)
   , m_datasetNaNCount(0)
   , m_datasetInfCount(0)
   , m_hasFiniteSamples(false)
-{}
+  , m_renderGeneration(0)
+{
+    connect(
+      this,
+      &FramebufferModel::imageRendered,
+      this,
+      &FramebufferModel::publishRenderedImage,
+      Qt::QueuedConnection);
+}
 
 QRect FramebufferModel::getDisplayWindow() const
 {
@@ -65,11 +72,11 @@ QRect FramebufferModel::getDataWindow() const
 
 void FramebufferModel::resetDatasetStats()
 {
-    m_datasetMin        = 0.;
-    m_datasetMax        = 0.;
-    m_datasetNaNCount   = 0;
-    m_datasetInfCount   = 0;
-    m_hasFiniteSamples  = false;
+    m_datasetMin       = 0.;
+    m_datasetMax       = 0.;
+    m_datasetNaNCount  = 0;
+    m_datasetInfCount  = 0;
+    m_hasFiniteSamples = false;
 }
 
 void FramebufferModel::collectDatasetStats(double value)
@@ -95,4 +102,38 @@ void FramebufferModel::collectDatasetStats(double value)
     if (value > m_datasetMax) m_datasetMax = value;
 }
 
-FramebufferModel::~FramebufferModel() {}
+void FramebufferModel::waitForBackgroundTasks()
+{
+    QFutureWatcher<void>* watchers[] = {
+      m_imageLoadingWatcher,
+      m_imageEditingWatcher,
+    };
+
+    for (QFutureWatcher<void>* watcher : watchers) {
+        if (!watcher || !watcher->isRunning()) continue;
+        watcher->cancel();
+        watcher->waitForFinished();
+    }
+}
+
+
+quint64 FramebufferModel::nextRenderGeneration()
+{
+    return ++m_renderGeneration;
+}
+
+
+void FramebufferModel::publishRenderedImage(
+  const QImage& image, quint64 generation)
+{
+    if (generation != m_renderGeneration || image.isNull()) return;
+
+    m_image = image;
+    emit imageChanged();
+}
+
+
+FramebufferModel::~FramebufferModel()
+{
+    waitForBackgroundTasks();
+}

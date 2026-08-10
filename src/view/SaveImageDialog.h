@@ -1,6 +1,6 @@
 #pragma once
 
-#include <view/ImageSave.h>
+#include <io/ImageSave.h>
 
 #include <QDialog>
 
@@ -18,7 +18,7 @@ class SaveImageDialog: public QDialog
     ~SaveImageDialog();
 
     ImageSave::Options options() const;
-    void setStatus(const QString& message, bool error);
+    void               setStatus(const QString& message, bool error);
 
   public slots:
     void reject() override;

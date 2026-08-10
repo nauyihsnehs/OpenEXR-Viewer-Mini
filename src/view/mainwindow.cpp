@@ -33,7 +33,7 @@
 #include "mainwindow.h"
 #include "./ui_mainwindow.h"
 #include <view/about.h>
-#include <view/ImageSave.h>
+#include <io/ImageSave.h>
 #include <view/SaveImageDialog.h>
 
 #include <cassert>
@@ -87,15 +87,14 @@ static QPoint mouseGlobalPosition(QMouseEvent* event)
 }
 
 
-static const int s_windowResizeBorder = 8;
-static const int s_clipboardMaxWidth = 1024;
-static const char* s_darkTheme = "dark";
-static const char* s_lightTheme = "light";
+static const int   s_windowResizeBorder = 8;
+static const int   s_clipboardMaxWidth  = 1024;
+static const char* s_darkTheme          = "dark";
+static const char* s_lightTheme         = "light";
 
 
-static ImageSave::ConflictPolicy conflictChoice(
-  QWidget* parent,
-  const QStringList& paths)
+static ImageSave::ConflictPolicy
+conflictChoice(QWidget* parent, const QStringList& paths)
 {
     QMessageBox box(parent);
     box.setWindowTitle(QObject::tr("Save Image"));
@@ -103,10 +102,10 @@ static ImageSave::ConflictPolicy conflictChoice(
     box.setText(QObject::tr("The output file already exists."));
     box.setInformativeText(paths.join("\n"));
 
-    QPushButton* overwriteButton =
-      box.addButton(QObject::tr("Overwrite"), QMessageBox::AcceptRole);
-    QPushButton* renameButton =
-      box.addButton(QObject::tr("Auto Rename"), QMessageBox::ActionRole);
+    QPushButton* overwriteButton
+      = box.addButton(QObject::tr("Overwrite"), QMessageBox::AcceptRole);
+    QPushButton* renameButton
+      = box.addButton(QObject::tr("Auto Rename"), QMessageBox::ActionRole);
     box.addButton(QMessageBox::Cancel);
 
     box.exec();
@@ -176,15 +175,14 @@ static QIcon titleButtonIcon(TitleButtonIcon icon, const QColor& color)
 #ifdef _WIN32
 static bool containsGlobalPoint(QWidget* widget, const QPoint& point)
 {
-    return widget
-      && widget->isVisible()
-      && widget->rect().contains(widget->mapFromGlobal(point));
+    return widget && widget->isVisible()
+           && widget->rect().contains(widget->mapFromGlobal(point));
 }
 
 
 static const DWORD s_dwmWindowCornerPreference = 33;
-static const DWORD s_dwmWindowCornerDefault = 0;
-static const DWORD s_dwmWindowCornerRound = 2;
+static const DWORD s_dwmWindowCornerDefault    = 0;
+static const DWORD s_dwmWindowCornerRound      = 2;
 
 
 static int scaledWindowsMetric(HWND hwnd, int value)
@@ -194,9 +192,9 @@ static int scaledWindowsMetric(HWND hwnd, int value)
     HMODULE user32 = GetModuleHandleW(L"user32.dll");
     if (!user32) return value;
 
-    typedef UINT(WINAPI* DpiForWindow)(HWND);
-    DpiForWindow dpiForWindow =
-      reinterpret_cast<DpiForWindow>(GetProcAddress(user32, "GetDpiForWindow"));
+    typedef UINT(WINAPI * DpiForWindow)(HWND);
+    DpiForWindow dpiForWindow = reinterpret_cast<DpiForWindow>(
+      GetProcAddress(user32, "GetDpiForWindow"));
 
     if (dpiForWindow) dpi = dpiForWindow(hwnd);
 
@@ -210,10 +208,10 @@ static void setWindowsCornerPreference(HWND hwnd, bool rounded)
 {
     if (!hwnd) return;
 
-    typedef HRESULT(WINAPI* DwmSetWindowAttributeFn)(
-      HWND, DWORD, LPCVOID, DWORD);
+    typedef HRESULT(
+      WINAPI * DwmSetWindowAttributeFn)(HWND, DWORD, LPCVOID, DWORD);
 
-    static bool initialized = false;
+    static bool                    initialized        = false;
     static DwmSetWindowAttributeFn setWindowAttribute = nullptr;
 
     if (!initialized) {
@@ -228,8 +226,8 @@ static void setWindowsCornerPreference(HWND hwnd, bool rounded)
 
     if (!setWindowAttribute) return;
 
-    const DWORD preference =
-      rounded ? s_dwmWindowCornerRound : s_dwmWindowCornerDefault;
+    const DWORD preference
+      = rounded ? s_dwmWindowCornerRound : s_dwmWindowCornerDefault;
 
     setWindowAttribute(
       hwnd,
@@ -315,7 +313,8 @@ void MainWindow::setupTitleBar()
     m_windowTitleLabel->setAlignment(Qt::AlignCenter);
     m_windowTitleLabel->setContentsMargins(12, 0, 12, 0);
     m_windowTitleLabel->setSizePolicy(
-      QSizePolicy::Expanding, QSizePolicy::Expanding);
+      QSizePolicy::Expanding,
+      QSizePolicy::Expanding);
 
     m_minimizeButton = new QToolButton(m_titleBar);
     m_minimizeButton->setObjectName("titleMinimizeButton");
@@ -336,9 +335,15 @@ void MainWindow::setupTitleBar()
     m_closeButton->setFixedSize(46, 30);
 
     connect(
-      m_minimizeButton, &QToolButton::clicked, this, &MainWindow::showMinimized);
+      m_minimizeButton,
+      &QToolButton::clicked,
+      this,
+      &MainWindow::showMinimized);
     connect(
-      m_maximizeButton, &QToolButton::clicked, this, &MainWindow::toggleMaximized);
+      m_maximizeButton,
+      &QToolButton::clicked,
+      this,
+      &MainWindow::toggleMaximized);
     connect(m_closeButton, &QToolButton::clicked, this, &MainWindow::close);
 
     layout->addWidget(menuBar);
@@ -374,9 +379,11 @@ void MainWindow::setupPreviewModeActions()
     modeGroup->setExclusive(true);
     modeGroup->addAction(ui->action_ModeExposure);
     modeGroup->addAction(ui->action_ModeToneMapping);
+    modeGroup->addAction(ui->action_ModeFalseColor);
 
     ui->action_ModeExposure->setCheckable(true);
     ui->action_ModeToneMapping->setCheckable(true);
+    ui->action_ModeFalseColor->setCheckable(true);
     ui->action_ModeExposure->setChecked(true);
 }
 
@@ -387,18 +394,22 @@ void MainWindow::applyRgbPreviewMode(RGBFramebufferModel::PreviewMode mode)
 
     ui->action_ModeExposure->blockSignals(true);
     ui->action_ModeToneMapping->blockSignals(true);
+    ui->action_ModeFalseColor->blockSignals(true);
 
     ui->action_ModeExposure->setChecked(
       mode == RGBFramebufferModel::Preview_Exposure);
     ui->action_ModeToneMapping->setChecked(
       mode == RGBFramebufferModel::Preview_ToneMapping);
+    ui->action_ModeFalseColor->setChecked(
+      mode == RGBFramebufferModel::Preview_FalseColor);
 
     ui->action_ModeExposure->blockSignals(false);
     ui->action_ModeToneMapping->blockSignals(false);
+    ui->action_ModeFalseColor->blockSignals(false);
 
     for (int i = 0; i < m_openFileTabs->count(); i++) {
-        ImageFileWidget* widget =
-          qobject_cast<ImageFileWidget*>(m_openFileTabs->widget(i));
+        ImageFileWidget* widget
+          = qobject_cast<ImageFileWidget*>(m_openFileTabs->widget(i));
 
         if (widget) widget->setRgbPreviewMode(mode);
     }
@@ -424,7 +435,7 @@ QString MainWindow::themeStyleSheetPath(const QString& themeName) const
 void MainWindow::applyTheme(const QString& themeName)
 {
     const QString normalizedTheme = normalizedThemeName(themeName);
-    QFile stylesheet(themeStyleSheetPath(normalizedTheme));
+    QFile         stylesheet(themeStyleSheetPath(normalizedTheme));
 
     if (!stylesheet.open(QFile::ReadOnly | QFile::Text)) {
         qWarning() << "Unable to set stylesheet, file not found";
@@ -454,26 +465,24 @@ void MainWindow::updateTitleBarButtons()
 {
     if (!m_maximizeButton) return;
 
-    const QColor iconColor =
-      m_currentTheme == s_lightTheme
-        ? QColor(32, 35, 40)
-        : QColor(214, 214, 214);
+    const QColor iconColor = m_currentTheme == s_lightTheme
+                               ? QColor(32, 35, 40)
+                               : QColor(214, 214, 214);
 
-    const TitleButtonIcon maximizeIcon =
-      isMaximized()
-        ? TitleButtonRestore
-        : TitleButtonMaximize;
+    const TitleButtonIcon maximizeIcon
+      = isMaximized() ? TitleButtonRestore : TitleButtonMaximize;
 
     m_minimizeButton->setIcon(titleButtonIcon(TitleButtonMinimize, iconColor));
     m_maximizeButton->setIcon(titleButtonIcon(maximizeIcon, iconColor));
     m_closeButton->setIcon(titleButtonIcon(TitleButtonClose, iconColor));
-    m_maximizeButton->setToolTip(isMaximized() ? tr("Restore") : tr("Maximize"));
+    m_maximizeButton->setToolTip(
+      isMaximized() ? tr("Restore") : tr("Maximize"));
 }
 
 
 void MainWindow::updateWindowFrame()
 {
-    const bool frameActive = !isMaximized() && !isFullScreen();
+    const bool     frameActive    = !isMaximized() && !isFullScreen();
     const QVariant oldFrameActive = property("windowFrameActive");
 
     setContentsMargins(0, 0, 0, 0);
@@ -497,12 +506,8 @@ void MainWindow::applyWindowsWindowStyle()
     if (!hwnd) return;
 
     const LONG_PTR oldStyle = GetWindowLongPtr(hwnd, GWL_STYLE);
-    const LONG_PTR style =
-      oldStyle
-      | WS_THICKFRAME
-      | WS_MAXIMIZEBOX
-      | WS_MINIMIZEBOX
-      | WS_SYSMENU;
+    const LONG_PTR style
+      = oldStyle | WS_THICKFRAME | WS_MAXIMIZEBOX | WS_MINIMIZEBOX | WS_SYSMENU;
 
     if (style != oldStyle) SetWindowLongPtr(hwnd, GWL_STYLE, style);
 
@@ -513,12 +518,8 @@ void MainWindow::applyWindowsWindowStyle()
       0,
       0,
       0,
-      SWP_FRAMECHANGED
-        | SWP_NOMOVE
-        | SWP_NOSIZE
-        | SWP_NOZORDER
-        | SWP_NOOWNERZORDER
-        | SWP_NOACTIVATE);
+      SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER
+        | SWP_NOOWNERZORDER | SWP_NOACTIVATE);
 }
 #endif
 
@@ -529,9 +530,8 @@ bool MainWindow::isTitleBarDragArea(const QPoint& pos) const
 
     QWidget* child = childAt(pos);
 
-    return child == m_titleBar
-      || child == m_windowTitleLabel
-      || (child && m_windowTitleLabel->isAncestorOf(child));
+    return child == m_titleBar || child == m_windowTitleLabel
+           || (child && m_windowTitleLabel->isAncestorOf(child));
 }
 
 
@@ -543,9 +543,9 @@ ImageFileWidget* MainWindow::currentFileWidget() const
 
 void MainWindow::copyActiveImage(bool fullResolution) const
 {
-    ImageFileWidget* widget = currentFileWidget();
-    const FramebufferModel* model =
-      widget ? widget->activeFramebufferModel() : nullptr;
+    ImageFileWidget*        widget = currentFileWidget();
+    const FramebufferModel* model
+      = widget ? widget->activeFramebufferModel() : nullptr;
 
     if (!model || !model->isImageLoaded()) return;
 
@@ -553,9 +553,8 @@ void MainWindow::copyActiveImage(bool fullResolution) const
     if (image.isNull()) return;
 
     if (!fullResolution && image.width() > s_clipboardMaxWidth) {
-        image = image.scaledToWidth(
-          s_clipboardMaxWidth,
-          Qt::SmoothTransformation);
+        image
+          = image.scaledToWidth(s_clipboardMaxWidth, Qt::SmoothTransformation);
     }
 
     QApplication::clipboard()->setImage(image);
@@ -574,8 +573,8 @@ void MainWindow::applyPanelVisibility(ImageFileWidget* widget) const
 void MainWindow::applyPanelVisibilityToAllTabs() const
 {
     for (int i = 0; i < m_openFileTabs->count(); i++) {
-        ImageFileWidget* widget =
-          qobject_cast<ImageFileWidget*>(m_openFileTabs->widget(i));
+        ImageFileWidget* widget
+          = qobject_cast<ImageFileWidget*>(m_openFileTabs->widget(i));
 
         applyPanelVisibility(widget);
     }
@@ -584,10 +583,10 @@ void MainWindow::applyPanelVisibilityToAllTabs() const
 
 void MainWindow::updateShowActions()
 {
-    ImageFileWidget* widget = currentFileWidget();
-    const FramebufferModel* model =
-      widget ? widget->activeFramebufferModel() : nullptr;
-    const bool enabled = widget && widget->hasActiveFramebuffer();
+    ImageFileWidget*        widget = currentFileWidget();
+    const FramebufferModel* model
+      = widget ? widget->activeFramebufferModel() : nullptr;
+    const bool enabled     = widget && widget->hasActiveFramebuffer();
     const bool copyEnabled = model && model->isImageLoaded();
 
     ui->action_ShowDataWindow->blockSignals(true);
@@ -612,7 +611,7 @@ void MainWindow::updateShowActions()
 void MainWindow::updateFileTabPresentation()
 {
     const int index = m_openFileTabs->currentIndex();
-    QString title;
+    QString   title;
 
     if (index >= 0) {
         title = m_openFileTabs->tabText(index).trimmed();
@@ -620,7 +619,7 @@ void MainWindow::updateFileTabPresentation()
 
     ImageFileWidget* widget = currentFileWidget();
     const QString layer = widget ? widget->activeLayerTitleText() : QString();
-    QString displayTitle = title;
+    QString       displayTitle = title;
 
     if (!displayTitle.isEmpty() && !layer.isEmpty()) {
         displayTitle += " (" + layer + ")";
@@ -641,7 +640,8 @@ void MainWindow::installEmptyOpenEventFilters()
     m_openFileTabs->installEventFilter(this);
 
     for (QWidget* widget : m_openFileTabs->findChildren<QWidget*>(
-           QString(), Qt::FindDirectChildrenOnly)) {
+           QString(),
+           Qt::FindDirectChildrenOnly)) {
         widget->installEventFilter(this);
     }
 }
@@ -758,16 +758,15 @@ void MainWindow::on_action_Open_triggered()
 
 void MainWindow::on_action_Save_triggered()
 {
-    ImageFileWidget* widget = currentFileWidget();
-    const FramebufferModel* model =
-      widget ? widget->activeFramebufferModel() : nullptr;
+    ImageFileWidget*        widget = currentFileWidget();
+    const FramebufferModel* model
+      = widget ? widget->activeFramebufferModel() : nullptr;
 
     if (!model || !model->isImageLoaded()) return;
 
-    QString folder = m_currentOpenedFolder.isEmpty()
-      ? QDir::homePath()
-      : m_currentOpenedFolder;
-    QString base = "image";
+    QString folder = m_currentOpenedFolder.isEmpty() ? QDir::homePath()
+                                                     : m_currentOpenedFolder;
+    QString base   = "image";
 
     if (widget && !widget->isStream()) {
         QFileInfo info(widget->getOpenedFilename());
@@ -786,20 +785,20 @@ void MainWindow::on_action_Save_triggered()
       &SaveImageDialog::saveRequested,
       this,
       [this, &dialog, source]() {
-          ImageSave::Options options = dialog.options();
-          ImageSave::Result saveResult = ImageSave::save(source, options);
+          ImageSave::Options options    = dialog.options();
+          ImageSave::Result  saveResult = ImageSave::save(source, options);
 
           if (saveResult.status == ImageSave::StatusConflict) {
               options.conflict = conflictChoice(this, saveResult.paths);
-              saveResult = ImageSave::save(source, options);
+              saveResult       = ImageSave::save(source, options);
           }
 
           const bool saved = saveResult.status == ImageSave::StatusSaved;
           dialog.setStatus(saveResult.message, !saved);
 
           if (saved && !saveResult.paths.isEmpty()) {
-              m_currentOpenedFolder =
-                QFileInfo(saveResult.paths.front()).absolutePath();
+              m_currentOpenedFolder
+                = QFileInfo(saveResult.paths.front()).absolutePath();
           }
       });
 
@@ -854,8 +853,8 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event)
 {
     if (handleEmptyOpenClick(watched, event)) return true;
 
-    const bool titleBarTarget =
-      watched == m_titleBar || watched == m_windowTitleLabel;
+    const bool titleBarTarget
+      = watched == m_titleBar || watched == m_windowTitleLabel;
 
     if (!titleBarTarget) return QMainWindow::eventFilter(watched, event);
 
@@ -872,9 +871,9 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event)
         QMouseEvent* mouseEvent = static_cast<QMouseEvent*>(event);
 
         if (mouseEvent->button() == Qt::LeftButton) {
-            m_titleBarDragging  = true;
-            m_titleDragPosition =
-              mouseGlobalPosition(mouseEvent) - frameGeometry().topLeft();
+            m_titleBarDragging = true;
+            m_titleDragPosition
+              = mouseGlobalPosition(mouseEvent) - frameGeometry().topLeft();
             return true;
         }
     }
@@ -930,32 +929,30 @@ bool MainWindow::nativeEvent(
     const LONG x = GET_X_LPARAM(msg->lParam);
     const LONG y = GET_Y_LPARAM(msg->lParam);
 
-    const bool insideWindow =
-      x >= windowRect.left
-      && x < windowRect.right
-      && y >= windowRect.top
-      && y < windowRect.bottom;
+    const bool insideWindow = x >= windowRect.left && x < windowRect.right
+                              && y >= windowRect.top && y < windowRect.bottom;
 
     if (!insideWindow) {
         return QMainWindow::nativeEvent(eventType, message, result);
     }
 
     const QPoint globalPos(x, y);
-    const bool onTitleButton =
-      containsGlobalPoint(m_minimizeButton, globalPos)
-      || containsGlobalPoint(m_maximizeButton, globalPos)
-      || containsGlobalPoint(m_closeButton, globalPos);
+    const bool   onTitleButton
+      = containsGlobalPoint(m_minimizeButton, globalPos)
+        || containsGlobalPoint(m_maximizeButton, globalPos)
+        || containsGlobalPoint(m_closeButton, globalPos);
 
     if (onTitleButton) {
         *result = HTCLIENT;
         return true;
     }
 
-    const int resizeBorder = scaledWindowsMetric(msg->hwnd, s_windowResizeBorder);
-    const bool onLeft      = x < windowRect.left + resizeBorder;
-    const bool onRight     = x >= windowRect.right - resizeBorder;
-    const bool onTop       = y < windowRect.top + resizeBorder;
-    const bool onBottom    = y >= windowRect.bottom - resizeBorder;
+    const int resizeBorder
+      = scaledWindowsMetric(msg->hwnd, s_windowResizeBorder);
+    const bool onLeft   = x < windowRect.left + resizeBorder;
+    const bool onRight  = x >= windowRect.right - resizeBorder;
+    const bool onTop    = y < windowRect.top + resizeBorder;
+    const bool onBottom = y >= windowRect.bottom - resizeBorder;
 
     if (!isMaximized() && onTop && onLeft) {
         *result = HTTOPLEFT;
@@ -1013,7 +1010,7 @@ void MainWindow::dropEvent(QDropEvent* ev)
 {
     QList<QUrl> urls = ev->mimeData()->urls();
 
-    for (const QUrl& url: urls) {
+    for (const QUrl& url : urls) {
         const QString filename = url.toLocalFile();
 
         if (!filename.isEmpty()) {
@@ -1173,6 +1170,12 @@ void MainWindow::on_action_ModeExposure_triggered()
 void MainWindow::on_action_ModeToneMapping_triggered()
 {
     applyRgbPreviewMode(RGBFramebufferModel::Preview_ToneMapping);
+}
+
+
+void MainWindow::on_action_ModeFalseColor_triggered()
+{
+    applyRgbPreviewMode(RGBFramebufferModel::Preview_FalseColor);
 }
 
 

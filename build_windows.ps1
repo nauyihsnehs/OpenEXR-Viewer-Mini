@@ -1,11 +1,17 @@
 param(
   [string]$Configuration = "RelWithDebInfo",
-  [switch]$Package
+  [switch]$Package,
+  [switch]$Portable
 )
 
 $root_dir = (Get-Location).Path
 $dir = $root_dir -replace '\\', '/'
 $build_dir = Join-Path $root_dir "build"
+
+if ($Package -and $Portable) {
+  Write-Error "-Package and -Portable cannot be used together."
+  exit 1
+}
 
 if ($Configuration -eq "Debug") {
   Write-Warning "Dependencies are built as Release. Debug can trigger MSVC STL/CRT assertions; use RelWithDebInfo for local debugging."
@@ -33,7 +39,11 @@ if ($Package) {
     exit 1
   }
 
-  cpack -C $Configuration
+  cpack -G NSIS -C $Configuration
+}
+
+if ($Portable) {
+  cpack -G ZIP -C $Configuration
 }
 
 cd $root_dir

@@ -33,7 +33,11 @@
 #pragma once
 
 #include "FramebufferModel.h"
+#include "ToneMapping.h"
 #include <OpenEXR/ImfMultiPartInputFile.h>
+#include <util/ColormapModule.h>
+
+#include <memory>
 
 class RGBFramebufferModel: public FramebufferModel
 {
@@ -49,16 +53,15 @@ class RGBFramebufferModel: public FramebufferModel
     {
         Preview_Exposure,
         Preview_ToneMapping,
+        Preview_FalseColor,
     };
 
-    enum ToneMappingMethod
-    {
-        Tone_Reinhard,
-        Tone_ACES,
-        Tone_Filmic,
-        Tone_Log,
-        Tone_Clamp,
-    };
+    typedef ToneMapping::Method    ToneMappingMethod;
+    static const ToneMappingMethod Tone_Reinhard = ToneMapping::Reinhard;
+    static const ToneMappingMethod Tone_ACES     = ToneMapping::Aces;
+    static const ToneMappingMethod Tone_Filmic   = ToneMapping::Filmic;
+    static const ToneMappingMethod Tone_Log      = ToneMapping::Logarithmic;
+    static const ToneMappingMethod Tone_Clamp    = ToneMapping::Clamp;
 
     RGBFramebufferModel(
       const std::string& parentLayerName,
@@ -72,15 +75,23 @@ class RGBFramebufferModel: public FramebufferModel
 
     virtual std::string getColorInfo(int x, int y) const;
 
-    virtual float getRedInfo(int x, int y) const;
-    virtual float getGreenInfo(int x, int y) const;
-    virtual float getBlueInfo(int x, int y) const;
-    virtual float getAlphaInfo(int x, int y) const;
+    virtual float                    getRedInfo(int x, int y) const;
+    virtual float                    getGreenInfo(int x, int y) const;
+    virtual float                    getBlueInfo(int x, int y) const;
+    virtual float                    getAlphaInfo(int x, int y) const;
     virtual std::vector<std::string> rawChannelNames() const;
+    double getLuminanceMin() const { return m_luminanceMin; }
+    double getLuminanceMax() const { return m_luminanceMax; }
+    bool   hasFiniteLuminanceSamples() const
+    {
+        return m_hasFiniteLuminanceSamples;
+    }
 
   public slots:
     void setPreviewMode(PreviewMode mode);
     void setToneMappingMethod(ToneMappingMethod method);
+    void setFalseColorColormap(ColormapModule::Map map);
+    void setFalseColorRange(double min, double max);
     void setExposure(double value);
     void setToneParameters(double p0, double p1, double p2, double p3);
 
@@ -88,11 +99,17 @@ class RGBFramebufferModel: public FramebufferModel
     void updateImage();
 
   private:
-    int         m_partID;
-    std::string m_parentLayer;
-    LayerType   m_layerType;
-    PreviewMode m_previewMode;
-    ToneMappingMethod m_toneMappingMethod;
-    double      m_exposure;
-    double      m_toneParams[4];
+    int                       m_partID;
+    std::string               m_parentLayer;
+    LayerType                 m_layerType;
+    PreviewMode               m_previewMode;
+    ToneMappingMethod         m_toneMappingMethod;
+    double                    m_exposure;
+    double                    m_toneParams[4];
+    double                    m_falseColorMin;
+    double                    m_falseColorMax;
+    double                    m_luminanceMin;
+    double                    m_luminanceMax;
+    bool                      m_hasFiniteLuminanceSamples;
+    std::unique_ptr<Colormap> m_falseColorMap;
 };

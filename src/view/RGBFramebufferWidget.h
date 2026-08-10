@@ -38,6 +38,8 @@
 
 class QEvent;
 class QDoubleSpinBox;
+class QPushButton;
+class QSlider;
 
 namespace Ui
 {
@@ -52,7 +54,7 @@ class RGBFramebufferWidget: public QWidget
     explicit RGBFramebufferWidget(QWidget* parent = nullptr);
     ~RGBFramebufferWidget();
 
-    void setModel(RGBFramebufferModel* model);
+    void                    setModel(RGBFramebufferModel* model);
     const FramebufferModel* framebufferModel() const { return m_model; }
     void setPreviewMode(RGBFramebufferModel::PreviewMode mode);
 
@@ -72,11 +74,18 @@ class RGBFramebufferWidget: public QWidget
     void on_slExposure_valueChanged(int value);
     void on_exposureButton_clicked();
     void on_cbToneMappingMethod_currentIndexChanged(int index);
+    void on_cbFalseColorColormap_currentIndexChanged(int index);
+    void on_sbFalseColorMinValue_valueChanged(double value);
+    void on_sbFalseColorMaxValue_valueChanged(double value);
+    void on_falseColorRangeSlider_rangeChanged(double min, double max);
+    void on_falseColorAutoButton_clicked();
+    void on_cbFalseColorScale_stateChanged(int state);
     void on_sbToneParam0_valueChanged(double value);
     void on_slToneParam0_valueChanged(int value);
     void on_toneParamButton0_clicked();
     void on_sbToneParam1_valueChanged(double value);
     void on_slToneParam1_valueChanged(int value);
+    void on_toneClampRangeSlider_rangeChanged(double min, double max);
     void on_toneParamButton1_clicked();
     void on_sbToneParam2_valueChanged(double value);
     void on_slToneParam2_valueChanged(int value);
@@ -89,31 +98,50 @@ class RGBFramebufferWidget: public QWidget
     void onControlWheel(int delta);
     void updateZoomLevelText(double zoom);
     void updateFramebufferSummary();
+    void updateFalseColorRangeBounds();
     void on_zoomButton_clicked();
 
   private:
-    void setExposure(double value);
-    void setSpinBoxCompact(QDoubleSpinBox* spinBox, bool compact);
-    void installCompactSpinBox(QDoubleSpinBox* spinBox);
+    struct ToneParamControls {
+        QWidget*        container;
+        QPushButton*    button;
+        QSlider*        slider;
+        QDoubleSpinBox* spinBox;
+    };
+
+    void            setExposure(double value);
+    void            setSpinBoxCompact(QDoubleSpinBox* spinBox, bool compact);
+    void            installCompactSpinBox(QDoubleSpinBox* spinBox);
     QDoubleSpinBox* compactSpinBox(QObject* watched) const;
-    void updateToneMappingControls();
-    void configureToneParam(
-      int index,
-      const QString& label,
-      double minimum,
-      double maximum,
-      double step,
-      double value);
-    void hideToneParams(int firstHiddenIndex);
-    void setToneParamValue(int index, double value);
-    void resetToneParam(int index);
-    void syncToneParamsToModel();
-    QDoubleSpinBox* toneParamSpinBox(int index) const;
+    void            updateToneMappingControls();
+    void            configureToneParam(
+                 int            index,
+                 const QString& label,
+                 double         minimum,
+                 double         maximum,
+                 double         step,
+                 double         value);
+    void                hideToneParams(int firstHiddenIndex);
+    void                setToneParamValue(int index, double value);
+    void                setToneClampRange(double min, double max);
+    void                syncToneClampRangeFromSpinBoxes();
+    void                resetToneParam(int index);
+    void                syncToneParamsToModel();
+    void                setFalseColorRange(double min, double max, bool manual);
+    void                updateFalseColorRangeBounds(double min, double max);
+    void                setFalseColorAutoRange(bool autoRange);
+    void                syncFalseColorRangeToModel();
+    ColormapModule::Map currentFalseColorMap() const;
+    QDoubleSpinBox*     toneParamSpinBox(int index) const;
     RGBFramebufferModel::ToneMappingMethod currentToneMappingMethod() const;
 
-    Ui::RGBFramebufferWidget* ui;
-    RGBFramebufferModel*      m_model;
+    Ui::RGBFramebufferWidget*        ui;
+    RGBFramebufferModel*             m_model;
     RGBFramebufferModel::PreviewMode m_previewMode;
-    double                    m_toneParamDefaults[4];
-    double                    m_zoomLevel;
+    ToneParamControls                m_toneParamControls[4];
+    double                           m_toneParamDefaults[4];
+    double                           m_zoomLevel;
+    bool                             m_falseColorAutoRange;
+    double                           m_savedFalseColorMin;
+    double                           m_savedFalseColorMax;
 };

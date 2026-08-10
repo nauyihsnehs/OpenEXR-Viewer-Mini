@@ -1,4 +1,5 @@
 build/
+CMakeUserPresets.json
 CMakeLists.txt.user
 .vscode
 .idea

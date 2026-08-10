@@ -34,7 +34,6 @@
 
 #include <QByteArray>
 #include <QObject>
-#include <QAbstractItemModel>
 
 #include <OpenEXR/ImfIO.h>
 #include <OpenEXR/ImfMultiPartInputFile.h>
@@ -42,6 +41,9 @@
 #include <model/attribute/HeaderModel.h>
 #include <model/attribute/LayerModel.h>
 #include <model/framebuffer/FramebufferModel.h>
+
+#include <iosfwd>
+#include <memory>
 
 class QFile;
 
@@ -55,8 +57,8 @@ class OpenEXRImage: public QObject
 
     ~OpenEXRImage();
 
-    HeaderModel* getHeaderModel() const { return m_headerModel; }
-    LayerModel*  getLayerModel() const { return m_layerModel; }
+    HeaderModel* getHeaderModel() const { return m_headerModel.get(); }
+    LayerModel*  getLayerModel() const { return m_layerModel.get(); }
 
     Imf::MultiPartInputFile& getEXR() { return *m_exrIn; }
 
@@ -68,12 +70,13 @@ class OpenEXRImage: public QObject
     QString m_filename;
     bool    m_isStream;
 
-    QByteArray    m_streamName;
-    QFile*        m_file;
-    Imf::IStream* m_stream;
+    QByteArray m_streamName;
 
-    Imf::MultiPartInputFile* m_exrIn;
-
-    HeaderModel* m_headerModel;
-    LayerModel*  m_layerModel;
+    // Keep the declaration order aligned with the dependency order. Destruction
+    // happens in reverse: models, EXR input, stream adapter, then backing file.
+    std::unique_ptr<QFile>                   m_file;
+    std::unique_ptr<Imf::IStream>            m_stream;
+    std::unique_ptr<Imf::MultiPartInputFile> m_exrIn;
+    std::unique_ptr<HeaderModel>             m_headerModel;
+    std::unique_ptr<LayerModel>              m_layerModel;
 };

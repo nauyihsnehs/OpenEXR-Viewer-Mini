@@ -44,8 +44,12 @@ endif (APPLE)
 # Dependencies
 # ----------------------------------------------------------------------------
 
-find_package(QT NAMES Qt6 Qt5 COMPONENTS Widgets REQUIRED)
-find_package(Qt${QT_VERSION_MAJOR} COMPONENTS Widgets REQUIRED)
+find_package(QT NAMES Qt6 Qt5 COMPONENTS Widgets Concurrent REQUIRED)
+find_package(
+    Qt${QT_VERSION_MAJOR}
+    COMPONENTS Widgets Concurrent
+    REQUIRED
+)
 
 find_package(OpenMP)
 
@@ -98,6 +102,20 @@ set(PROJECT_SOURCES
     src/view/GraphicsView.cpp
     src/view/GraphicsView.h
 
+    src/view/ComboBoxBehavior.cpp
+    src/view/ComboBoxBehavior.h
+
+    src/view/FramebufferInfo.h
+
+    src/io/ImageSave.cpp
+    src/io/ImageSave.h
+    src/io/ImageSavePlan.cpp
+    src/io/ImageSavePlan.h
+
+    src/view/SaveImageDialog.cpp
+    src/view/SaveImageDialog.h
+    src/view/SaveImageDialog.ui
+
     src/view/RGBFramebufferWidget.cpp
     src/view/RGBFramebufferWidget.h
     src/view/RGBFramebufferWidget.ui
@@ -108,6 +126,8 @@ set(PROJECT_SOURCES
 
     src/view/ScaleWidget.cpp
     src/view/ScaleWidget.h
+    src/view/RangeSliderWidget.cpp
+    src/view/RangeSliderWidget.h
 
     # ------------------------------------------------------------------------
     # Model
@@ -119,6 +139,7 @@ set(PROJECT_SOURCES
     src/model/attribute/HeaderItem.cpp
     src/model/attribute/HeaderItem.h
     src/model/attribute/HeaderModel.cpp
+    src/model/attribute/HeaderModelAttributes.cpp
     src/model/attribute/HeaderModel.h
 
     # OpenEXR layer fields (specific kind of attributes)
@@ -134,6 +155,8 @@ set(PROJECT_SOURCES
     src/model/framebuffer/YFramebufferModel.h
     src/model/framebuffer/RGBFramebufferModel.cpp
     src/model/framebuffer/RGBFramebufferModel.h
+    src/model/framebuffer/ToneMapping.cpp
+    src/model/framebuffer/ToneMapping.h
 
     # Stream
     src/model/StdIStream.cpp
@@ -210,6 +233,7 @@ target_include_directories(openexr-viewer PRIVATE 3rdparty/data)
 target_include_directories(openexr-viewer PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
 
 target_link_libraries(openexr-viewer PRIVATE Qt${QT_VERSION_MAJOR}::Widgets)
+target_link_libraries(openexr-viewer PRIVATE Qt${QT_VERSION_MAJOR}::Concurrent)
 target_link_libraries(openexr-viewer PRIVATE Imath::Imath OpenEXR::OpenEXR)
 
 if((OpenMP_CXX_FOUND) OR (OpenMP_FOUND))
@@ -293,6 +317,14 @@ elseif (WIN32)
             ${CMAKE_INSTALL_BINDIR}
     )
 
+    install(
+        FILES
+            LICENSE
+            README.md
+        DESTINATION
+            .
+    )
+
     set(CMAKE_INSTALL_OPENMP_LIBRARIES TRUE)
     include(InstallRequiredSystemLibraries)
 
@@ -327,6 +359,11 @@ set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_LIST_DIR}/LICENSE")
 # set(CPACK_RESOURCE_FILE_README "README.md")
 set(CPACK_MONOLITHIC_INSTALL True)
 set(CPACK_PACKAGE_EXECUTABLES "openexr-viewer;OpenEXR Viewer")
+
+if (WIN32)
+    set(CPACK_PACKAGE_NAME "openexr-viewer")
+    set(CPACK_PACKAGE_FILE_NAME "openexr-viewer-${PROJECT_VERSION}-windows-x64")
+endif ()
 
 # NSIS specific settings
 if(CPACK_GENERATOR MATCHES "NSIS")

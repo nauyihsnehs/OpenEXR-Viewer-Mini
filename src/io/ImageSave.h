@@ -74,42 +74,39 @@ namespace ImageSave
         StatusCancelled,
     };
 
-    struct Options
-    {
-        Target target;
-        Format format;
+    struct Options {
+        Target  target = TargetPreview;
+        Format  format = FormatPng;
         QString path;
 
-        int maxWidth;
-        int quality;
+        int maxWidth = 0;
+        int quality  = 90;
 
-        ExrCompression compression;
-        ExrPixelType pixelType;
-        ChannelScope channelScope;
-        MetadataPolicy metadata;
-        MultipartPolicy multipart;
-        ConflictPolicy conflict;
+        ExrCompression  compression  = CompressionZip;
+        ExrPixelType    pixelType    = PixelHalf;
+        ChannelScope    channelScope = ChannelsAll;
+        MetadataPolicy  metadata     = MetadataBasic;
+        MultipartPolicy multipart    = MultipartPreserve;
+        ConflictPolicy  conflict     = ConflictAsk;
 
-        int bracketCount;
-        double bracketStepEv;
-        double bracketCenterEv;
+        int    bracketCount    = 3;
+        double bracketStepEv   = 2.;
+        double bracketCenterEv = 0.;
     };
 
-    struct Source
-    {
-        const FramebufferModel* activeModel;
-        OpenEXRImage* sourceImage;
+    struct Source {
+        const FramebufferModel* activeModel = nullptr;
+        OpenEXRImage*           sourceImage = nullptr;
     };
 
-    struct Result
-    {
-        Status status;
-        QString message;
+    struct Result {
+        Status      status = StatusFailed;
+        QString     message;
         QStringList paths;
     };
 
-    QString extension(Format format);
-    QString filter(Format format);
+    QString     extension(Format format);
+    QString     filter(Format format);
     QStringList outputPaths(const Source& source, const Options& options);
-    Result save(const Source& source, const Options& options);
-}
+    Result      save(const Source& source, const Options& options);
+}   // namespace ImageSave

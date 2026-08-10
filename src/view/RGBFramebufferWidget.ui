@@ -383,7 +383,141 @@
              </layout>
             </widget>
            </item>
+           <item row="2" column="0" colspan="2">
+            <widget class="QWidget" name="toneClampRangeWidget">
+             <layout class="QHBoxLayout" name="toneClampRangeLayout">
+              <property name="leftMargin">
+               <number>0</number>
+              </property>
+              <property name="topMargin">
+               <number>0</number>
+              </property>
+              <property name="rightMargin">
+               <number>0</number>
+              </property>
+              <property name="bottomMargin">
+               <number>0</number>
+              </property>
+              <item>
+               <widget class="RangeSliderWidget" name="toneClampRangeSlider" native="true">
+                <property name="minimumSize">
+                 <size>
+                  <width>180</width>
+                  <height>24</height>
+                 </size>
+                </property>
+               </widget>
+              </item>
+             </layout>
+            </widget>
+           </item>
           </layout>
+         </widget>
+        </item>
+       </layout>
+      </widget>
+     </item>
+     <item>
+      <widget class="QWidget" name="falseColorControlsWidget">
+       <property name="sizePolicy">
+        <sizepolicy hsizetype="Maximum" vsizetype="Fixed">
+         <horstretch>0</horstretch>
+         <verstretch>0</verstretch>
+        </sizepolicy>
+       </property>
+       <layout class="QHBoxLayout" name="falseColorControlsLayout">
+        <property name="leftMargin">
+         <number>0</number>
+        </property>
+        <property name="topMargin">
+         <number>0</number>
+        </property>
+        <property name="rightMargin">
+         <number>0</number>
+        </property>
+        <property name="bottomMargin">
+         <number>0</number>
+        </property>
+        <item>
+         <widget class="QLabel" name="falseColorColormapLabel">
+          <property name="text">
+           <string>Colormap:</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QComboBox" name="cbFalseColorColormap">
+          <property name="maximumSize">
+           <size>
+            <width>130</width>
+            <height>16777215</height>
+           </size>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="falseColorRangeLabel">
+          <property name="text">
+           <string>Range:</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="RangeSliderWidget" name="falseColorRangeSlider" native="true">
+          <property name="minimumSize">
+           <size>
+            <width>130</width>
+            <height>24</height>
+           </size>
+          </property>
+          <property name="maximumSize">
+           <size>
+            <width>220</width>
+            <height>24</height>
+           </size>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QDoubleSpinBox" name="sbFalseColorMinValue">
+          <property name="decimals">
+           <number>4</number>
+          </property>
+          <property name="minimum">
+           <double>-999999999.000000000000000</double>
+          </property>
+          <property name="maximum">
+           <double>999999999.000000000000000</double>
+          </property>
+          <property name="singleStep">
+           <double>0.010000000000000</double>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QDoubleSpinBox" name="sbFalseColorMaxValue">
+          <property name="decimals">
+           <number>4</number>
+          </property>
+          <property name="minimum">
+           <double>-999999999.000000000000000</double>
+          </property>
+          <property name="maximum">
+           <double>999999999.000000000000000</double>
+          </property>
+          <property name="singleStep">
+           <double>0.010000000000000</double>
+          </property>
+          <property name="value">
+           <double>1.000000000000000</double>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPushButton" name="falseColorAutoButton">
+          <property name="text">
+           <string>Auto</string>
+          </property>
          </widget>
         </item>
        </layout>
@@ -421,7 +555,14 @@
     </layout>
    </item>
    <item>
-    <widget class="GraphicsView" name="graphicsView"/>
+    <layout class="QHBoxLayout" name="imageLayout">
+     <item>
+      <widget class="GraphicsView" name="graphicsView"/>
+     </item>
+     <item>
+      <widget class="ScaleWidget" name="falseColorScaleWidget" native="true"/>
+     </item>
+    </layout>
    </item>
    <item>
     <layout class="QHBoxLayout" name="horizontalLayout_2">
@@ -467,6 +608,16 @@
       </widget>
      </item>
      <item>
+      <widget class="QCheckBox" name="cbFalseColorScale">
+       <property name="text">
+        <string>Scale</string>
+       </property>
+       <property name="checked">
+        <bool>true</bool>
+       </property>
+      </widget>
+     </item>
+     <item>
       <spacer name="horizontalSpacer">
        <property name="orientation">
         <enum>Qt::Horizontal</enum>
@@ -499,6 +650,18 @@
     <signal>zoomLevelChanged(double)</signal>
     <slot>setZoomLevel(double)</slot>
    </slots>
+  </customwidget>
+  <customwidget>
+   <class>ScaleWidget</class>
+   <extends>QWidget</extends>
+   <header>view/ScaleWidget.h</header>
+   <container>1</container>
+  </customwidget>
+  <customwidget>
+   <class>RangeSliderWidget</class>
+   <extends>QWidget</extends>
+   <header>view/RangeSliderWidget.h</header>
+   <container>1</container>
   </customwidget>
  </customwidgets>
  <resources/>

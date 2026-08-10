@@ -37,6 +37,8 @@
 #include <util/ColormapModule.h>
 #include <OpenEXR/ImfMultiPartInputFile.h>
 
+#include <memory>
+
 class YFramebufferModel: public FramebufferModel
 {
   public:
@@ -49,7 +51,7 @@ class YFramebufferModel: public FramebufferModel
     const std::string& getLayerName() const { return m_layer; }
     int                getPartId() const { return m_partID; }
 
-    virtual std::string getColorInfo(int x, int y) const;
+    virtual std::string              getColorInfo(int x, int y) const;
     virtual std::vector<std::string> rawChannelNames() const;
 
   public slots:
@@ -67,5 +69,5 @@ class YFramebufferModel: public FramebufferModel
     double m_min;
     double m_max;
 
-    Colormap* m_cmap;
+    std::unique_ptr<Colormap> m_cmap;
 };

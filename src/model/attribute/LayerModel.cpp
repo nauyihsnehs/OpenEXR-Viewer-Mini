@@ -38,6 +38,52 @@
 #include <QImage>
 #include <QIcon>
 
+namespace
+{
+    const LayerItem* findPreferredLayer(const LayerItem* root)
+    {
+        static const LayerItem::LayerType priorities[] = {
+          LayerItem::RGBA,
+          LayerItem::RGB,
+          LayerItem::YCA,
+          LayerItem::YC,
+          LayerItem::YA,
+          LayerItem::Y,
+        };
+
+        for (LayerItem::LayerType type : priorities) {
+            const LayerItem* item = root->child(type);
+            if (item) return item;
+        }
+
+        for (LayerItem* child : root->children()) {
+            const LayerItem* item = findPreferredLayer(child);
+            if (item) return item;
+        }
+
+        return nullptr;
+    }
+
+
+    const LayerItem*
+    findChannel(const LayerItem* root, int part, const std::string& channelName)
+    {
+        if (
+          root->getPart() == part && root->getOriginalFullName() == channelName
+          && root->getPixelType() != Imf::PixelType::NUM_PIXELTYPES) {
+            return root;
+        }
+
+        for (LayerItem* child : root->children()) {
+            const LayerItem* result = findChannel(child, part, channelName);
+            if (result) return result;
+        }
+
+        return nullptr;
+    }
+}   // namespace
+
+
 LayerModel::LayerModel(Imf::MultiPartInputFile& file, QObject* parent)
   : QAbstractItemModel(parent)
   , m_rootItem(new LayerItem(file))
@@ -56,8 +102,7 @@ LayerModel::LayerModel(Imf::MultiPartInputFile& file, QObject* parent)
                 partName = exrHeader.name();
             }
 
-            LayerItem* leaf
-              = m_rootItem->addLeaf(m_fileHandle, partName, nullptr, part);
+            LayerItem* leaf = m_rootItem->addLeaf(partName, nullptr, part);
 
             // Now list layers and add those to the part group
             const Imf::ChannelList& exrChannels = exrHeader.channels();
@@ -65,7 +110,7 @@ LayerModel::LayerModel(Imf::MultiPartInputFile& file, QObject* parent)
             for (Imf::ChannelList::ConstIterator it = exrChannels.begin();
                  it != exrChannels.end();
                  it++) {
-                leaf->addLeaf(m_fileHandle, it.name(), &it.channel(), part);
+                leaf->addLeaf(it.name(), &it.channel(), part);
             }
         }
     } else {
@@ -77,19 +122,27 @@ LayerModel::LayerModel(Imf::MultiPartInputFile& file, QObject* parent)
         for (Imf::ChannelList::ConstIterator it = exrChannels.begin();
              it != exrChannels.end();
              it++) {
-            m_rootItem->addLeaf(m_fileHandle, it.name(), &it.channel());
+            m_rootItem->addLeaf(it.name(), &it.channel());
         }
     }
 
     m_rootItem->groupLayers();
-    //    m_rootItem->createThumbnails();
-    //    LayerItem::groupLayers(m_rootItem);
 }
 
 
-LayerModel::~LayerModel()
+LayerModel::~LayerModel() = default;
+
+
+const LayerItem* LayerModel::defaultDisplayLayer() const
 {
-    delete m_rootItem;
+    return findPreferredLayer(m_rootItem.get());
+}
+
+
+const LayerItem*
+LayerModel::findChannel(int part, const std::string& channelName) const
+{
+    return ::findChannel(m_rootItem.get(), part, channelName);
 }
 
 
@@ -132,8 +185,6 @@ QVariant LayerModel::data(const QModelIndex& index, int role) const
                         case LayerItem::N_LAYERTYPES:
                             return QVariant();
                     }
-
-                    //item->getPreview();
 
                 default:
                     return QVariant();
@@ -235,7 +286,7 @@ LayerModel::index(int row, int column, const QModelIndex& parent) const
     LayerItem* parentItem;
 
     if (!parent.isValid()) {
-        parentItem = m_rootItem;
+        parentItem = m_rootItem.get();
     } else {
         parentItem = static_cast<LayerItem*>(parent.internalPointer());
     }
@@ -259,7 +310,7 @@ QModelIndex LayerModel::parent(const QModelIndex& index) const
     LayerItem* childItem  = static_cast<LayerItem*>(index.internalPointer());
     LayerItem* parentItem = childItem->parentItem();
 
-    if (parentItem == m_rootItem) {
+    if (parentItem == m_rootItem.get()) {
         return QModelIndex();
     }
 
@@ -277,7 +328,7 @@ int LayerModel::rowCount(const QModelIndex& parent) const
     }
 
     if (!parent.isValid()) {
-        parentItem = m_rootItem;
+        parentItem = m_rootItem.get();
     } else {
         parentItem = static_cast<LayerItem*>(parent.internalPointer());
     }

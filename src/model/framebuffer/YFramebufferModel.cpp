@@ -55,7 +55,7 @@ YFramebufferModel::YFramebufferModel(
 
 YFramebufferModel::~YFramebufferModel()
 {
-    delete m_cmap;
+    waitForBackgroundTasks();
 }
 
 void YFramebufferModel::load(Imf::MultiPartInputFile& file, int partId)
@@ -177,7 +177,7 @@ std::string YFramebufferModel::getColorInfo(int x, int y) const
 
 std::vector<std::string> YFramebufferModel::rawChannelNames() const
 {
-    return { m_layer.empty() ? "Y" : m_layer };
+    return {m_layer.empty() ? "Y" : m_layer};
 }
 
 
@@ -208,12 +208,7 @@ void YFramebufferModel::setColormap(ColormapModule::Map map)
         m_imageEditingWatcher->waitForFinished();
     }
 
-    if (m_cmap) {
-        delete m_cmap;
-        m_cmap = nullptr;
-    }
-
-    m_cmap = ColormapModule::create(map);
+    m_cmap.reset(ColormapModule::create(map));
 
     updateImage();
 }
@@ -232,16 +227,26 @@ void YFramebufferModel::updateImage()
         m_imageEditingWatcher->waitForFinished();
     }
 
-    QFuture<void> imageConverting = QtConcurrent::run([=]() {
-        for (int y = 0; y < m_image.height(); y++) {
-            unsigned char* line = m_image.scanLine(y);
+    const int            width      = m_width;
+    const int            height     = m_height;
+    const QImage::Format format     = m_image.format();
+    const double         min        = m_min;
+    const double         max        = m_max;
+    const Colormap*      colormap   = m_cmap.get();
+    const quint64        generation = nextRenderGeneration();
 
-            #pragma omp parallel for
-            for (int x = 0; x < m_image.width(); x++) {
-                float value = m_pixelBuffer[y * m_width + x];
+    QFuture<void> imageConverting = QtConcurrent::run([=]() {
+        QImage image(width, height, format);
+
+        for (int y = 0; y < height; y++) {
+            unsigned char* line = image.scanLine(y);
+
+#pragma omp parallel for
+            for (int x = 0; x < width; x++) {
+                float value = m_pixelBuffer[y * width + x];
                 float RGB[3];
 
-                m_cmap->getRGBValue(value, m_min, m_max, RGB);
+                colormap->getRGBValue(value, min, max, RGB);
 
                 for (int c = 0; c < 3; c++) {
                     line[3 * x + c] = qMax(0, qMin(255, int(255 * RGB[c])));
@@ -253,10 +258,8 @@ void YFramebufferModel::updateImage()
             }
         }
 
-        // We do not notify any canceled process: this would result in
-        // potentially corrupted conversion
         if (!m_imageEditingWatcher->isCanceled()) {
-            emit imageChanged();
+            emit imageRendered(image, generation);
         }
     });
 

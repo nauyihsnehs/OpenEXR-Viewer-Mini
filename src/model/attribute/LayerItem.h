@@ -37,8 +37,9 @@
 #include <OpenEXR/ImfChannelListAttribute.h>
 
 #include <QVariant>
-#include <QImage>
 
+#include <memory>
+#include <string>
 #include <vector>
 
 class LayerItem
@@ -77,13 +78,10 @@ class LayerItem
     ~LayerItem();
 
     LayerItem* addLeaf(
-      Imf::MultiPartInputFile& file,
-      const std::string&       channelName,
-      const Imf::Channel*      pChannel,
-      int                      part = -1);
+      const std::string&  channelName,
+      const Imf::Channel* pChannel,
+      int                 part = -1);
 
-
-    void createThumbnails();
 
     // Perfoms the grouping of known layer groups: RGB, RGBA, YC, YCA...
     void groupLayers();
@@ -100,7 +98,7 @@ class LayerItem
 
     int childCount() const;
 
-    const std::vector<LayerItem*>& children() const { return m_childItems; }
+    std::vector<LayerItem*> children() const;
 
     LayerItem* parentItem() { return m_pParentItem; }
 
@@ -125,22 +123,25 @@ class LayerItem
     bool        hasPartName() const;
     std::string getPartName() const;
 
-    const QImage& getPreview() const;
-
-    //    void printHierarchy(std::string front) const;
-
     LayerType getType() const { return m_type; }
 
     Imf::PixelType getPixelType() const;
 
   private:
-    LayerType constructType();
+    LayerType  constructType();
+    LayerItem* addChild(
+      const std::string&  leafName,
+      const std::string&  originalChannelName,
+      const Imf::Channel* channel,
+      int                 part);
+    std::unique_ptr<LayerItem> takeChild(LayerType type);
+    bool                       hasChannel() const
+    {
+        return m_pixelType != Imf::PixelType::NUM_PIXELTYPES;
+    }
 
-    void createThumbnails(LayerItem* item);
-    void createThumbnail();
-
-    std::vector<LayerItem*> m_childItems;
-    LayerItem*              m_pParentItem;
+    std::vector<std::unique_ptr<LayerItem>> m_childItems;
+    LayerItem*                              m_pParentItem;
 
     // Id of the part
     const int m_part;
@@ -157,10 +158,5 @@ class LayerItem
     LayerType m_type;
 
     Imf::MultiPartInputFile& m_fileHandle;
-    const Imf::Channel*      m_pChannel;
-
-    int m_previewSize;
-
-    QImage m_preview;
-    uchar* m_previewBuffer;
+    Imf::PixelType           m_pixelType;
 };

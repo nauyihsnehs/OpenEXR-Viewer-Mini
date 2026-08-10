@@ -66,7 +66,7 @@ static void setSubWindowFrameVisible(QMdiSubWindow* subWindow, bool visible)
 {
     if (!subWindow) return;
 
-    Qt::WindowFlags flags = subWindow->windowFlags();
+    Qt::WindowFlags flags   = subWindow->windowFlags();
     Qt::WindowFlags updated = flags;
 
     if (visible) {
@@ -85,8 +85,8 @@ static QString cleanLayerTitle(QString title)
 {
     title = title.trimmed();
 
-    const QString prefix = "Layer:";
-    const int prefixIndex = title.indexOf(prefix);
+    const QString prefix      = "Layer:";
+    const int     prefixIndex = title.indexOf(prefix);
     if (prefixIndex >= 0) title.remove(prefixIndex, prefix.size());
 
     return title.simplified();
@@ -96,16 +96,20 @@ static QString cleanLayerTitle(QString title)
 static QString pixelTypeName(Imf::PixelType type)
 {
     switch (type) {
-        case Imf::PixelType::UINT: return "uint32";
-        case Imf::PixelType::HALF: return "half";
-        case Imf::PixelType::FLOAT: return "float";
-        default: return "unknown";
+        case Imf::PixelType::UINT:
+            return "uint32";
+        case Imf::PixelType::HALF:
+            return "half";
+        case Imf::PixelType::FLOAT:
+            return "float";
+        default:
+            return "unknown";
     }
 }
 
 
-static void collectPixelTypes(
-  const LayerItem* item, std::vector<Imf::PixelType>& types)
+static void
+collectPixelTypes(const LayerItem* item, std::vector<Imf::PixelType>& types)
 {
     if (!item) return;
 
@@ -142,16 +146,26 @@ static QString pixelTypeName(const LayerItem* item)
 static QString compressionShortName(Imf::Compression compression)
 {
     switch (compression) {
-        case Imf::Compression::NO_COMPRESSION: return "No compression";
-        case Imf::Compression::RLE_COMPRESSION: return "RLE";
-        case Imf::Compression::ZIPS_COMPRESSION: return "ZIPS";
-        case Imf::Compression::ZIP_COMPRESSION: return "ZIP";
-        case Imf::Compression::PIZ_COMPRESSION: return "PIZ";
-        case Imf::Compression::PXR24_COMPRESSION: return "PXR24";
-        case Imf::Compression::B44_COMPRESSION: return "B44";
-        case Imf::Compression::B44A_COMPRESSION: return "B44A";
-        case Imf::Compression::DWAA_COMPRESSION: return "DWAA";
-        case Imf::Compression::DWAB_COMPRESSION: return "DWAB";
+        case Imf::Compression::NO_COMPRESSION:
+            return "No compression";
+        case Imf::Compression::RLE_COMPRESSION:
+            return "RLE";
+        case Imf::Compression::ZIPS_COMPRESSION:
+            return "ZIPS";
+        case Imf::Compression::ZIP_COMPRESSION:
+            return "ZIP";
+        case Imf::Compression::PIZ_COMPRESSION:
+            return "PIZ";
+        case Imf::Compression::PXR24_COMPRESSION:
+            return "PXR24";
+        case Imf::Compression::B44_COMPRESSION:
+            return "B44";
+        case Imf::Compression::B44A_COMPRESSION:
+            return "B44A";
+        case Imf::Compression::DWAA_COMPRESSION:
+            return "DWAA";
+        case Imf::Compression::DWAB_COMPRESSION:
+            return "DWAB";
         default:
             return QString("unknown compression type: %1")
               .arg(static_cast<int>(compression));
@@ -167,9 +181,11 @@ static QString compressionDescription(Imf::Compression compression)
         case Imf::Compression::RLE_COMPRESSION:
             return "RLE (lossless - run length encoding)";
         case Imf::Compression::ZIPS_COMPRESSION:
-            return "ZIPS (lossless - zlib compression, one scan line at a time)";
+            return "ZIPS (lossless - zlib compression, one scan line at a "
+                   "time)";
         case Imf::Compression::ZIP_COMPRESSION:
-            return "ZIP (lossless - zlib compression, in blocks of 16 scan lines)";
+            return "ZIP (lossless - zlib compression, in blocks of 16 scan "
+                   "lines)";
         case Imf::Compression::PIZ_COMPRESSION:
             return "PIZ (lossless - piz-based wavelet compression)";
         case Imf::Compression::PXR24_COMPRESSION:
@@ -179,13 +195,49 @@ static QString compressionDescription(Imf::Compression compression)
         case Imf::Compression::B44A_COMPRESSION:
             return "B44A (lossy - 4-by-4 pixel block compression)";
         case Imf::Compression::DWAA_COMPRESSION:
-            return "DWAA (lossy - DCT based compression, in blocks of 32 scanlines)";
+            return "DWAA (lossy - DCT based compression, in blocks of 32 "
+                   "scanlines)";
         case Imf::Compression::DWAB_COMPRESSION:
-            return "DWAB (lossy - DCT based compression, in blocks of 256 scanlines)";
+            return "DWAB (lossy - DCT based compression, in blocks of 256 "
+                   "scanlines)";
         default:
             return QString("unknown compression type: %1")
               .arg(static_cast<int>(compression));
     }
+}
+
+
+template<typename Widget, typename Model>
+void configureFramebuffer(
+  Widget* widget, Model* model, ImageFileWidget* receiver)
+{
+    QObject::connect(
+      model,
+      SIGNAL(loadFailed(QString)),
+      receiver,
+      SLOT(onLoadFailed(QString)));
+    QObject::connect(
+      model,
+      SIGNAL(imageLoaded()),
+      receiver,
+      SIGNAL(activeFramebufferChanged()));
+    QObject::connect(
+      widget,
+      SIGNAL(openFileOnDropEvent(QString)),
+      receiver,
+      SLOT(onOpenFileDropEvent(QString)));
+    QObject::connect(
+      widget,
+      SIGNAL(fileInfoHoverRequested(QWidget*, QPoint)),
+      receiver,
+      SLOT(onFileInfoHoverRequested(QWidget*, QPoint)));
+    QObject::connect(
+      widget,
+      SIGNAL(fileInfoHoverLeft()),
+      receiver,
+      SLOT(onFileInfoHoverLeft()));
+
+    widget->setModel(model);
 }
 
 
@@ -238,7 +290,24 @@ ImageFileWidget::ImageFileWidget(std::istream& stream, QWidget* parent)
 
 ImageFileWidget::~ImageFileWidget()
 {
+    clearImage();
+}
+
+
+void ImageFileWidget::clearImage()
+{
+    const QList<QMdiSubWindow*> windows = m_mdiArea->subWindowList();
+
+    for (QMdiSubWindow* window : windows) {
+        m_mdiArea->removeSubWindow(window);
+        delete window;
+    }
+
+    m_attributesTreeView->setModel(nullptr);
+    m_layersTreeView->setModel(nullptr);
+
     delete m_img;
+    m_img = nullptr;
 }
 
 
@@ -332,11 +401,10 @@ void ImageFileWidget::setupLayout()
 
 bool ImageFileWidget::eventFilter(QObject* watched, QEvent* event)
 {
-    QTabBar* tabBar = qobject_cast<QTabBar*>(watched);
-    const bool previewTabRelease =
-      tabBar
-      && m_mdiArea->isAncestorOf(tabBar)
-      && event->type() == QEvent::MouseButtonRelease;
+    QTabBar*   tabBar = qobject_cast<QTabBar*>(watched);
+    const bool previewTabRelease
+      = tabBar && m_mdiArea->isAncestorOf(tabBar)
+        && event->type() == QEvent::MouseButtonRelease;
 
     if (previewTabRelease) {
         QMouseEvent* mouseEvent = static_cast<QMouseEvent*>(event);
@@ -488,15 +556,27 @@ void ImageFileWidget::openAttribute(const HeaderItem* item)
 
 void ImageFileWidget::openLayer(const LayerItem* item)
 {
-    QString title = getTitle(item);
-    const int partId = item->getPart();
-    const QString pixelType = pixelTypeName(item);
-    const Imf::Compression compression =
-      m_img->getEXR().header(partId).compression();
+    if (
+      !item || item->getType() == LayerItem::GROUP
+      || item->getType() == LayerItem::PART
+      || item->getType() == LayerItem::N_LAYERTYPES) {
+        return;
+    }
+
+    const QString title  = getTitle(item);
+    const int     partId = item->getPart();
+    const QString layerKey
+      = QString("%1:%2:%3")
+          .arg(partId)
+          .arg(static_cast<int>(item->getType()))
+          .arg(QString::fromStdString(item->getOriginalFullName()));
+    const QString          pixelType = pixelTypeName(item);
+    const Imf::Compression compression
+      = m_img->getEXR().header(partId).compression();
 
     // Check if the window already exists
     for (auto& w : m_mdiArea->subWindowList()) {
-        if (w->windowTitle() == title) {
+        if (w->property("layerKey").toString() == layerKey) {
             m_mdiArea->setActiveSubWindow(w);
             w->setFocus();
             syncTabbedPreviewPresentation();
@@ -523,38 +603,8 @@ void ImageFileWidget::openLayer(const LayerItem* item)
               RGBFramebufferModel::Layer_RGB,
               graphicView);
 
-            QObject::connect(
-              imageModel,
-              SIGNAL(loadFailed(QString)),
-              this,
-              SLOT(onLoadFailed(QString)));
-
-            QObject::connect(
-              imageModel,
-              SIGNAL(imageLoaded()),
-              this,
-              SIGNAL(activeFramebufferChanged()));
-
-            QObject::connect(
-              graphicView,
-              SIGNAL(openFileOnDropEvent(QString)),
-              this,
-              SLOT(onOpenFileDropEvent(QString)));
-
-            QObject::connect(
-              graphicView,
-              SIGNAL(fileInfoHoverRequested(QWidget*,QPoint)),
-              this,
-              SLOT(onFileInfoHoverRequested(QWidget*,QPoint)));
-
-            QObject::connect(
-              graphicView,
-              SIGNAL(fileInfoHoverLeft()),
-              this,
-              SLOT(onFileInfoHoverLeft()));
-
             graphicView->setPreviewMode(m_rgbPreviewMode);
-            graphicView->setModel(imageModel);
+            configureFramebuffer(graphicView, imageModel, this);
 
             imageModel->load(
               m_img->getEXR(),
@@ -573,38 +623,8 @@ void ImageFileWidget::openLayer(const LayerItem* item)
               RGBFramebufferModel::Layer_YC,
               graphicView);
 
-            QObject::connect(
-              imageModel,
-              SIGNAL(loadFailed(QString)),
-              this,
-              SLOT(onLoadFailed(QString)));
-
-            QObject::connect(
-              imageModel,
-              SIGNAL(imageLoaded()),
-              this,
-              SIGNAL(activeFramebufferChanged()));
-
-            QObject::connect(
-              graphicView,
-              SIGNAL(openFileOnDropEvent(QString)),
-              this,
-              SLOT(onOpenFileDropEvent(QString)));
-
-            QObject::connect(
-              graphicView,
-              SIGNAL(fileInfoHoverRequested(QWidget*,QPoint)),
-              this,
-              SLOT(onFileInfoHoverRequested(QWidget*,QPoint)));
-
-            QObject::connect(
-              graphicView,
-              SIGNAL(fileInfoHoverLeft()),
-              this,
-              SLOT(onFileInfoHoverLeft()));
-
             graphicView->setPreviewMode(m_rgbPreviewMode);
-            graphicView->setModel(imageModel);
+            configureFramebuffer(graphicView, imageModel, this);
 
             imageModel->load(
               m_img->getEXR(),
@@ -625,38 +645,8 @@ void ImageFileWidget::openLayer(const LayerItem* item)
               RGBFramebufferModel::Layer_Y,
               graphicView);
 
-            QObject::connect(
-              imageModel,
-              SIGNAL(loadFailed(QString)),
-              this,
-              SLOT(onLoadFailed(QString)));
-
-            QObject::connect(
-              imageModel,
-              SIGNAL(imageLoaded()),
-              this,
-              SIGNAL(activeFramebufferChanged()));
-
-            QObject::connect(
-              graphicView,
-              SIGNAL(openFileOnDropEvent(QString)),
-              this,
-              SLOT(onOpenFileDropEvent(QString)));
-
-            QObject::connect(
-              graphicView,
-              SIGNAL(fileInfoHoverRequested(QWidget*,QPoint)),
-              this,
-              SLOT(onFileInfoHoverRequested(QWidget*,QPoint)));
-
-            QObject::connect(
-              graphicView,
-              SIGNAL(fileInfoHoverLeft()),
-              this,
-              SLOT(onFileInfoHoverLeft()));
-
             graphicView->setPreviewMode(m_rgbPreviewMode);
-            graphicView->setModel(imageModel);
+            configureFramebuffer(graphicView, imageModel, this);
 
             imageModel->load(
               m_img->getEXR(),
@@ -676,37 +666,7 @@ void ImageFileWidget::openLayer(const LayerItem* item)
               item->getOriginalFullName(),
               graphicViewBW);
 
-            QObject::connect(
-              imageModelBW,
-              SIGNAL(loadFailed(QString)),
-              this,
-              SLOT(onLoadFailed(QString)));
-
-            QObject::connect(
-              imageModelBW,
-              SIGNAL(imageLoaded()),
-              this,
-              SIGNAL(activeFramebufferChanged()));
-
-            QObject::connect(
-              graphicViewBW,
-              SIGNAL(openFileOnDropEvent(QString)),
-              this,
-              SLOT(onOpenFileDropEvent(QString)));
-
-            QObject::connect(
-              graphicViewBW,
-              SIGNAL(fileInfoHoverRequested(QWidget*,QPoint)),
-              this,
-              SLOT(onFileInfoHoverRequested(QWidget*,QPoint)));
-
-            QObject::connect(
-              graphicViewBW,
-              SIGNAL(fileInfoHoverLeft()),
-              this,
-              SLOT(onFileInfoHoverLeft()));
-
-            graphicViewBW->setModel(imageModelBW);
+            configureFramebuffer(graphicViewBW, imageModelBW, this);
 
             imageModelBW->load(m_img->getEXR(), item->getPart());
 
@@ -721,11 +681,14 @@ void ImageFileWidget::openLayer(const LayerItem* item)
 
     if (subWindow) {
         subWindow->setWindowTitle(title);
+        subWindow->setProperty("layerKey", layerKey);
         subWindow->setProperty("pixelType", pixelType);
         subWindow->setProperty(
           "compressionShort",
           compressionShortName(compression));
-        subWindow->setProperty("compression", compressionDescription(compression));
+        subWindow->setProperty(
+          "compression",
+          compressionDescription(compression));
         connect(
           subWindow,
           SIGNAL(destroyed(QObject*)),
@@ -757,18 +720,18 @@ GraphicsView* ImageFileWidget::activeGraphicsView() const
 }
 
 
-const FramebufferModel* ImageFileWidget::framebufferModel(
-  QMdiSubWindow* subWindow) const
+const FramebufferModel*
+ImageFileWidget::framebufferModel(QMdiSubWindow* subWindow) const
 {
     if (!subWindow) return nullptr;
 
-    RGBFramebufferWidget* rgbWidget =
-      qobject_cast<RGBFramebufferWidget*>(subWindow->widget());
+    RGBFramebufferWidget* rgbWidget
+      = qobject_cast<RGBFramebufferWidget*>(subWindow->widget());
 
     if (rgbWidget) return rgbWidget->framebufferModel();
 
-    YFramebufferWidget* yWidget =
-      qobject_cast<YFramebufferWidget*>(subWindow->widget());
+    YFramebufferWidget* yWidget
+      = qobject_cast<YFramebufferWidget*>(subWindow->widget());
 
     if (yWidget) return yWidget->framebufferModel();
 
@@ -792,9 +755,9 @@ void ImageFileWidget::setRgbPreviewMode(RGBFramebufferModel::PreviewMode mode)
 {
     m_rgbPreviewMode = mode;
 
-    for (QMdiSubWindow* subWindow: m_mdiArea->subWindowList()) {
-        RGBFramebufferWidget* rgbWidget =
-          qobject_cast<RGBFramebufferWidget*>(subWindow->widget());
+    for (QMdiSubWindow* subWindow : m_mdiArea->subWindowList()) {
+        RGBFramebufferWidget* rgbWidget
+          = qobject_cast<RGBFramebufferWidget*>(subWindow->widget());
 
         if (rgbWidget) rgbWidget->setPreviewMode(mode);
     }
@@ -808,7 +771,7 @@ QString ImageFileWidget::framebufferStatusText(QMdiSubWindow* subWindow) const
     if (!subWindow) return path;
 
     const FramebufferModel* model = framebufferModel(subWindow);
-    const QString layer = subWindow->windowTitle().trimmed();
+    const QString           layer = subWindow->windowTitle().trimmed();
 
     QStringList fields;
     fields << path;
@@ -829,15 +792,16 @@ QString ImageFileWidget::activeFramebufferStatusText() const
 }
 
 
-QString ImageFileWidget::framebufferStatusToolTip(QMdiSubWindow* subWindow) const
+QString
+ImageFileWidget::framebufferStatusToolTip(QMdiSubWindow* subWindow) const
 {
     const QString path = m_isStream ? tr("Stream") : m_openedFilename;
 
     if (!subWindow) return path;
 
-    const FramebufferModel* model = framebufferModel(subWindow);
-    const bool loaded = model && model->isImageLoaded();
-    const QString layer = subWindow->windowTitle().trimmed();
+    const FramebufferModel* model  = framebufferModel(subWindow);
+    const bool              loaded = model && model->isImageLoaded();
+    const QString           layer  = subWindow->windowTitle().trimmed();
 
     QStringList lines;
     lines << "File path: " + path;
@@ -869,7 +833,7 @@ QString ImageFileWidget::activeFramebufferStatusToolTip() const
 QString ImageFileWidget::activeLayerTitleText() const
 {
     QModelIndex index = activeLayerIndex();
-    QString title = layerTitleText(index).trimmed();
+    QString     title = layerTitleText(index).trimmed();
 
     if (title.isEmpty()) {
         QMdiSubWindow* subWindow = m_mdiArea->activeSubWindow();
@@ -930,8 +894,8 @@ void ImageFileWidget::setLayersVisible(bool visible)
 
 void ImageFileWidget::updatePropertiesVisibility()
 {
-    const bool showProperties =
-      !m_attributesTreeView->isHidden() || !m_layersTreeView->isHidden();
+    const bool showProperties
+      = !m_attributesTreeView->isHidden() || !m_layersTreeView->isHidden();
 
     m_splitterProperties->setVisible(showProperties);
 }
@@ -948,8 +912,7 @@ QModelIndex ImageFileWidget::activeLayerIndex() const
 
 
 QModelIndex ImageFileWidget::findLayerIndexByTitle(
-  const QModelIndex& parent,
-  const QString& title) const
+  const QModelIndex& parent, const QString& title) const
 {
     QAbstractItemModel* model = m_layersTreeView->model();
 
@@ -957,7 +920,7 @@ QModelIndex ImageFileWidget::findLayerIndexByTitle(
 
     for (int row = 0; row < model->rowCount(parent); row++) {
         QModelIndex index = model->index(row, LayerModel::LAYER, parent);
-        LayerItem* item = static_cast<LayerItem*>(index.internalPointer());
+        LayerItem*  item  = static_cast<LayerItem*>(index.internalPointer());
 
         if (item && getTitle(item) == title) return index;
 
@@ -973,16 +936,16 @@ QString ImageFileWidget::layerTitleText(const QModelIndex& index) const
 {
     if (!index.isValid()) return QString();
 
-    const QAbstractItemModel* model = index.model();
-    const QModelIndex parent = index.parent();
-    const QString layer =
-      model->data(model->index(index.row(), LayerModel::LAYER, parent))
-        .toString()
-        .trimmed();
-    const QString type =
-      model->data(model->index(index.row(), LayerModel::TYPE, parent))
-        .toString()
-        .trimmed();
+    const QAbstractItemModel* model  = index.model();
+    const QModelIndex         parent = index.parent();
+    const QString             layer
+      = model->data(model->index(index.row(), LayerModel::LAYER, parent))
+          .toString()
+          .trimmed();
+    const QString type
+      = model->data(model->index(index.row(), LayerModel::TYPE, parent))
+          .toString()
+          .trimmed();
 
     if (layer.isEmpty()) return type;
     if (type.isEmpty() || type == layer) return layer;
@@ -1034,13 +997,7 @@ void ImageFileWidget::open(const QString& filename)
     }
 
     // No error so far, continue normal execution
-    if (m_img) {
-        m_mdiArea->closeAllSubWindows();
-        m_attributesTreeView->setModel(nullptr);
-        m_layersTreeView->setModel(nullptr);
-        delete m_img;
-        m_img = nullptr;
-    }
+    if (m_img) clearImage();
 
     m_img = imageLoaded;
 
@@ -1066,13 +1023,7 @@ void ImageFileWidget::open(std::istream& stream)
     }
 
     // No error so far, continue normal execution
-    if (m_img) {
-        m_mdiArea->closeAllSubWindows();
-        m_attributesTreeView->setModel(nullptr);
-        m_layersTreeView->setModel(nullptr);
-        delete m_img;
-        m_img = nullptr;
-    }
+    if (m_img) clearImage();
 
     m_img = imageLoaded;
 
@@ -1096,88 +1047,8 @@ void ImageFileWidget::afterOpen()
 
 void ImageFileWidget::openDefaultLayer()
 {
-    // Detect if there is a root RGB or YC layer group
-    LayerItem const* r = m_img->getLayerModel()->getRoot();
-
-    if (r != nullptr) {
-        const LayerItem* child = nullptr;
-
-        child = r->child(LayerItem::RGBA);
-        if (child) {
-            openLayer(child);
-            return;
-        }
-
-        child = r->child(LayerItem::RGB);
-        if (child) {
-            openLayer(child);
-            return;
-        }
-
-        child = r->child(LayerItem::YCA);
-        if (child) {
-            openLayer(child);
-            return;
-        }
-
-        child = r->child(LayerItem::YC);
-        if (child) {
-            openLayer(child);
-            return;
-        }
-
-        child = r->child(LayerItem::YA);
-        if (child) {
-            openLayer(child);
-            return;
-        }
-
-        child = r->child(LayerItem::Y);
-        if (child) {
-            openLayer(child);
-            return;
-        }
-
-        // When all children are parts, try to find a part with a displayable layer
-        // TODO: factorize the code
-        for (LayerItem* rr : r->children()) {
-            child = rr->child(LayerItem::RGBA);
-            if (child) {
-                openLayer(child);
-                return;
-            }
-
-            child = rr->child(LayerItem::RGB);
-            if (child) {
-                openLayer(child);
-                return;
-            }
-
-            child = rr->child(LayerItem::YCA);
-            if (child) {
-                openLayer(child);
-                return;
-            }
-
-            child = rr->child(LayerItem::YC);
-            if (child) {
-                openLayer(child);
-                return;
-            }
-
-            child = rr->child(LayerItem::YA);
-            if (child) {
-                openLayer(child);
-                return;
-            }
-
-            child = rr->child(LayerItem::Y);
-            if (child) {
-                openLayer(child);
-                return;
-            }
-        }
-    }
+    const LayerItem* layer = m_img->getLayerModel()->defaultDisplayLayer();
+    if (layer) openLayer(layer);
 }
 
 
