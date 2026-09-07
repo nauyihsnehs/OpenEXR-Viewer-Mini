@@ -166,6 +166,11 @@ QMenu
     border: 1px solid rgb(182, 188, 198);
 }
 
+QMenu#menu_File
+{
+    min-width: 160px;
+}
+
 QMenu::item
 {
     background-color: transparent;

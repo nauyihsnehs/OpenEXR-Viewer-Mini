@@ -31,372 +31,317 @@
  */
 
 #include "GraphicsView.h"
-#include "GraphicsScene.h"
-
+#include "FileDrop.h"
 #include <QDragEnterEvent>
 #include <QGraphicsPixmapItem>
-#include <QGuiApplication>
-#include <QMimeData>
+#include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
-#include <QPen>
 #include <QScrollBar>
-#include <QUrl>
+#include <cmath>
 
-GraphicsView::GraphicsView(QWidget* parent)
-  : QGraphicsView(parent)
-  , _model(nullptr)
-  , _imageItem(nullptr)
-  , _zoomLevel(1.f)
-  , _autoscale(true)
-  , _showDataWindow(true)
-  , _showDisplayWindow(true)
+GraphicsView::GraphicsView(QWidget* parent): QGraphicsView(parent)
 {
-    GraphicsScene* scene = new GraphicsScene;
-    setScene(scene);
-    //  setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform);
+    setScene(new QGraphicsScene(this));
+    _imageItem = scene()->addPixmap(QPixmap());
     setMouseTracking(true);
     setAcceptDrops(true);
-
-    connect(
-      scene,
-      SIGNAL(openFileOnDropEvent(QString)),
-      this,
-      SLOT(open(QString)));
-}
-
-GraphicsView::~GraphicsView()
-{
-    //    delete _model;
+    setFocusPolicy(Qt::StrongFocus);
+    setTransformationAnchor(NoAnchor);
+    setResizeAnchor(AnchorViewCenter);
+    _checkerboard = QPixmap(32, 32);
+    _checkerboard.fill(QColor(125, 125, 125));
+    QPainter painter(&_checkerboard);
+    painter.fillRect(16, 0, 16, 16, QColor(100, 100, 100));
+    painter.fillRect(0, 16, 16, 16, QColor(100, 100, 100));
 }
 
 void GraphicsView::setModel(const FramebufferModel* model)
 {
+    if (_model) disconnect(_model, nullptr, this, nullptr);
     _model = model;
-
-    // clang-format off
-    connect(_model, SIGNAL(imageChanged()), this, SLOT(onImageChanged()));
-    connect(_model, SIGNAL(imageLoaded()),  this, SLOT(onImageLoaded()));
-    // clang-format on
+    _imageItem->setPixmap(QPixmap());
+    _dataWindow = _displayWindow = QRectF();
+    if (!model) return;
+    connect(
+      model,
+      &FramebufferModel::imageChanged,
+      this,
+      &GraphicsView::onImageChanged);
+    connect(
+      model,
+      &FramebufferModel::imageLoaded,
+      this,
+      &GraphicsView::onImageLoaded);
+    if (model->isImageLoaded()) onImageLoaded();
+    if (!model->getLoadedImage().isNull()) onImageChanged();
 }
 
 void GraphicsView::onImageLoaded()
 {
-    _dataWindow    = _model->getDataWindow();
-    _displayWindow = _model->getDisplayWindow();
-
-    // Stretch or shrink width according to pixelAspectRatio
-    const float aspect = _model->pixelAspectRatio();
-
-    const int displayWindowW       = aspect * _displayWindow.width();
-    const int displayWindowCenterX = _displayWindow.center().x();
-
-    _displayWindow.setLeft(displayWindowCenterX - displayWindowW / 2.f);
-    _displayWindow.setRight(displayWindowCenterX + displayWindowW / 2.f);
-
-    const int dataWindowW       = aspect * _dataWindow.width();
-    const int dataWindowCenterX = _dataWindow.center().x();
-
-    _dataWindow.setLeft(dataWindowCenterX - dataWindowW / 2.f);
-    _dataWindow.setRight(dataWindowCenterX + dataWindowW / 2.f);
-
-    // Adapt display and data windows to the image display starting at 0, 0
-    _displayWindow.translate(
-      -_dataWindow.topLeft().x(),
-      -_dataWindow.topLeft().y());
-
-    _dataWindow.translate(
-      -_dataWindow.topLeft().x(),
-      -_dataWindow.topLeft().y());
-
-    // Fit view to display window
-    autoscale();
+    if (!_model || !_model->isImageLoaded()) return;
+    const QRect dataWindow = _model->getDataWindow();
+    const QRect display    = _model->getDisplayWindow();
+    const qreal aspect     = _model->pixelAspectRatio();
+    _imageItem->setTransform(QTransform::fromScale(aspect, 1.));
+    _imageItem->setTransformationMode(
+      aspect == 1. ? Qt::FastTransformation : Qt::SmoothTransformation);
+    _dataWindow
+      = QRectF(0., 0., dataWindow.width() * aspect, dataWindow.height());
+    _displayWindow = QRectF(
+      (qreal(display.x()) - dataWindow.x()) * aspect,
+      qreal(display.y()) - dataWindow.y(),
+      display.width() * aspect,
+      display.height());
+    scene()->setSceneRect(_dataWindow.united(_displayWindow));
+    if (_restorePending) {
+        _restorePending = false;
+        restoreViewState(_pendingState);
+    } else
+        autoscale();
 }
 
 void GraphicsView::onImageChanged()
 {
-    if (_model == nullptr) return;
-
-    if (_imageItem != nullptr) {
-        scene()->removeItem(_imageItem);
-        delete _imageItem;
-        _imageItem = nullptr;
-    }
-
-    const QImage& loadedImage = _model->getLoadedImage();
-
-    // We need to resize the image according to pixelAspectRatio
-    // Small optim, no need to process the transform is aspect ratio = 1
-    if (_model->pixelAspectRatio() != 1.f) {
-        const QImage aspectCorrectedImage = loadedImage.scaled(
-          loadedImage.width() * _model->pixelAspectRatio(),
-          loadedImage.height(),
-          Qt::IgnoreAspectRatio,
-          Qt::SmoothTransformation);
-
-        _imageItem
-          = scene()->addPixmap(QPixmap::fromImage(aspectCorrectedImage));
-    } else {
-        _imageItem = scene()->addPixmap(QPixmap::fromImage(loadedImage));
-    }
+    if (_model)
+        _imageItem->setPixmap(QPixmap::fromImage(_model->getLoadedImage()));
 }
 
 void GraphicsView::setZoomLevel(double zoom)
 {
-    if (_model == nullptr || !_model->isImageLoaded())
-        return;   // || zoom == _zoomLevel) return;
-
-    //    if (_zoomLevel == zoom) return;
-
-    _zoomLevel = std::max(0.01, zoom);
-    resetTransform();
-    scale(_zoomLevel, _zoomLevel);
-
-    // We want autoscale when loading a new image
-    _autoscale = false;
-
+    if (!_model || !_model->isImageLoaded() || !std::isfinite(zoom)) return;
+    const QPointF center = mapToScene(viewport()->rect().center());
+    _zoomLevel           = qBound(0.01, zoom, 64.);
+    _autoscale           = false;
+    setTransform(QTransform::fromScale(_zoomLevel, _zoomLevel));
+    centerOn(center);
     emit zoomLevelChanged(_zoomLevel);
 }
-
 void GraphicsView::zoomIn()
 {
-    if (_model == nullptr || !_model->isImageLoaded()) return;
-
     setZoomLevel(_zoomLevel * 1.1);
 }
-
 void GraphicsView::zoomOut()
 {
-    if (_model == nullptr || !_model->isImageLoaded()) return;
-
     setZoomLevel(_zoomLevel / 1.1);
 }
-
 void GraphicsView::autoscale()
 {
-    if (_model == nullptr || !_model->isImageLoaded()) return;
-
-    scene()->setSceneRect(_displayWindow);
-    _zoomLevel = autoscaleZoomLevel();
-
-    resetTransform();
-    scale(_zoomLevel, _zoomLevel);
-
-    emit zoomLevelChanged(_zoomLevel);
-
-    // We want autoscale when loading a new image
-    _autoscale = true;
-}
-
-double GraphicsView::autoscaleZoomLevel()
-{
+    if (!_model || !_model->isImageLoaded() || _displayWindow.isEmpty()) return;
     fitInView(_displayWindow, Qt::KeepAspectRatio);
-
-    const double zoom =
-      std::min(viewportTransform().m11(), viewportTransform().m22());
-
-    return std::max(0.01, zoom);
+    _zoomLevel = transform().m11();
+    _autoscale = true;
+    emit zoomLevelChanged(_zoomLevel);
 }
 
-void GraphicsView::open(const QString& filename)
+GraphicsView::ViewState GraphicsView::viewState() const
 {
-    emit openFileOnDropEvent(filename);
+    ViewState state;
+    state.zoom          = _zoomLevel;
+    state.fit           = _autoscale;
+    state.center        = mapToScene(viewport()->rect().center());
+    state.dataWindow    = _showDataWindow;
+    state.displayWindow = _showDisplayWindow;
+    return state;
 }
-
+void GraphicsView::restoreViewState(const ViewState& state)
+{
+    if (!_model || !_model->isImageLoaded()) {
+        _pendingState   = state;
+        _restorePending = true;
+        return;
+    }
+    showDataWindow(state.dataWindow);
+    showDisplayWindow(state.displayWindow);
+    if (state.fit)
+        autoscale();
+    else {
+        setZoomLevel(state.zoom);
+        centerOn(state.center);
+    }
+}
 void GraphicsView::showDisplayWindow(bool show)
 {
     _showDisplayWindow = show;
-    scene()->invalidate();
-    // scene()->sceneRect(), QGraphicsScene::ForegroundLayer);
+    viewport()->update();
 }
-
 void GraphicsView::showDataWindow(bool show)
 {
     _showDataWindow = show;
-    scene()->invalidate();
-    // scene()->sceneRect(), QGraphicsScene::ForegroundLayer);
+    viewport()->update();
 }
-
-// void GraphicsView::showDatawindowBoders(bool visible)
-//{
-//    if (_model == nullptr) return;
-
-//    if (_datawindowItem != nullptr) {
-//        scene()->removeItem(_datawindowItem);
-//        delete _datawindowItem;
-//        _datawindowItem = nullptr;
-//    }
-
-//    _datawindowItem = scene()->addRect(0, 0, m_)
-//}
-
-// void GraphicsView::showDisplaywindowBorders(bool visible)
-//{
-
-//}
 
 void GraphicsView::wheelEvent(QWheelEvent* event)
 {
-    const QPoint delta = event->angleDelta();
-
-    if ((event->modifiers() & Qt::ControlModifier) != 0U) {
-        if (delta.y() != 0) emit controlWheel(delta.y());
+    if (!_model || !_model->isImageLoaded()) {
+        event->ignore();
+        return;
+    }
+    const double steps = event->angleDelta().y() != 0
+                           ? event->angleDelta().y() / 120.
+                           : event->pixelDelta().y() / 40.;
+    if (steps == 0.) {
+        event->ignore();
+        return;
+    }
+    if (event->modifiers() & Qt::ControlModifier)
+        emit controlWheel(steps);
+    else {
+#if QT_VERSION >= QT_VERSION_CHECK(5, 14, 0)
+        const QPoint position = event->position().toPoint();
+#else
+        const QPoint position = event->pos();
+#endif
+        const QPointF before = mapToScene(position);
+        setZoomLevel(_zoomLevel * std::pow(1.1, qBound(-100., steps, 100.)));
+        centerOn(
+          mapToScene(viewport()->rect().center()) + before
+          - mapToScene(position));
+    }
+    event->accept();
+}
+void GraphicsView::resizeEvent(QResizeEvent* event)
+{
+    QGraphicsView::resizeEvent(event);
+    if (_autoscale) autoscale();
+}
+void GraphicsView::keyPressEvent(QKeyEvent* event)
+{
+    if (
+      event->modifiers() == Qt::NoModifier
+      || event->modifiers() == Qt::ShiftModifier) {
+        switch (event->key()) {
+            case Qt::Key_Plus:
+            case Qt::Key_Equal:
+                zoomIn();
+                break;
+            case Qt::Key_Minus:
+                zoomOut();
+                break;
+            case Qt::Key_0:
+                autoscale();
+                break;
+            case Qt::Key_1:
+                setZoomLevel(1.);
+                break;
+            default:
+                QGraphicsView::keyPressEvent(event);
+                return;
+        }
         event->accept();
         return;
     }
-
-    if (_model == nullptr || !_model->isImageLoaded()) return;
-
-    if (delta.y() != 0) {
-        if (delta.y() > 0) {
-            zoomIn();
-        } else {
-            zoomOut();
-        }
-    }
+    QGraphicsView::keyPressEvent(event);
 }
-
-void GraphicsView::resizeEvent(QResizeEvent*)
-{
-    if (_model == nullptr || !_model->isImageLoaded()) return;
-
-    if (_autoscale) {
-        autoscale();
-    } else {
-        // Recenter the image
-        resetTransform();
-        scale(_zoomLevel, _zoomLevel);
-    }
-}
-
 void GraphicsView::mousePressEvent(QMouseEvent* event)
 {
-    if (_model == nullptr || !_model->isImageLoaded()) return;
-
     if (
-      (event->button() == Qt::MiddleButton)
-      || (event->button() == Qt::LeftButton)) {
-        QGraphicsView::mousePressEvent(event);
-        setCursor(Qt::ClosedHandCursor);
+      _model && _model->isImageLoaded()
+      && (event->button() == Qt::LeftButton || event->button() == Qt::MiddleButton)) {
+        setFocus(Qt::MouseFocusReason);
+        _dragging  = true;
         _startDrag = event->pos();
-        return;
-    }
+        setCursor(Qt::ClosedHandCursor);
+        event->accept();
+    } else
+        QGraphicsView::mousePressEvent(event);
 }
-
 void GraphicsView::mouseMoveEvent(QMouseEvent* event)
 {
-    if (_model == nullptr || !_model->isImageLoaded()) return;
-
-    if (
-      ((event->buttons() & Qt::MiddleButton) != 0U)
-      || ((event->buttons() & Qt::LeftButton) != 0U)) {
-        QScrollBar*         hBar  = horizontalScrollBar();
-        QScrollBar*         vBar  = verticalScrollBar();
-        QPoint              delta = event->pos() - _startDrag;
-        std::pair<int, int> bar_values;
-        bar_values.first
-          = hBar->value() + (isRightToLeft() ? delta.x() : -delta.x());
-        bar_values.second = vBar->value() - delta.y();
-        hBar->setValue(bar_values.first);
-        vBar->setValue(bar_values.second);
+    if (!_model || !_model->isImageLoaded()) return;
+    if (_dragging && (event->buttons() & (Qt::LeftButton | Qt::MiddleButton))) {
+        const QPoint delta = event->pos() - _startDrag;
+        horizontalScrollBar()->setValue(
+          horizontalScrollBar()->value() - delta.x());
+        verticalScrollBar()->setValue(verticalScrollBar()->value() - delta.y());
         _startDrag = event->pos();
     } else {
-        QPointF imgCoords = mapToScene(event->pos());
-        emit    queryPixelInfo(imgCoords.x(), imgCoords.y());
+        const QPointF pixel
+          = _imageItem->mapFromScene(mapToScene(event->pos()));
+        if (
+          pixel.x() < 0 || pixel.y() < 0 || pixel.x() >= _model->width()
+          || pixel.y() >= _model->height())
+            emit queryPixelInfo(-1, -1);
+        else
+            emit queryPixelInfo(
+              int(std::floor(pixel.x())),
+              int(std::floor(pixel.y())));
     }
 }
-
-void GraphicsView::mouseReleaseEvent(QMouseEvent*)
+void GraphicsView::mouseReleaseEvent(QMouseEvent* event)
 {
-    if (_model == nullptr || !_model->isImageLoaded()) return;
-
-    setCursor(Qt::ArrowCursor);
-}
-
-void GraphicsView::dropEvent(QDropEvent* ev)
-{
-    if (_model == nullptr) return;
-
-    QList<QUrl> urls = ev->mimeData()->urls();
-
-    if (!urls.empty()) {
-        const QString filename = urls[0].toLocalFile();
-
-        if (!filename.isEmpty()) {
-            emit openFileOnDropEvent(filename);
-        }
+    if (
+      event->button() == Qt::LeftButton
+      || event->button() == Qt::MiddleButton) {
+        _dragging = false;
+        unsetCursor();
     }
+    QGraphicsView::mouseReleaseEvent(event);
 }
-
-void GraphicsView::dragEnterEvent(QDragEnterEvent* ev)
+void GraphicsView::leaveEvent(QEvent* event)
 {
-    ev->acceptProposedAction();
+    emit queryPixelInfo(-1, -1);
+    QGraphicsView::leaveEvent(event);
 }
-
+void GraphicsView::dragEnterEvent(QDragEnterEvent* event)
+{
+    if (!localExrFiles(event->mimeData()).isEmpty())
+        event->acceptProposedAction();
+    else
+        event->ignore();
+}
+void GraphicsView::dragMoveEvent(QDragMoveEvent* event)
+{
+    if (!localExrFiles(event->mimeData()).isEmpty())
+        event->acceptProposedAction();
+    else
+        event->ignore();
+}
+void GraphicsView::dropEvent(QDropEvent* event)
+{
+    const QStringList files = localExrFiles(event->mimeData());
+    if (files.isEmpty()) {
+        event->ignore();
+        return;
+    }
+    event->acceptProposedAction();
+    for (const QString& file : files)
+        emit openFileOnDropEvent(file);
+}
 void GraphicsView::drawBackground(QPainter* painter, const QRectF&)
 {
-    const int polySize = 16;
-
-    QBrush a0(QColor(125, 125, 125));
-    QBrush a1(QColor(100, 100, 100));
-
+    painter->save();
     painter->resetTransform();
-    painter->setPen(Qt::NoPen);
-
-    for (int i = 0; i < width() / polySize + 1; i++) {
-        const int x = i * polySize;
-
-        for (int j = 0; j < height() / polySize + 1; j++) {
-            const int y = j * polySize;
-
-            if ((i + j) % 2 == 0) {
-                painter->setBrush(a0);
-            } else {
-                painter->setBrush(a1);
-            }
-
-            painter->drawRect(QRect(x, y, polySize, polySize));
-        }
-    }
+    painter->drawTiledPixmap(viewport()->rect(), _checkerboard);
+    painter->restore();
 }
-
 void GraphicsView::drawForeground(QPainter* painter, const QRectF& rect)
 {
-    if (_model) {
-        if (_showDisplayWindow) {
-            QPainterPath outerPath;
-            QPainterPath innerPath;
-
-            outerPath.addRect(rect);
-            innerPath.addRect(_displayWindow);
-
-            QPainterPath fillPath = outerPath.subtracted(innerPath);
-
-            painter->fillPath(fillPath, QColor(0, 0, 0, 150));
-        }
-
-        painter->resetTransform();
-
-        if (_showDataWindow) {
-            QPolygonF dataW = mapFromScene(_dataWindow);
-
-            painter->setPen(Qt::red);
-            painter->drawPolygon(dataW);
-        }
-
-        if (_showDisplayWindow) {
-            QPolygonF displayW = mapFromScene(_displayWindow);
-
-            painter->setPen(Qt::black);
-            painter->drawPolygon(displayW);
-        }
+    if (!_model || !_model->isImageLoaded()) return;
+    painter->save();
+    if (_showDisplayWindow) {
+        QPainterPath outside, inside;
+        outside.addRect(rect);
+        inside.addRect(_displayWindow);
+        painter->fillPath(outside.subtracted(inside), QColor(0, 0, 0, 150));
     }
+    QPen pen;
+    pen.setCosmetic(true);
+    painter->setBrush(Qt::NoBrush);
+    if (_showDataWindow) {
+        pen.setColor(Qt::red);
+        painter->setPen(pen);
+        painter->drawRect(_dataWindow);
+    }
+    if (_showDisplayWindow) {
+        pen.setColor(Qt::black);
+        painter->setPen(pen);
+        painter->drawRect(_displayWindow);
+    }
+    painter->restore();
 }
-
 void GraphicsView::scrollContentsBy(int dx, int dy)
 {
     QGraphicsView::scrollContentsBy(dx, dy);
-
-    // Problem with background drawing if not doing that...
-    scene()->invalidate();
+    viewport()->update();   // The checkerboard is anchored to viewport pixels.
 }

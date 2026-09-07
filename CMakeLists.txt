@@ -96,9 +96,6 @@ set(PROJECT_SOURCES
     src/view/ImageFileWidget.cpp
     src/view/ImageFileWidget.h
 
-    src/view/GraphicsScene.cpp
-    src/view/GraphicsScene.h
-
     src/view/GraphicsView.cpp
     src/view/GraphicsView.h
 
@@ -151,6 +148,9 @@ set(PROJECT_SOURCES
     # Framebuffers (image content i.e. layer data)
     src/model/framebuffer/FramebufferModel.cpp
     src/model/framebuffer/FramebufferModel.h
+    src/model/framebuffer/FramebufferData.h
+    src/model/framebuffer/FramebufferLoader.h
+    src/model/framebuffer/FramebufferLoader.cpp
     src/model/framebuffer/YFramebufferModel.cpp
     src/model/framebuffer/YFramebufferModel.h
     src/model/framebuffer/RGBFramebufferModel.cpp
@@ -392,3 +392,43 @@ endif (APPLE)
 
 # CPack
 include(CPack)
+
+option(BUILD_TESTING "Build viewer regression tests" OFF)
+include(CTest)
+if(BUILD_TESTING)
+    find_package(Qt${QT_VERSION_MAJOR} COMPONENTS Test REQUIRED)
+    set(TEST_SOURCES ${PROJECT_SOURCES})
+    list(REMOVE_ITEM TEST_SOURCES src/main.cpp openexr-viewer.rc)
+    add_executable(viewer-tests tests/ViewerTests.cpp ${TEST_SOURCES})
+    target_include_directories(viewer-tests PRIVATE src 3rdparty/data "${CMAKE_CURRENT_BINARY_DIR}")
+    target_link_libraries(viewer-tests PRIVATE Qt${QT_VERSION_MAJOR}::Test
+        Qt${QT_VERSION_MAJOR}::Widgets Qt${QT_VERSION_MAJOR}::Concurrent
+        Imath::Imath OpenEXR::OpenEXR)
+    if(OpenMP_CXX_FOUND)
+        target_link_libraries(viewer-tests PRIVATE OpenMP::OpenMP_CXX)
+    endif()
+    if(WIN32)
+        add_custom_command(TARGET viewer-tests POST_BUILD COMMAND ${CMAKE_COMMAND}
+            -E copy_if_different $<TARGET_FILE:Qt${QT_VERSION_MAJOR}::Test>
+            $<TARGET_FILE_DIR:viewer-tests>
+            COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:viewer-tests>/platforms"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE_DIR:Qt${QT_VERSION_MAJOR}::Core>/../plugins/platforms/qoffscreen$<$<CONFIG:Debug>:d>.dll"
+            "$<TARGET_FILE_DIR:viewer-tests>/platforms")
+        add_dependencies(viewer-tests openexr-viewer)
+    endif()
+    add_test(NAME viewer-regressions COMMAND viewer-tests -o -,txt -o test-results.txt,txt)
+    set_tests_properties(viewer-regressions PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 90)
+    add_executable(viewer-benchmark EXCLUDE_FROM_ALL tests/RenderBenchmark.cpp ${TEST_SOURCES})
+    target_include_directories(viewer-benchmark PRIVATE src 3rdparty/data "${CMAKE_CURRENT_BINARY_DIR}")
+    target_link_libraries(viewer-benchmark PRIVATE Qt${QT_VERSION_MAJOR}::Widgets
+        Qt${QT_VERSION_MAJOR}::Concurrent Imath::Imath OpenEXR::OpenEXR)
+    if(OpenMP_CXX_FOUND)
+        target_link_libraries(viewer-benchmark PRIVATE OpenMP::OpenMP_CXX)
+    endif()
+    if(WIN32)
+        target_link_libraries(viewer-benchmark PRIVATE psapi)
+        add_dependencies(viewer-benchmark openexr-viewer)
+    endif()
+endif()

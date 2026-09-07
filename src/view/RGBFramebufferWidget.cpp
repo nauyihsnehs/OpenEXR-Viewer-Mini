@@ -31,6 +31,7 @@
  */
 
 #include "RGBFramebufferWidget.h"
+#include <QSignalBlocker>
 #include "ui_RGBFramebufferWidget.h"
 
 #include "FramebufferInfo.h"
@@ -126,11 +127,11 @@ RGBFramebufferWidget::RGBFramebufferWidget(QWidget* parent)
         this,             SLOT(updateZoomLevelText(double)));
 
     connect(
-        ui->graphicsView, SIGNAL(controlWheel(int)),
-        this,             SLOT(onControlWheel(int)));
+        ui->graphicsView, SIGNAL(controlWheel(double)),
+        this,             SLOT(onControlWheel(double)));
     // clang-format on
 
-    ui->cbToneMappingMethod->blockSignals(true);
+    const QSignalBlocker blocker_cbToneMappingMethod(ui->cbToneMappingMethod);
     ui->cbToneMappingMethod->addItem(
       tr("Reinhard"),
       RGBFramebufferModel::Tone_Reinhard);
@@ -145,16 +146,14 @@ RGBFramebufferWidget::RGBFramebufferWidget(QWidget* parent)
       tr("Clamp"),
       RGBFramebufferModel::Tone_Clamp);
     ui->cbToneMappingMethod->setCurrentIndex(0);
-    ui->cbToneMappingMethod->blockSignals(false);
 
-    ui->cbFalseColorColormap->blockSignals(true);
+    const QSignalBlocker blocker_cbFalseColorColormap(ui->cbFalseColorColormap);
     for (int i = 0; i < ColormapModule::N_MAPS; i++) {
         ui->cbFalseColorColormap->addItem(
           QString::fromStdString(
             ColormapModule::toString((ColormapModule::Map)i)));
     }
     ui->cbFalseColorColormap->setCurrentIndex(ColormapModule::TURBO);
-    ui->cbFalseColorColormap->blockSignals(false);
     ui->falseColorAutoButton->setCheckable(true);
     ui->falseColorRangeSlider->setBounds(0., 1.);
     ui->falseColorRangeSlider->setRange(0., 1.);
@@ -203,6 +202,11 @@ void RGBFramebufferWidget::setModel(RGBFramebufferModel* model)
       SIGNAL(imageLoaded()),
       this,
       SLOT(updateFalseColorRangeBounds()));
+    connect(
+      model,
+      &FramebufferModel::readinessChanged,
+      this,
+      &RGBFramebufferWidget::updateFramebufferSummary);
     onQueryPixelInfo(0, 0);
     updateFramebufferSummary();
 }
@@ -390,11 +394,11 @@ void RGBFramebufferWidget::setToneClampRange(double min, double max)
 {
     if (min > max) std::swap(min, max);
 
-    ui->sbToneParam0->blockSignals(true);
-    ui->sbToneParam1->blockSignals(true);
-    ui->slToneParam0->blockSignals(true);
-    ui->slToneParam1->blockSignals(true);
-    ui->toneClampRangeSlider->blockSignals(true);
+    const QSignalBlocker blocker_sbToneParam0(ui->sbToneParam0);
+    const QSignalBlocker blocker_sbToneParam1(ui->sbToneParam1);
+    const QSignalBlocker blocker_slToneParam0(ui->slToneParam0);
+    const QSignalBlocker blocker_slToneParam1(ui->slToneParam1);
+    const QSignalBlocker blocker_toneClampRangeSlider(ui->toneClampRangeSlider);
 
     ui->sbToneParam0->setMinimum(0.);
     ui->sbToneParam0->setMaximum(max);
@@ -406,11 +410,6 @@ void RGBFramebufferWidget::setToneClampRange(double min, double max)
     ui->slToneParam1->setValue(toneSliderFromValue(max));
     ui->toneClampRangeSlider->setRange(min, max);
 
-    ui->sbToneParam0->blockSignals(false);
-    ui->sbToneParam1->blockSignals(false);
-    ui->slToneParam0->blockSignals(false);
-    ui->slToneParam1->blockSignals(false);
-    ui->toneClampRangeSlider->blockSignals(false);
 
     syncToneParamsToModel();
 }
@@ -445,9 +444,8 @@ void RGBFramebufferWidget::syncToneParamsToModel()
 void RGBFramebufferWidget::setFalseColorAutoRange(bool autoRange)
 {
     m_falseColorAutoRange = autoRange;
-    ui->falseColorAutoButton->blockSignals(true);
+    const QSignalBlocker blocker_falseColorAutoButton(ui->falseColorAutoButton);
     ui->falseColorAutoButton->setChecked(autoRange);
-    ui->falseColorAutoButton->blockSignals(false);
 }
 
 
@@ -487,9 +485,10 @@ void RGBFramebufferWidget::setFalseColorRange(
 
     updateFalseColorRangeBounds(min, max);
 
-    ui->sbFalseColorMinValue->blockSignals(true);
-    ui->sbFalseColorMaxValue->blockSignals(true);
-    ui->falseColorRangeSlider->blockSignals(true);
+    const QSignalBlocker blocker_sbFalseColorMinValue(ui->sbFalseColorMinValue);
+    const QSignalBlocker blocker_sbFalseColorMaxValue(ui->sbFalseColorMaxValue);
+    const QSignalBlocker blocker_falseColorRangeSlider(
+      ui->falseColorRangeSlider);
 
     ui->sbFalseColorMinValue->setMinimum(-999999999.);
     ui->sbFalseColorMinValue->setMaximum(max);
@@ -499,9 +498,6 @@ void RGBFramebufferWidget::setFalseColorRange(
     ui->sbFalseColorMaxValue->setValue(max);
     ui->falseColorRangeSlider->setRange(min, max);
 
-    ui->sbFalseColorMinValue->blockSignals(false);
-    ui->sbFalseColorMaxValue->blockSignals(false);
-    ui->falseColorRangeSlider->blockSignals(false);
 
     syncFalseColorRangeToModel();
 }
@@ -641,9 +637,8 @@ void RGBFramebufferWidget::on_sbExposure_valueChanged(double value)
 {
     const int sliderValue = static_cast<int>(std::round(value * 10.));
 
-    ui->slExposure->blockSignals(true);
+    const QSignalBlocker blocker_slExposure(ui->slExposure);
     ui->slExposure->setValue(sliderValue);
-    ui->slExposure->blockSignals(false);
 
     setExposure(value);
 }
@@ -653,9 +648,8 @@ void RGBFramebufferWidget::on_slExposure_valueChanged(int value)
 {
     const double exposure = double(value) / 10.;
 
-    ui->sbExposure->blockSignals(true);
+    const QSignalBlocker blocker_sbExposure(ui->sbExposure);
     ui->sbExposure->setValue(exposure);
-    ui->sbExposure->blockSignals(false);
 
     setExposure(exposure);
 }
@@ -822,11 +816,11 @@ void RGBFramebufferWidget::onOpenFileOnDropEvent(const QString& filename)
 }
 
 
-void RGBFramebufferWidget::onControlWheel(int delta)
+void RGBFramebufferWidget::onControlWheel(double steps)
 {
-    if (!m_model || !m_model->isImageLoaded() || delta == 0) return;
+    if (!m_model || !m_model->isImageLoaded() || steps == 0.) return;
 
-    const double    direction = delta > 0 ? 1. : -1.;
+
     QDoubleSpinBox* spinBox
       = m_previewMode == RGBFramebufferModel::Preview_ToneMapping
           ? ui->sbToneParam0
@@ -834,7 +828,7 @@ void RGBFramebufferWidget::onControlWheel(int delta)
           ? ui->sbFalseColorMaxValue
           : ui->sbExposure;
 
-    spinBox->setValue(spinBox->value() + direction * spinBox->singleStep());
+    spinBox->setValue(spinBox->value() + steps * spinBox->singleStep());
 }
 
 
@@ -859,4 +853,48 @@ void RGBFramebufferWidget::on_zoomButton_clicked()
     }
 
     ui->graphicsView->setZoomLevel(1.);
+}
+
+PreviewState RGBFramebufferWidget::previewState() const
+{
+    PreviewState state;
+    state.mode       = m_previewMode;
+    state.toneMethod = ui->cbToneMappingMethod->currentIndex();
+    state.exposure   = ui->sbExposure->value();
+    for (int i = 0; i < 4; ++i)
+        state.toneParameters[i] = toneParamSpinBox(i)->value();
+    state.colormap     = ui->cbFalseColorColormap->currentIndex();
+    state.minimum      = ui->sbFalseColorMinValue->value();
+    state.maximum      = ui->sbFalseColorMaxValue->value();
+    state.savedMinimum = m_savedFalseColorMin;
+    state.savedMaximum = m_savedFalseColorMax;
+    state.automatic    = m_falseColorAutoRange;
+    state.scaleVisible = ui->cbFalseColorScale->isChecked();
+    return state;
+}
+
+void RGBFramebufferWidget::restorePreviewState(const PreviewState& state)
+{
+    setPreviewMode(static_cast<RGBFramebufferModel::PreviewMode>(state.mode));
+    ui->sbExposure->setValue(state.exposure);
+    ui->cbToneMappingMethod->setCurrentIndex(state.toneMethod);
+    if (currentToneMappingMethod() == RGBFramebufferModel::Tone_Clamp)
+        setToneClampRange(state.toneParameters[0], state.toneParameters[1]);
+    else
+        for (int i = 0; i < 2; ++i)
+            setToneParamValue(i, state.toneParameters[i]);
+    for (int i = 2; i < 4; ++i)
+        setToneParamValue(i, state.toneParameters[i]);
+    ui->cbFalseColorColormap->setCurrentIndex(state.colormap);
+    ui->cbFalseColorScale->setChecked(state.scaleVisible);
+    m_savedFalseColorMin = state.savedMinimum;
+    m_savedFalseColorMax = state.savedMaximum;
+    setFalseColorAutoRange(state.automatic);
+    if (state.automatic && m_model->hasFiniteLuminanceSamples())
+        setFalseColorRange(
+          m_model->getLuminanceMin(),
+          m_model->getLuminanceMax(),
+          false);
+    else
+        setFalseColorRange(state.minimum, state.maximum, false);
 }

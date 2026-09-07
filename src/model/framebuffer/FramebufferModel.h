@@ -32,41 +32,36 @@
 
 #pragma once
 
+#include "FramebufferData.h"
 #include <QFutureWatcher>
 #include <QImage>
 #include <QObject>
-#include <QRect>
-#include <QVector>
-#include <QtGlobal>
-#include <cstdint>
+#include <functional>
 #include <string>
-#include <vector>
 
 class FramebufferModel: public QObject
 {
     Q_OBJECT
-
   public:
-    FramebufferModel(QObject* parent = nullptr);
-    virtual ~FramebufferModel();
+    explicit FramebufferModel(QObject* parent = nullptr);
+    ~FramebufferModel() override;
 
     const QImage&             getLoadedImage() const { return m_image; }
-    const std::vector<float>& getRawPixels() const { return m_pixelBuffer; }
-
-    bool isImageLoaded() const { return m_isImageLoaded; }
-
-    int   width() const { return m_width; }
-    int   height() const { return m_height; }
-    float pixelAspectRatio() const { return m_pixelAspectRatio; }
-
-    QRect getDisplayWindow() const;
-    QRect getDataWindow() const;
-
-    double   getDatasetMin() const { return m_datasetMin; }
-    double   getDatasetMax() const { return m_datasetMax; }
-    uint64_t getDatasetNaNCount() const { return m_datasetNaNCount; }
-    uint64_t getDatasetInfCount() const { return m_datasetInfCount; }
-    bool     hasFiniteSamples() const { return m_hasFiniteSamples; }
+    const std::vector<float>& getRawPixels() const { return m_data->pixels; }
+    bool                      isImageLoaded() const { return m_loaded; }
+    bool                      isPreviewReady() const { return m_ready; }
+    bool                      isLoading() const { return m_loading; }
+    QString                   errorString() const { return m_error; }
+    int                       width() const { return m_data->width; }
+    int                       height() const { return m_data->height; }
+    float    pixelAspectRatio() const { return m_data->pixelAspect; }
+    QRect    getDisplayWindow() const { return m_data->displayWindow; }
+    QRect    getDataWindow() const { return m_data->dataWindow; }
+    double   getDatasetMin() const { return m_data->minimum; }
+    double   getDatasetMax() const { return m_data->maximum; }
+    uint64_t getDatasetNaNCount() const { return m_data->nanCount; }
+    uint64_t getDatasetInfCount() const { return m_data->infCount; }
+    bool     hasFiniteSamples() const { return m_data->hasFiniteSamples; }
 
     virtual std::string              getColorInfo(int x, int y) const = 0;
     virtual std::vector<std::string> rawChannelNames() const          = 0;
@@ -75,40 +70,35 @@ class FramebufferModel: public QObject
     void imageChanged();
     void imageLoaded();
     void loadFailed(QString message);
-    void imageRendered(const QImage& image, quint64 generation);
+    void readinessChanged();
 
   protected:
-    void    waitForBackgroundTasks();
-    quint64 nextRenderGeneration();
-
-    std::vector<float> m_pixelBuffer;
-    QImage             m_image;
-
-    // Right now, the width and height are defined as Vec2i in OpenEXR
-    // i.e. int type.
-    int m_width, m_height;
-
-    bool m_isImageLoaded;
-
-    QFutureWatcher<void>* m_imageLoadingWatcher;
-    QFutureWatcher<void>* m_imageEditingWatcher;
-
-    QRect m_dataWindow;
-    QRect m_displayWindow;
-    float m_pixelAspectRatio;
-
-    double   m_datasetMin;
-    double   m_datasetMax;
-    uint64_t m_datasetNaNCount;
-    uint64_t m_datasetInfCount;
-    bool     m_hasFiniteSamples;
-
-    void resetDatasetStats();
-    void collectDatasetStats(double value);
-
-  private slots:
-    void publishRenderedImage(const QImage& image, quint64 generation);
+    using Decoder  = std::function<DecodeResult(const Cancellation&)>;
+    using Renderer = std::function<QImage(const Cancellation&)>;
+    void                                   startLoading(Decoder decoder);
+    void                                   requestRender(Renderer renderer);
+    static int                             renderThreadCount();
+    virtual void                           updateImage() = 0;
+    std::shared_ptr<const FramebufferData> m_data;
 
   private:
-    quint64 m_renderGeneration;
+    struct RenderResult {
+        QImage  image;
+        QString error;
+    };
+    void                         startRender();
+    void                         setReady(bool ready);
+    QImage                       m_image;
+    QFutureWatcher<DecodeResult> m_loadWatcher;
+    QFutureWatcher<RenderResult> m_renderWatcher;
+    Cancellation                 m_loadCancel;
+    Cancellation                 m_renderCancel;
+    Renderer                     m_pendingRender;
+    quint64                      m_generation       = 0;
+    quint64                      m_activeGeneration = 0;
+    bool                         m_renderActive     = false;
+    bool                         m_loaded           = false;
+    bool                         m_loading          = false;
+    bool                         m_ready            = false;
+    QString                      m_error;
 };

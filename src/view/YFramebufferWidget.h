@@ -35,6 +35,7 @@
 #include <QEvent>
 #include <QPoint>
 #include <QWidget>
+#include "PreviewState.h"
 
 #include <model/framebuffer/YFramebufferModel.h>
 
@@ -51,8 +52,10 @@ class YFramebufferWidget: public QWidget
     explicit YFramebufferWidget(QWidget* parent = nullptr);
     ~YFramebufferWidget();
 
-    void setModel(YFramebufferModel* model);
+    void                    setModel(YFramebufferModel* model);
     const FramebufferModel* framebufferModel() const { return m_model; }
+    PreviewState            previewState() const;
+    void                    restorePreviewState(const PreviewState& state);
 
   signals:
     void openFileOnDropEvent(const QString& filename);
@@ -81,6 +84,8 @@ class YFramebufferWidget: public QWidget
     void on_zoomButton_clicked();
 
   private:
+    void                    setRange(double min, double max);
+    bool                    m_autoRange = false;
     Ui::YFramebufferWidget* ui;
     YFramebufferModel*      m_model;
     double                  m_zoomLevel;

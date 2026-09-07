@@ -32,108 +32,149 @@
 
 #include "FramebufferModel.h"
 
-#include <array>
-#include <cmath>
-#include <cstddef>
-#include <fstream>
+#include <QThread>
+#include <QThreadPool>
+#include <QtConcurrent/QtConcurrentRun>
+#include <exception>
+#include <algorithm>
+
+namespace
+{
+    QThreadPool* renderPool()
+    {
+        static QThreadPool pool;
+        static const bool  configured = [] {
+            pool.setMaxThreadCount(2);
+            return true;
+        }();
+        Q_UNUSED(configured);
+        return &pool;
+    }
+}   // namespace
 
 FramebufferModel::FramebufferModel(QObject* parent)
   : QObject(parent)
-  , m_width(0)
-  , m_height(0)
-  , m_isImageLoaded(false)
-  , m_imageLoadingWatcher(new QFutureWatcher<void>(this))
-  , m_imageEditingWatcher(new QFutureWatcher<void>(this))
-  , m_pixelAspectRatio(1.f)
-  , m_datasetMin(0.)
-  , m_datasetMax(0.)
-  , m_datasetNaNCount(0)
-  , m_datasetInfCount(0)
-  , m_hasFiniteSamples(false)
-  , m_renderGeneration(0)
+  , m_data(std::make_shared<FramebufferData>())
 {
     connect(
+      &m_loadWatcher,
+      &QFutureWatcher<DecodeResult>::finished,
       this,
-      &FramebufferModel::imageRendered,
+      [this] {
+          const DecodeResult result = m_loadWatcher.result();
+          m_loading                 = false;
+          m_error                   = result.error;
+          if (!result.data) {
+              emit readinessChanged();
+              if (!m_error.isEmpty()) emit loadFailed(m_error);
+              return;
+          }
+          m_data   = result.data;
+          m_loaded = true;
+          emit imageLoaded();
+          updateImage();
+      });
+    connect(
+      &m_renderWatcher,
+      &QFutureWatcher<RenderResult>::finished,
       this,
-      &FramebufferModel::publishRenderedImage,
-      Qt::QueuedConnection);
+      [this] {
+          const RenderResult result = m_renderWatcher.result();
+          m_renderActive            = false;
+          if (m_activeGeneration == m_generation) {
+              m_error = result.error;
+              if (!result.image.isNull()) {
+                  m_image = result.image;
+                  setReady(true);
+                  emit imageChanged();
+              } else if (!m_error.isEmpty()) {
+                  emit readinessChanged();
+                  emit loadFailed(m_error);
+              }
+          }
+          startRender();
+      });
 }
-
-QRect FramebufferModel::getDisplayWindow() const
-{
-    return m_displayWindow;
-}
-
-QRect FramebufferModel::getDataWindow() const
-{
-    return m_dataWindow;
-}
-
-void FramebufferModel::resetDatasetStats()
-{
-    m_datasetMin       = 0.;
-    m_datasetMax       = 0.;
-    m_datasetNaNCount  = 0;
-    m_datasetInfCount  = 0;
-    m_hasFiniteSamples = false;
-}
-
-void FramebufferModel::collectDatasetStats(double value)
-{
-    if (std::isnan(value)) {
-        m_datasetNaNCount++;
-        return;
-    }
-
-    if (std::isinf(value)) {
-        m_datasetInfCount++;
-        return;
-    }
-
-    if (!m_hasFiniteSamples) {
-        m_datasetMin       = value;
-        m_datasetMax       = value;
-        m_hasFiniteSamples = true;
-        return;
-    }
-
-    if (value < m_datasetMin) m_datasetMin = value;
-    if (value > m_datasetMax) m_datasetMax = value;
-}
-
-void FramebufferModel::waitForBackgroundTasks()
-{
-    QFutureWatcher<void>* watchers[] = {
-      m_imageLoadingWatcher,
-      m_imageEditingWatcher,
-    };
-
-    for (QFutureWatcher<void>* watcher : watchers) {
-        if (!watcher || !watcher->isRunning()) continue;
-        watcher->cancel();
-        watcher->waitForFinished();
-    }
-}
-
-
-quint64 FramebufferModel::nextRenderGeneration()
-{
-    return ++m_renderGeneration;
-}
-
-
-void FramebufferModel::publishRenderedImage(
-  const QImage& image, quint64 generation)
-{
-    if (generation != m_renderGeneration || image.isNull()) return;
-
-    m_image = image;
-    emit imageChanged();
-}
-
 
 FramebufferModel::~FramebufferModel()
 {
-    waitForBackgroundTasks();
+    // Jobs own all their inputs; destroying a watcher does not wait for them.
+    if (m_loadCancel) m_loadCancel->store(true);
+    if (m_renderCancel) m_renderCancel->store(true);
+}
+
+int FramebufferModel::renderThreadCount()
+{
+    // Two concurrent previews share at most eight CPU workers.
+    return std::max(1, std::min(4, QThread::idealThreadCount() / 2));
+}
+
+void FramebufferModel::setReady(bool ready)
+{
+    if (m_ready == ready) return;
+    m_ready = ready;
+    emit readinessChanged();
+}
+
+void FramebufferModel::startLoading(Decoder decoder)
+{
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (m_loading) return;
+    ++m_generation;
+    if (m_renderCancel) m_renderCancel->store(true);
+    m_pendingRender = Renderer();
+    m_loaded        = false;
+    m_loading       = true;
+    m_error.clear();
+    setReady(false);
+    emit readinessChanged();
+    m_loadCancel              = std::make_shared<std::atomic_bool>(false);
+    const Cancellation cancel = m_loadCancel;
+    m_loadWatcher.setFuture(QtConcurrent::run([decoder, cancel] {
+        DecodeResult result;
+        try {
+            if (!cancel->load()) result = decoder(cancel);
+        } catch (const std::exception& error) {
+            result.error = QString::fromUtf8(error.what());
+        } catch (...) {
+            result.error = QObject::tr("Unable to decode image.");
+        }
+        return result;
+    }));
+}
+
+void FramebufferModel::requestRender(Renderer renderer)
+{
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (!m_loaded) return;
+    ++m_generation;
+    m_error.clear();
+    setReady(false);
+    if (m_renderCancel) m_renderCancel->store(true);
+    m_pendingRender = std::move(renderer);
+    startRender();
+}
+
+void FramebufferModel::startRender()
+{
+    if (m_renderActive || !m_pendingRender) return;
+    m_renderActive            = true;
+    m_activeGeneration        = m_generation;
+    const Renderer render     = std::move(m_pendingRender);
+    m_pendingRender           = Renderer();
+    m_renderCancel            = std::make_shared<std::atomic_bool>(false);
+    const Cancellation cancel = m_renderCancel;
+    m_renderWatcher.setFuture(QtConcurrent::run(renderPool(), [render, cancel] {
+        RenderResult result;
+        try {
+            if (!cancel->load()) result.image = render(cancel);
+            if (result.image.isNull() && !cancel->load())
+                result.error = QObject::tr("Unable to allocate preview image.");
+        } catch (const std::exception& error) {
+            result.error = QString::fromUtf8(error.what());
+        } catch (...) {
+            result.error = QObject::tr("Unable to render preview.");
+        }
+        return result;
+    }));
 }

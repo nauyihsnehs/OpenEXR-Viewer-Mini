@@ -32,6 +32,9 @@
 
 #pragma once
 
+#include <algorithm>
+#include <cmath>
+
 class Colormap
 {
   public:
@@ -44,6 +47,13 @@ class Colormap
     virtual void
     getRGBValue(float v, float v_min, float v_max, float RGB[3]) const
     {
-        getRGBValue((v - v_min) / (v_max - v_min), RGB);
+        const double span = double(v_max) - v_min;
+        const double normalized
+          = std::isfinite(v) && std::isfinite(span) && span > 0.
+              ? (double(v) - v_min) / span
+              : 0.;
+        getRGBValue(
+          static_cast<float>(std::max(0., std::min(1., normalized))),
+          RGB);
     }
 };

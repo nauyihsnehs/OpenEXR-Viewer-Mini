@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Copyright (c) 2021 Alban Fichet <alban dot fichet at gmx dot fr>
  * All rights reserved.
  *
@@ -38,6 +38,7 @@
 #include <OpenEXR/ImfIO.h>
 #include <OpenEXR/ImfMultiPartInputFile.h>
 
+#include <model/ExrInput.h>
 #include <model/attribute/HeaderModel.h>
 #include <model/attribute/LayerModel.h>
 #include <model/framebuffer/FramebufferModel.h>
@@ -60,7 +61,11 @@ class OpenEXRImage: public QObject
     HeaderModel* getHeaderModel() const { return m_headerModel.get(); }
     LayerModel*  getLayerModel() const { return m_layerModel.get(); }
 
-    Imf::MultiPartInputFile& getEXR() { return *m_exrIn; }
+    Imf::MultiPartInputFile&                 getEXR() { return *m_input->file; }
+    std::shared_ptr<ExrInput> sharedEXR() const
+    {
+        return m_input;
+    }
 
     const QString& getFilename() const { return m_filename; }
 
@@ -74,9 +79,7 @@ class OpenEXRImage: public QObject
 
     // Keep the declaration order aligned with the dependency order. Destruction
     // happens in reverse: models, EXR input, stream adapter, then backing file.
-    std::unique_ptr<QFile>                   m_file;
-    std::unique_ptr<Imf::IStream>            m_stream;
-    std::unique_ptr<Imf::MultiPartInputFile> m_exrIn;
+    std::shared_ptr<ExrInput> m_input = std::make_shared<ExrInput>();
     std::unique_ptr<HeaderModel>             m_headerModel;
     std::unique_ptr<LayerModel>              m_layerModel;
 };

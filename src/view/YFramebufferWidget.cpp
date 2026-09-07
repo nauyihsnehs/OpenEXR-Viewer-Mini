@@ -31,6 +31,7 @@
  */
 
 #include "YFramebufferWidget.h"
+#include <QSignalBlocker>
 #include "ui_YFramebufferWidget.h"
 
 #include "ComboBoxBehavior.h"
@@ -90,6 +91,11 @@ void YFramebufferWidget::setModel(YFramebufferModel* model)
     if (m_model && m_model->parent() != this) m_model->setParent(this);
     ui->graphicsView->setModel(model);
     connect(
+      model,
+      &FramebufferModel::readinessChanged,
+      this,
+      &YFramebufferWidget::updateFramebufferSummary);
+    connect(
       m_model,
       SIGNAL(imageLoaded()),
       this,
@@ -128,6 +134,7 @@ void YFramebufferWidget::onQueryPixelInfo(int x, int y)
 
 void YFramebufferWidget::on_sbMinValue_valueChanged(double arg1)
 {
+    m_autoRange = false;
     ui->sbMaxValue->setMinimum(arg1);
     ui->scaleWidget->setMin(arg1);
     if (m_model) m_model->setMinValue(arg1);
@@ -136,6 +143,7 @@ void YFramebufferWidget::on_sbMinValue_valueChanged(double arg1)
 
 void YFramebufferWidget::on_sbMaxValue_valueChanged(double arg1)
 {
+    m_autoRange = false;
     ui->sbMinValue->setMaximum(arg1);
     ui->scaleWidget->setMax(arg1);
     if (m_model) m_model->setMaxValue(arg1);
@@ -145,8 +153,8 @@ void YFramebufferWidget::on_sbMaxValue_valueChanged(double arg1)
 void YFramebufferWidget::on_buttonAuto_clicked()
 {
     if (m_model && m_model->hasFiniteSamples()) {
-        ui->sbMinValue->setValue(m_model->getDatasetMin());
-        ui->sbMaxValue->setValue(m_model->getDatasetMax());
+        m_autoRange = true;
+        setRange(m_model->getDatasetMin(), m_model->getDatasetMax());
     }
 }
 
@@ -198,4 +206,37 @@ void YFramebufferWidget::on_zoomButton_clicked()
     }
 
     ui->graphicsView->setZoomLevel(1.);
+}
+
+void YFramebufferWidget::setRange(double min, double max)
+{
+    const QSignalBlocker low(ui->sbMinValue), high(ui->sbMaxValue);
+    ui->sbMinValue->setRange(-999999999., max);
+    ui->sbMaxValue->setRange(min, 999999999.);
+    ui->sbMinValue->setValue(min);
+    ui->sbMaxValue->setValue(max);
+    ui->scaleWidget->setMin(ui->sbMinValue->value());
+    ui->scaleWidget->setMax(ui->sbMaxValue->value());
+    if (m_model)
+        m_model->setRange(ui->sbMinValue->value(), ui->sbMaxValue->value());
+}
+PreviewState YFramebufferWidget::previewState() const
+{
+    PreviewState state;
+    state.colormap     = ui->cbColormap->currentIndex();
+    state.minimum      = ui->sbMinValue->value();
+    state.maximum      = ui->sbMaxValue->value();
+    state.automatic    = m_autoRange;
+    state.scaleVisible = ui->cbScale->isChecked();
+    return state;
+}
+void YFramebufferWidget::restorePreviewState(const PreviewState& state)
+{
+    ui->cbColormap->setCurrentIndex(state.colormap);
+    ui->cbScale->setChecked(state.scaleVisible);
+    m_autoRange = state.automatic;
+    if (m_autoRange && m_model->hasFiniteSamples())
+        setRange(m_model->getDatasetMin(), m_model->getDatasetMax());
+    else
+        setRange(state.minimum, state.maximum);
 }

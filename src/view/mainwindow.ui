@@ -63,7 +63,7 @@
      </property>
      <addaction name="action_ShowDataWindow"/>
      <addaction name="action_ShowDisplayWindow"/>
-     <addaction name="separator_2"/>
+     <addaction name="separator"/>
      <addaction name="action_ShowAttributes"/>
      <addaction name="action_ShowLayers"/>
     </widget>
@@ -114,7 +114,7 @@
     <bool>false</bool>
    </property>
    <property name="text">
-    <string>Copy Image Full Resolution</string>
+    <string>Copy Full Image</string>
    </property>
    <property name="shortcut">
     <string>Ctrl+Shift+C</string>

@@ -19,6 +19,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QImage>
+#include <model/framebuffer/FramebufferLoader.h>
 #include <QImageWriter>
 #include <QObject>
 #include <QRect>
@@ -289,8 +290,12 @@ namespace
                 channel.ySampling));
         }
 
-        input.setFrameBuffer(framebuffer);
-        input.readPixels(dataWindow.min.y, dataWindow.max.y);
+        {
+            const std::lock_guard<std::mutex> lock(
+              image->sharedEXR()->mutex);
+            input.setFrameBuffer(framebuffer);
+            input.readPixels(dataWindow.min.y, dataWindow.max.y);
+        }
 
         return part;
     }
@@ -550,6 +555,10 @@ namespace
     ImageSave::Result savePreview(
       const FramebufferModel* model, const ImageSave::Options& options)
     {
+        if (!model || !model->isPreviewReady())
+            return result(
+              ImageSave::StatusFailed,
+              "The current preview is still rendering.");
         QImage image = model->getLoadedImage();
         if (image.isNull()) {
             return result(

@@ -31,6 +31,9 @@
  */
 
 #include "mainwindow.h"
+#include "FileDrop.h"
+#include <QShortcut>
+#include <QSignalBlocker>
 #include "./ui_mainwindow.h"
 #include <view/about.h>
 #include <io/ImageSave.h>
@@ -265,6 +268,17 @@ MainWindow::MainWindow(QWidget* parent)
     m_openFileTabs->setMovable(true);
     m_openFileTabs->setTabsClosable(true);
     m_openFileTabs->setTabBarAutoHide(true);
+    for (int direction : {-1, 1}) {
+        auto* shortcut = new QShortcut(
+          QKeySequence(direction == 1 ? "Ctrl+Tab" : "Ctrl+Shift+Tab"),
+          this);
+        connect(shortcut, &QShortcut::activated, this, [this, direction] {
+            const int count = m_openFileTabs->count();
+            if (count > 1)
+                m_openFileTabs->setCurrentIndex(
+                  (m_openFileTabs->currentIndex() + direction + count) % count);
+        });
+    }
 
     // clang-format off
     connect(m_openFileTabs, SIGNAL(currentChanged(int)),
@@ -287,6 +301,13 @@ MainWindow::MainWindow(QWidget* parent)
 
 MainWindow::~MainWindow()
 {
+    const QSignalBlocker blockTabs(m_openFileTabs);
+    while (m_openFileTabs->count()) {
+        QWidget* widget = m_openFileTabs->widget(0);
+        disconnect(widget, nullptr, this, nullptr);
+        m_openFileTabs->removeTab(0);
+        delete widget;
+    }
     delete ui;
 }
 
@@ -547,7 +568,7 @@ void MainWindow::copyActiveImage(bool fullResolution) const
     const FramebufferModel* model
       = widget ? widget->activeFramebufferModel() : nullptr;
 
-    if (!model || !model->isImageLoaded()) return;
+    if (!model || !model->isPreviewReady()) return;
 
     QImage image = model->getLoadedImage();
     if (image.isNull()) return;
@@ -587,7 +608,7 @@ void MainWindow::updateShowActions()
     const FramebufferModel* model
       = widget ? widget->activeFramebufferModel() : nullptr;
     const bool enabled     = widget && widget->hasActiveFramebuffer();
-    const bool copyEnabled = model && model->isImageLoaded();
+    const bool copyEnabled = model && model->isPreviewReady();
 
     ui->action_ShowDataWindow->blockSignals(true);
     ui->action_ShowDisplayWindow->blockSignals(true);
@@ -670,91 +691,127 @@ bool MainWindow::handleEmptyOpenClick(QObject* watched, QEvent* event)
 }
 
 
-void MainWindow::open(std::istream& stream)
+void MainWindow::addFileTab(ImageFileWidget* fileWidget, const QString& title)
 {
-    //QString filename_no_path = QFileInfo(filename).fileName();
-
-    ImageFileWidget* fileWidget = new ImageFileWidget(stream, m_openFileTabs);
-    fileWidget->setSplitterImageState(m_splitterImageState);
-    fileWidget->setSplitterPropertiesState(m_splitterPropertiesState);
-    fileWidget->setRgbPreviewMode(m_rgbPreviewMode);
-    applyPanelVisibility(fileWidget);
-
-    m_openFileTabs->addTab(fileWidget, "Stream");
-    m_openFileTabs->setCurrentWidget(fileWidget);
-    updateFileTabPresentation();
-
     connect(
       fileWidget,
-      SIGNAL(openFileOnDropEvent(QString)),
+      &ImageFileWidget::openFileOnDropEvent,
       this,
-      SLOT(open(QString)));
-
+      static_cast<void (MainWindow::*)(const QString&)>(&MainWindow::open));
     connect(
       fileWidget,
-      SIGNAL(activeFramebufferChanged()),
+      &ImageFileWidget::activeFramebufferChanged,
       this,
-      SLOT(updateShowActions()));
+      &MainWindow::updateShowActions);
     connect(
       fileWidget,
       &ImageFileWidget::activeFramebufferChanged,
       this,
       &MainWindow::updateFileTabPresentation);
-
+    connect(
+      fileWidget,
+      &ImageFileWidget::refreshInProgressChanged,
+      this,
+      [this, fileWidget](bool refreshing) {
+          if (currentFileWidget() == fileWidget)
+              ui->action_Refresh->setEnabled(
+                !refreshing && !fileWidget->isStream());
+      });
+    const int index = m_openFileTabs->addTab(fileWidget, title);
+    m_openFileTabs->setTabToolTip(
+      index,
+      fileWidget->isStream() ? tr("Stream") : fileWidget->getOpenedFilename());
+    m_openFileTabs->setCurrentWidget(fileWidget);
     updateShowActions();
     updateFileTabPresentation();
 }
 
-
-void MainWindow::open(const QString& filename)
+void MainWindow::queueFileTab(
+  ImageFileWidget* fileWidget, const QString& title)
 {
-    QString filename_no_path = QFileInfo(filename).fileName();
+    if (!fileWidget->sourceImage() || fileWidget->hasDocumentLoadFailed()) {
+        delete fileWidget;
+        return;
+    }
 
-    ImageFileWidget* fileWidget = new ImageFileWidget(filename, m_openFileTabs);
     fileWidget->setSplitterImageState(m_splitterImageState);
     fileWidget->setSplitterPropertiesState(m_splitterPropertiesState);
     fileWidget->setRgbPreviewMode(m_rgbPreviewMode);
     applyPanelVisibility(fileWidget);
-
-    m_openFileTabs->addTab(fileWidget, filename_no_path);
-    m_openFileTabs->setCurrentWidget(fileWidget);
-    updateFileTabPresentation();
-
+    fileWidget->hide();
+    PendingOpen pending;
+    pending.widget = fileWidget;
+    pending.title  = title;
+    m_pendingOpens.append(pending);
     connect(
       fileWidget,
-      SIGNAL(openFileOnDropEvent(QString)),
+      &ImageFileWidget::documentReady,
       this,
-      SLOT(open(QString)));
-
+      [this, fileWidget] {
+          resolvePendingOpen(fileWidget, true);
+      });
     connect(
       fileWidget,
-      SIGNAL(activeFramebufferChanged()),
+      &ImageFileWidget::documentLoadFailed,
       this,
-      SLOT(updateShowActions()));
-    connect(
-      fileWidget,
-      &ImageFileWidget::activeFramebufferChanged,
-      this,
-      &MainWindow::updateFileTabPresentation);
-
-    updateShowActions();
-    updateFileTabPresentation();
+      [this, fileWidget](const QString&) {
+          resolvePendingOpen(fileWidget, false);
+      });
+    if (fileWidget->isDocumentReady())
+        resolvePendingOpen(fileWidget, true);
 }
 
 
-void MainWindow::on_action_Open_triggered()
+void MainWindow::resolvePendingOpen(
+  ImageFileWidget* fileWidget, bool succeeded)
 {
-    const QString filename = QFileDialog::getOpenFileName(
-      this,
-      tr("Open OpenEXR Image"),
-      m_currentOpenedFolder,
-      tr("Images (*.exr)"));
+    for (PendingOpen& pending : m_pendingOpens) {
+        if (pending.widget != fileWidget || pending.resolved) continue;
+        pending.resolved  = true;
+        pending.succeeded = succeeded;
+        break;
+    }
+    flushPendingOpens();
+}
 
-    if (filename.size() != 0) {
-        open(filename);
+
+void MainWindow::flushPendingOpens()
+{
+    while (!m_pendingOpens.isEmpty() && m_pendingOpens.front().resolved) {
+        const PendingOpen pending = m_pendingOpens.takeFirst();
+        if (pending.succeeded && pending.widget)
+            addFileTab(pending.widget, pending.title);
+        else if (pending.widget)
+            pending.widget->deleteLater();
     }
 }
 
+
+void MainWindow::open(std::istream& stream)
+{
+    queueFileTab(
+      new ImageFileWidget(stream, m_openFileTabs),
+      tr("Stream"));
+}
+
+void MainWindow::open(const QString& filename)
+{
+    const QFileInfo info(filename);
+    queueFileTab(
+      new ImageFileWidget(info.absoluteFilePath(), m_openFileTabs),
+      info.fileName());
+}
+
+void MainWindow::on_action_Open_triggered()
+{
+    const QStringList filenames = QFileDialog::getOpenFileNames(
+      this,
+      tr("Open OpenEXR Images"),
+      m_currentOpenedFolder,
+      tr("Images (*.exr *.EXR)"));
+    for (const QString& filename : filenames)
+        open(filename);
+}
 
 void MainWindow::on_action_Save_triggered()
 {
@@ -762,7 +819,7 @@ void MainWindow::on_action_Save_triggered()
     const FramebufferModel* model
       = widget ? widget->activeFramebufferModel() : nullptr;
 
-    if (!model || !model->isImageLoaded()) return;
+    if (!model || !model->isPreviewReady()) return;
 
     QString folder = m_currentOpenedFolder.isEmpty() ? QDir::homePath()
                                                      : m_currentOpenedFolder;
@@ -1006,25 +1063,25 @@ bool MainWindow::nativeEvent(
 #endif
 
 
-void MainWindow::dropEvent(QDropEvent* ev)
+void MainWindow::dropEvent(QDropEvent* event)
 {
-    QList<QUrl> urls = ev->mimeData()->urls();
-
-    for (const QUrl& url : urls) {
-        const QString filename = url.toLocalFile();
-
-        if (!filename.isEmpty()) {
-            open(filename);
-        }
+    const QStringList files = localExrFiles(event->mimeData());
+    if (files.isEmpty()) {
+        event->ignore();
+        return;
     }
+    event->acceptProposedAction();
+    for (const QString& filename : files)
+        open(filename);
 }
 
-
-void MainWindow::dragEnterEvent(QDragEnterEvent* ev)
+void MainWindow::dragEnterEvent(QDragEnterEvent* event)
 {
-    ev->acceptProposedAction();
+    if (!localExrFiles(event->mimeData()).isEmpty())
+        event->acceptProposedAction();
+    else
+        event->ignore();
 }
-
 
 void MainWindow::writeSettings()
 {
@@ -1087,13 +1144,15 @@ void MainWindow::readSettings()
 void MainWindow::onTabCloseRequested(int idx)
 {
     // Saves state in case this is the last opened tab
-    ImageFileWidget* widget = (ImageFileWidget*)m_openFileTabs->widget(idx);
+    auto* widget = qobject_cast<ImageFileWidget*>(m_openFileTabs->widget(idx));
+    if (!widget) return;
 
     m_currentOpenedFolder     = widget->getOpenedFolder();
     m_splitterImageState      = widget->getSplitterImageState();
     m_splitterPropertiesState = widget->getSplitterPropertiesState();
 
     m_openFileTabs->removeTab(idx);
+    delete widget;
     updateFileTabPresentation();
     updateShowActions();
 }
@@ -1193,8 +1252,7 @@ void MainWindow::on_action_ThemeDark_triggered()
 
 void MainWindow::on_action_Refresh_triggered()
 {
-    ImageFileWidget* widget = (ImageFileWidget*)m_openFileTabs->currentWidget();
-    widget->refresh();
+    if (ImageFileWidget* widget = currentFileWidget()) widget->refresh();
 }
 
 
@@ -1209,7 +1267,9 @@ void MainWindow::onCurrentChanged(int index)
         return;
     }
 
-    ui->action_Refresh->setEnabled(true);
+    ui->action_Refresh->setEnabled(
+      !currentFileWidget()->isStream()
+      && !currentFileWidget()->isRefreshInProgress());
     ui->action_Close->setEnabled(true);
 
     ImageFileWidget* widget = (ImageFileWidget*)m_openFileTabs->currentWidget();

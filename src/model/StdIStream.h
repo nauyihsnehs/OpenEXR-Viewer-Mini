@@ -35,6 +35,7 @@
 #include <OpenEXR/ImfIO.h>
 
 #include <istream>
+#include <sstream>
 
 class StdIStream: public Imf::IStream
 {
@@ -47,5 +48,5 @@ class StdIStream: public Imf::IStream
     virtual bool isMemoryMapped() const { return false; }
 
   private:
-    std::istream& m_stream;
+    std::stringstream m_stream;
 };

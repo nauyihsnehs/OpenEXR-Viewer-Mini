@@ -31,23 +31,10 @@
  */
 
 #include "RGBFramebufferModel.h"
-#include "ToneMapping.h"
-
+#include "FramebufferLoader.h"
 #include <util/ColorTransform.h>
-
-#include <QFuture>
-#include <QtConcurrent/QtConcurrent>
-
 #include <cmath>
-
-#include <OpenEXR/ImfChromaticitiesAttribute.h>
-#include <OpenEXR/ImfFrameBuffer.h>
-#include <OpenEXR/ImfHeader.h>
-#include <OpenEXR/ImfInputPart.h>
-#include <OpenEXR/ImfRgbaYca.h>
-
-#include <Imath/ImathBox.h>
-
+#include <sstream>
 
 RGBFramebufferModel::RGBFramebufferModel(
   const std::string& parentLayerName, LayerType layerType, QObject* parent)
@@ -60,627 +47,173 @@ RGBFramebufferModel::RGBFramebufferModel(
   , m_toneParams {0.18, 4., 0., 0.}
   , m_falseColorMin(0.)
   , m_falseColorMax(1.)
-  , m_luminanceMin(0.)
-  , m_luminanceMax(0.)
-  , m_hasFiniteLuminanceSamples(false)
   , m_falseColorMap(ColormapModule::create(ColormapModule::TURBO))
 {}
 
-RGBFramebufferModel::~RGBFramebufferModel()
-{
-    waitForBackgroundTasks();
-}
+RGBFramebufferModel::~RGBFramebufferModel() = default;
 
 void RGBFramebufferModel::load(
-  Imf::MultiPartInputFile& file, int partId, bool hasAlpha)
+  const std::shared_ptr<ExrInput>& file,
+  int                                             partId,
+  const std::array<std::string, 4>&               channels)
 {
-    QFuture<void> imageLoading = QtConcurrent::run([this,
-                                                    &file,
-                                                    partId,
-                                                    hasAlpha]() {
-        try {
-            Imf::InputPart part(file, partId);
-
-            Imath::Box2i datW = part.header().dataWindow();
-            m_width           = datW.max.x - datW.min.x + 1;
-            m_height          = datW.max.y - datW.min.y + 1;
-
-            m_pixelAspectRatio = part.header().pixelAspectRatio();
-
-            m_dataWindow = QRect(datW.min.x, datW.min.y, m_width, m_height);
-
-            Imath::Box2i dispW = part.header().displayWindow();
-
-            int dispW_width  = dispW.max.x - dispW.min.x + 1;
-            int dispW_height = dispW.max.y - dispW.min.y + 1;
-
-            m_displayWindow
-              = QRect(dispW.min.x, dispW.min.y, dispW_width, dispW_height);
-
-            // Check to avoid type overflow, width and height are 32bits int
-            // representing a 2 dimentional image. Can overflow the type when
-            // multiplied together.
-            // 0x1FFFFFFF is a save limit for 4 * 0x7FFFFFFF the max
-            // representable int since we need 4 channels.
-            // TODO: Use larger type when manipulating framebuffer
-            const uint64_t partial_size
-              = (uint64_t)m_width * (uint64_t)m_height;
-
-            if (partial_size > 0x1FFFFFFF) {
-                throw std::runtime_error(
-                  "The total image size is too large. May be supported in a "
-                  "future revision.");
-            }
-
-            m_pixelBuffer.resize(4 * m_width * m_height);
-
-            // Check if there is specific chromaticities tied to the color
-            // representation in this part.
-            const Imf::ChromaticitiesAttribute* c
-              = part.header().findTypedAttribute<Imf::ChromaticitiesAttribute>(
-                "chromaticities");
-
-            Imf::Chromaticities chromaticities;
-
-            if (c != nullptr) {
-                chromaticities = c->value();
-            }
-
-            // Check if there is alpha channel
-            if (hasAlpha) {
-                std::string      aLayer = m_parentLayer + "A";
-                Imf::FrameBuffer framebuffer;
-
-                Imf::Slice aSlice = Imf::Slice::Make(
-                  Imf::PixelType::FLOAT,
-                  &m_pixelBuffer[3],
-                  datW,
-                  4 * sizeof(float),
-                  4 * m_width * sizeof(float));
-
-                framebuffer.insert(aLayer, aSlice);
-
-                part.setFrameBuffer(framebuffer);
-                part.readPixels(datW.min.y, datW.max.y);
-
-            } else {
-                for (int y = 0; y < m_height; y++) {
-                    for (int x = 0; x < m_width; x++) {
-                        m_pixelBuffer[4 * (y * m_width + x) + 3] = 1.f;
-                    }
-                }
-            }
-
-            switch (m_layerType) {
-                case Layer_RGB: {
-                    std::string rLayer = m_parentLayer + "R";
-                    std::string gLayer = m_parentLayer + "G";
-                    std::string bLayer = m_parentLayer + "B";
-
-                    Imf::FrameBuffer framebuffer;
-
-                    Imf::Slice rSlice = Imf::Slice::Make(
-                      Imf::PixelType::FLOAT,
-                      &m_pixelBuffer[0],
-                      datW,
-                      4 * sizeof(float),
-                      4 * m_width * sizeof(float));
-
-                    Imf::Slice gSlice = Imf::Slice::Make(
-                      Imf::PixelType::FLOAT,
-                      &m_pixelBuffer[1],
-                      datW,
-                      4 * sizeof(float),
-                      4 * m_width * sizeof(float));
-
-                    Imf::Slice bSlice = Imf::Slice::Make(
-                      Imf::PixelType::FLOAT,
-                      &m_pixelBuffer[2],
-                      datW,
-                      4 * sizeof(float),
-                      4 * m_width * sizeof(float));
-
-                    framebuffer.insert(rLayer, rSlice);
-                    framebuffer.insert(gLayer, gSlice);
-                    framebuffer.insert(bLayer, bSlice);
-
-                    part.setFrameBuffer(framebuffer);
-                    part.readPixels(datW.min.y, datW.max.y);
-
-                    // Handle custom chromaticities
-                    Imath::M44f RGB_XYZ = Imf::RGBtoXYZ(chromaticities, 1.f);
-                    Imath::M44f XYZ_RGB
-                      = Imf::XYZtoRGB(Imf::Chromaticities(), 1.f);
-
-                    Imath::M44f conversionMatrix = RGB_XYZ * XYZ_RGB;
-
-#pragma omp parallel for
-                    for (int y = 0; y < m_height; y++) {
-                        for (int x = 0; x < m_width; x++) {
-                            const float r
-                              = m_pixelBuffer[4 * (y * m_width + x) + 0];
-                            const float g
-                              = m_pixelBuffer[4 * (y * m_width + x) + 1];
-                            const float b
-                              = m_pixelBuffer[4 * (y * m_width + x) + 2];
-
-                            Imath::V3f rgb(r, g, b);
-                            rgb *= conversionMatrix;
-
-                            m_pixelBuffer[4 * (y * m_width + x) + 0] = rgb.x;
-                            m_pixelBuffer[4 * (y * m_width + x) + 1] = rgb.y;
-                            m_pixelBuffer[4 * (y * m_width + x) + 2] = rgb.z;
-                        }
-                    }
-                } break;
-
-                case Layer_YC: {
-                    std::string yLayer  = m_parentLayer + "Y";
-                    std::string ryLayer = m_parentLayer + "RY";
-                    std::string byLayer = m_parentLayer + "BY";
-
-                    Imf::FrameBuffer framebuffer;
-
-                    std::vector<Imf::Rgba> buff1(m_width * m_height);
-                    std::vector<Imf::Rgba> buff2(m_width * m_height);
-
-                    std::vector<float> yBuffer(m_width * m_height);
-                    std::vector<float> ryBuffer(m_width / 2 * m_height / 2);
-                    std::vector<float> byBuffer(m_width / 2 * m_height / 2);
-
-                    Imf::Slice ySlice = Imf::Slice::Make(
-                      Imf::PixelType::FLOAT,
-                      &yBuffer[0],
-                      datW,
-                      sizeof(float),
-                      m_width * sizeof(float));
-
-                    Imf::Slice rySlice = Imf::Slice::Make(
-                      Imf::PixelType::FLOAT,
-                      &ryBuffer[0],
-                      datW,
-                      sizeof(float),
-                      m_width / 2 * sizeof(float),
-                      2,
-                      2);
-
-                    Imf::Slice bySlice = Imf::Slice::Make(
-                      Imf::PixelType::FLOAT,
-                      &byBuffer[0],
-                      datW,
-                      sizeof(float),
-                      m_width / 2 * sizeof(float),
-                      2,
-                      2);
-
-                    framebuffer.insert(yLayer, ySlice);
-                    framebuffer.insert(ryLayer, rySlice);
-                    framebuffer.insert(byLayer, bySlice);
-
-                    part.setFrameBuffer(framebuffer);
-                    part.readPixels(datW.min.y, datW.max.y);
-
-// Filling missing values for chroma in the image
-// TODO: now, naive reconstruction.
-// Use later Imf::RgbaYca::reconstructChromaHoriz and
-// Imf::RgbaYca::reconstructChromaVert to reconstruct missing
-// pixels
-#pragma omp parallel for
-                    for (int y = 0; y < m_height; y++) {
-                        for (int x = 0; x < m_width; x++) {
-                            const float l = yBuffer[y * m_width + x];
-
-                            /*
-                            float ry = 0, by = 0;
-
-                            if (y % 2 == 0) {
-                                if (x % 2 == 0) {
-                                    ry = ryBuffer[y / 2 * m_width / 2 + x / 2];
-                                    by = byBuffer[y / 2 * m_width / 2 + x / 2];
-                                } else {
-                                    ry = .5 * (ryBuffer[y / 2 * m_width / 2 + x / 2] + ryBuffer[y / 2 * m_width / 2 + x / 2 + 1]);
-                                    by = .5 * (byBuffer[y / 2 * m_width / 2 + x / 2] + byBuffer[y / 2 * m_width / 2 + x / 2 + 1]);
-                                }
-                            } else {
-                                if (x % 2 == 0) {
-                                    ry = .5 * (ryBuffer[y / 2 * m_width / 2 + x / 2] + ryBuffer[(y / 2 + 1) * m_width / 2 + x / 2]);
-                                    by = .5 * (byBuffer[y / 2 * m_width / 2 + x / 2] + byBuffer[(y / 2 + 1) * m_width / 2 + x / 2]);
-                                } else {
-                                    ry = .25 * (ryBuffer[y / 2 * m_width / 2 + x / 2] + ryBuffer[(y / 2 + 1) * m_width / 2 + x / 2] + ryBuffer[y / 2 * m_width / 2 + x / 2 + 1] + ryBuffer[(y / 2 + 1) * m_width / 2 + x / 2 + 1]);
-                                    by = .25 * (byBuffer[y / 2 * m_width / 2 + x / 2] + byBuffer[(y / 2 + 1) * m_width / 2 + x / 2] + byBuffer[y / 2 * m_width / 2 + x / 2 + 1] + byBuffer[(y / 2 + 1) * m_width / 2 + x / 2 + 1]);
-                                }
-                            }
-                            */
-
-                            const float ry
-                              = ryBuffer[y / 2 * m_width / 2 + x / 2];
-                            const float by
-                              = byBuffer[y / 2 * m_width / 2 + x / 2];
-
-                            buff1[y * m_width + x].r = ry;
-                            buff1[y * m_width + x].g = l;
-                            buff1[y * m_width + x].b = by;
-                            // Do not forget the alpha values read earlier
-                            buff1[y * m_width + x].a
-                              = m_pixelBuffer[4 * (y * m_width + x) + 3];
-                        }
-                    }
-
-                    Imath::V3f yw = Imf::RgbaYca::computeYw(chromaticities);
-
-// Proceed to the YCA -> RGBA conversion
-#pragma omp parallel for
-                    for (int y = 0; y < m_height; y++) {
-                        Imf::RgbaYca::YCAtoRGBA(
-                          yw,
-                          m_width,
-                          &buff1[y * m_width],
-                          &buff1[y * m_width]);
-                    }
-
-// Fix over saturated pixels
-#pragma omp parallel for
-                    for (int y = 0; y < m_height; y++) {
-                        const Imf::Rgba* scanlines[3];
-
-                        if (y == 0) {
-                            scanlines[0] = &buff1[(y + 1) * m_width];
-                        } else {
-                            scanlines[0] = &buff1[(y - 1) * m_width];
-                        }
-
-                        scanlines[1] = &buff1[y * m_width];
-
-                        if (y == m_height - 1) {
-                            scanlines[2] = &buff1[(y - 1) * m_width];
-                        } else {
-                            scanlines[2] = &buff1[(y + 1) * m_width];
-                        }
-
-                        Imf::RgbaYca::fixSaturation(
-                          yw,
-                          m_width,
-                          scanlines,
-                          &buff2[y * m_width]);
-                    }
-
-                    // Handle custom chromaticities
-                    Imath::M44f RGB_XYZ = Imf::RGBtoXYZ(chromaticities, 1.f);
-                    Imath::M44f XYZ_RGB
-                      = Imf::XYZtoRGB(Imf::Chromaticities(), 1.f);
-
-                    Imath::M44f conversionMatrix = RGB_XYZ * XYZ_RGB;
-
-#pragma omp parallel for
-                    for (int y = 0; y < m_height; y++) {
-                        for (int x = 0; x < m_width; x++) {
-                            Imath::V3f rgb(
-                              buff2[y * m_width + x].r,
-                              buff2[y * m_width + x].g,
-                              buff2[y * m_width + x].b);
-
-                            rgb = rgb * conversionMatrix;
-
-                            m_pixelBuffer[4 * (y * m_width + x) + 0] = rgb.x;
-                            m_pixelBuffer[4 * (y * m_width + x) + 1] = rgb.y;
-                            m_pixelBuffer[4 * (y * m_width + x) + 2] = rgb.z;
-                        }
-                    }
-                }
-
-                break;
-
-                case Layer_Y: {
-                    std::string yLayer = m_parentLayer;
-
-                    Imf::FrameBuffer framebuffer;
-
-                    Imf::Slice ySlice = Imf::Slice::Make(
-                      Imf::PixelType::FLOAT,
-                      &m_pixelBuffer[0],
-                      datW,
-                      4 * sizeof(float),
-                      4 * m_width * sizeof(float));
-
-                    framebuffer.insert(yLayer, ySlice);
-
-                    part.setFrameBuffer(framebuffer);
-                    part.readPixels(datW.min.y, datW.max.y);
-
-#pragma omp parallel for
-                    for (int i = 0; i < m_height * m_width; i++) {
-                        m_pixelBuffer[4 * i + 1] = m_pixelBuffer[4 * i + 0];
-                        m_pixelBuffer[4 * i + 2] = m_pixelBuffer[4 * i + 0];
-                        m_pixelBuffer[4 * i + 3] = 1.f;
-                    }
-                } break;
-            }
-
-            resetDatasetStats();
-            m_luminanceMin              = 0.;
-            m_luminanceMax              = 0.;
-            m_hasFiniteLuminanceSamples = false;
-
-            const int statsChannels = m_layerType == Layer_Y ? 1 : 3;
-
-            for (int i = 0; i < m_width * m_height; i++) {
-                for (int c = 0; c < statsChannels; c++) {
-                    collectDatasetStats(m_pixelBuffer[4 * i + c]);
-                }
-
-                const float y = ToneMapping::luminance(
-                  m_pixelBuffer[4 * i + 0],
-                  m_pixelBuffer[4 * i + 1],
-                  m_pixelBuffer[4 * i + 2]);
-
-                if (std::isfinite(y)) {
-                    if (!m_hasFiniteLuminanceSamples) {
-                        m_luminanceMin              = y;
-                        m_luminanceMax              = y;
-                        m_hasFiniteLuminanceSamples = true;
-                    }
-
-                    if (y < m_luminanceMin) m_luminanceMin = y;
-                    if (y > m_luminanceMax) m_luminanceMax = y;
-                }
-            }
-
-            m_image = QImage(m_width, m_height, QImage::Format_RGBA8888);
-            m_isImageLoaded = true;
-
-            emit imageLoaded();
-
-            updateImage();
-        } catch (std::exception& e) {
-            emit loadFailed(e.what());
-            return;
-        }
+    const auto layout = m_layerType == Layer_RGB ? FramebufferLoader::RGB
+                        : m_layerType == Layer_YC
+                          ? FramebufferLoader::Chroma
+                          : FramebufferLoader::Luminance;
+    startLoading([file, partId, channels, layout](const Cancellation& cancel) {
+        return FramebufferLoader::decode(
+          file,
+          partId,
+          layout,
+          channels,
+          cancel);
     });
-
-    m_imageLoadingWatcher->setFuture(imageLoading);
 }
 
 std::string RGBFramebufferModel::getColorInfo(int x, int y) const
 {
-    if (x < 0 || x >= width() || y < 0 || y >= height()) {
+    if (!isImageLoaded() || x < 0 || x >= width() || y < 0 || y >= height())
         return "";
-    }
-
-    std::stringstream ss;
-    ss << "x: " << x << " y: " << y << " | "
-       << " R: " << m_pixelBuffer[4 * (y * width() + x) + 0]
-       << " G: " << m_pixelBuffer[4 * (y * width() + x) + 1]
-       << " B: " << m_pixelBuffer[4 * (y * width() + x) + 2]
-       << " A: " << m_pixelBuffer[4 * (y * width() + x) + 3] << " Y: "
-       << ToneMapping::luminance(
-            m_pixelBuffer[4 * (y * width() + x) + 0],
-            m_pixelBuffer[4 * (y * width() + x) + 1],
-            m_pixelBuffer[4 * (y * width() + x) + 2]);
-
-    return ss.str();
+    const float*      pixel = &getRawPixels()[4 * (size_t(y) * width() + x)];
+    std::stringstream text;
+    text << "x: " << x << " y: " << y << " | "
+         << " R: " << pixel[0] << " G: " << pixel[1] << " B: " << pixel[2]
+         << " A: " << pixel[3]
+         << " Y: " << ToneMapping::luminance(pixel[0], pixel[1], pixel[2]);
+    return text.str();
 }
 
-
+float RGBFramebufferModel::component(int x, int y, int channel) const
+{
+    if (!isImageLoaded() || x < 0 || x >= width() || y < 0 || y >= height())
+        return 0.f;
+    return getRawPixels()[4 * (size_t(y) * width() + x) + channel];
+}
 float RGBFramebufferModel::getRedInfo(int x, int y) const
 {
-    if (x < 0 || x >= width() || y < 0 || y >= height()) {
-        return 0;
-    }
-
-    return m_pixelBuffer[4 * (y * width() + x) + 0];
+    return component(x, y, 0);
 }
-
-
 float RGBFramebufferModel::getGreenInfo(int x, int y) const
 {
-    if (x < 0 || x >= width() || y < 0 || y >= height()) {
-        return 0;
-    }
-
-    return m_pixelBuffer[4 * (y * width() + x) + 1];
+    return component(x, y, 1);
 }
-
-
 float RGBFramebufferModel::getBlueInfo(int x, int y) const
 {
-    if (x < 0 || x >= width() || y < 0 || y >= height()) {
-        return 0;
-    }
-
-    return m_pixelBuffer[4 * (y * width() + x) + 2];
+    return component(x, y, 2);
 }
-
 float RGBFramebufferModel::getAlphaInfo(int x, int y) const
 {
-    if (x < 0 || x >= width() || y < 0 || y >= height()) {
-        return 0;
-    }
-
-    return m_pixelBuffer[4 * (y * width() + x) + 3];
+    return component(x, y, 3);
 }
-
-
 std::vector<std::string> RGBFramebufferModel::rawChannelNames() const
 {
     return {"R", "G", "B", "A"};
 }
 
-
 void RGBFramebufferModel::setExposure(double value)
 {
-    if (m_exposure == value) return;
-
+    if (!std::isfinite(value) || m_exposure == value) return;
     m_exposure = value;
     updateImage();
 }
-
-
 void RGBFramebufferModel::setPreviewMode(PreviewMode mode)
 {
     if (m_previewMode == mode) return;
-
     m_previewMode = mode;
     updateImage();
 }
-
-
 void RGBFramebufferModel::setToneMappingMethod(ToneMappingMethod method)
 {
     if (m_toneMappingMethod == method) return;
-
     m_toneMappingMethod = method;
     updateImage();
 }
-
-
 void RGBFramebufferModel::setFalseColorColormap(ColormapModule::Map map)
 {
-    if (!m_isImageLoaded && !m_falseColorMap) {
-        m_falseColorMap.reset(ColormapModule::create(map));
-        return;
-    }
-
-    if (m_imageEditingWatcher->isRunning()) {
-        m_imageEditingWatcher->cancel();
-        m_imageEditingWatcher->waitForFinished();
-    }
-
     m_falseColorMap.reset(ColormapModule::create(map));
-
     updateImage();
 }
-
-
 void RGBFramebufferModel::setFalseColorRange(double min, double max)
 {
+    if (!std::isfinite(min) || !std::isfinite(max) || min > max) return;
     if (m_falseColorMin == min && m_falseColorMax == max) return;
-
     m_falseColorMin = min;
     m_falseColorMax = max;
     updateImage();
 }
-
-
 void RGBFramebufferModel::setToneParameters(
   double p0, double p1, double p2, double p3)
 {
+    const double values[] = {p0, p1, p2, p3};
+    for (double value : values)
+        if (!std::isfinite(value)) return;
     if (
       m_toneParams[0] == p0 && m_toneParams[1] == p1 && m_toneParams[2] == p2
-      && m_toneParams[3] == p3) {
+      && m_toneParams[3] == p3)
         return;
-    }
-
-    m_toneParams[0] = p0;
-    m_toneParams[1] = p1;
-    m_toneParams[2] = p2;
-    m_toneParams[3] = p3;
+    std::copy(values, values + 4, m_toneParams);
     updateImage();
 }
 
 void RGBFramebufferModel::updateImage()
 {
-    if (!m_isImageLoaded) {
-        return;
-    }
-
-    // Several call can occur within a short time e.g., when changing exposure
-    // Ensure to cancel any previous running conversion and wait for the
-    // process to end
-    if (m_imageEditingWatcher->isRunning()) {
-        m_imageEditingWatcher->cancel();
-        m_imageEditingWatcher->waitForFinished();
-    }
-
-    const PreviewMode       previewMode       = m_previewMode;
-    const ToneMappingMethod toneMappingMethod = m_toneMappingMethod;
-    const float             exposureMul       = std::exp2(m_exposure);
-    const float             toneParam0        = m_toneParams[0];
-    const float             toneParam1        = m_toneParams[1];
-    const float             toneParam2        = m_toneParams[2];
-    const float             toneParam3        = m_toneParams[3];
-    const float             falseColorMin     = m_falseColorMin;
-    const float             falseColorMax = m_falseColorMax > m_falseColorMin
-                                              ? m_falseColorMax
-                                              : m_falseColorMin + 0.001;
-    const Colormap*         falseColorMap = m_falseColorMap.get();
-    const int               width         = m_width;
-    const int               height        = m_height;
-    const QImage::Format    format        = m_image.format();
-    const quint64           generation    = nextRenderGeneration();
-
-    QFuture<void> imageConverting = QtConcurrent::run([=]() {
-        QImage image(width, height, format);
-
-        for (int y = 0; y < height; y++) {
-            unsigned char* line = image.scanLine(y);
-
-#pragma omp parallel for
-            for (int x = 0; x < width; x++) {
-                const float sourceR = m_pixelBuffer[4 * (y * width + x) + 0];
-                const float sourceG = m_pixelBuffer[4 * (y * width + x) + 1];
-                const float sourceB = m_pixelBuffer[4 * (y * width + x) + 2];
-
-                float r = ColorTransform::to_sRGB(exposureMul * sourceR);
-                float g = ColorTransform::to_sRGB(exposureMul * sourceG);
-                float b = ColorTransform::to_sRGB(exposureMul * sourceB);
-
-                if (previewMode == Preview_ToneMapping) {
-                    r = ToneMapping::toSrgb(
-                      sourceR,
-                      toneMappingMethod,
-                      toneParam0,
-                      toneParam1,
-                      toneParam2,
-                      toneParam3);
-                    g = ToneMapping::toSrgb(
-                      sourceG,
-                      toneMappingMethod,
-                      toneParam0,
-                      toneParam1,
-                      toneParam2,
-                      toneParam3);
-                    b = ToneMapping::toSrgb(
-                      sourceB,
-                      toneMappingMethod,
-                      toneParam0,
-                      toneParam1,
-                      toneParam2,
-                      toneParam3);
-                }
-
-                if (previewMode == Preview_FalseColor && falseColorMap) {
-                    const float sourceY
-                      = ToneMapping::luminance(sourceR, sourceG, sourceB);
-                    float RGB[3] = {0.f, 0.f, 0.f};
-
-                    falseColorMap->getRGBValue(
-                      std::isfinite(sourceY) ? sourceY : falseColorMin,
-                      falseColorMin,
-                      falseColorMax,
-                      RGB);
-
-                    r = RGB[0];
-                    g = RGB[1];
-                    b = RGB[2];
-                }
-
-                const float a = m_pixelBuffer[4 * (y * width + x) + 3];
-
-                line[4 * x + 0] = ToneMapping::toByte(r);
-                line[4 * x + 1] = ToneMapping::toByte(g);
-                line[4 * x + 2] = ToneMapping::toByte(b);
-                line[4 * x + 3] = ToneMapping::toByte(a);
-            }
-
-            if (m_imageEditingWatcher->isCanceled()) {
-                break;
-            }
-        }
-
-        if (!m_imageEditingWatcher->isCanceled()) {
-            emit imageRendered(image, generation);
-        }
-    });
-
-    m_imageEditingWatcher->setFuture(imageConverting);
+    if (!isImageLoaded()) return;
+    const auto                 data     = m_data;
+    const auto                 mode     = m_previewMode;
+    const auto                 method   = m_toneMappingMethod;
+    const float                exposure = std::exp2(m_exposure);
+    const std::array<float, 4> params   = {
+      {float(m_toneParams[0]),
+       float(m_toneParams[1]),
+       float(m_toneParams[2]),
+       float(m_toneParams[3])}};
+    const double minimum  = m_falseColorMin;
+    const double maximum  = m_falseColorMax;
+    const auto   colormap = m_falseColorMap;
+    requestRender(
+      [data, mode, method, exposure, params, minimum, maximum, colormap](
+        const Cancellation& cancel) {
+          QImage image(data->width, data->height, QImage::Format_RGBA8888);
+          if (image.isNull()) return image;
+          uchar*     bits    = image.bits();
+          const auto stride  = image.bytesPerLine();
+          const int  threads = renderThreadCount();
+          Q_UNUSED(threads);
+#pragma omp parallel for num_threads(                                          \
+    threads) if (data->pixels.size() >= 1048576)
+          for (int y = 0; y < data->height; ++y) {
+              if (cancel->load()) continue;
+              uchar*       line = bits + size_t(y) * stride;
+              const float* pixels
+                = data->pixels.data() + size_t(y) * data->width * 4;
+              for (int x = 0; x < data->width; ++x) {
+                  const float* pixel = pixels + 4 * x;
+                  float        rgb[3];
+                  if (mode == Preview_FalseColor) {
+                      colormap->getRGBValue(
+                        ToneMapping::luminance(pixel[0], pixel[1], pixel[2]),
+                        minimum,
+                        maximum,
+                        rgb);
+                  } else {
+                      for (int c = 0; c < 3; ++c)
+                          rgb[c]
+                            = mode == Preview_ToneMapping
+                                ? ToneMapping::toSrgb(
+                                    pixel[c],
+                                    method,
+                                    params[0],
+                                    params[1],
+                                    params[2],
+                                    params[3])
+                                : ColorTransform::to_sRGB(exposure * pixel[c]);
+                  }
+                  for (int c = 0; c < 3; ++c)
+                      line[4 * x + c] = ToneMapping::toByte(rgb[c]);
+                  line[4 * x + 3] = ToneMapping::toByte(pixel[3]);
+              }
+          }
+          return cancel->load() ? QImage() : image;
+      });
 }

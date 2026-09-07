@@ -31,237 +31,101 @@
  */
 
 #include "YFramebufferModel.h"
-
-#include <util/ColormapModule.h>
-
-#include <QFuture>
-#include <QtConcurrent/QtConcurrent>
-
-#include <OpenEXR/ImfAttribute.h>
-#include <OpenEXR/ImfFrameBuffer.h>
-#include <OpenEXR/ImfHeader.h>
-#include <OpenEXR/ImfInputPart.h>
-
-#include <Imath/ImathBox.h>
+#include "FramebufferLoader.h"
+#include "ToneMapping.h"
+#include <cmath>
+#include <sstream>
 
 YFramebufferModel::YFramebufferModel(
   const std::string& layerName, QObject* parent)
   : FramebufferModel(parent)
+  , m_partID(0)
   , m_layer(layerName)
-  , m_min(0.f)
-  , m_max(1.f)
+  , m_min(0.)
+  , m_max(1.)
   , m_cmap(ColormapModule::create("grayscale"))
 {}
+YFramebufferModel::~YFramebufferModel() = default;
 
-YFramebufferModel::~YFramebufferModel()
+void YFramebufferModel::load(
+  const std::shared_ptr<ExrInput>& file, int partId)
 {
-    waitForBackgroundTasks();
-}
-
-void YFramebufferModel::load(Imf::MultiPartInputFile& file, int partId)
-{
-    QFuture<void> imageLoading = QtConcurrent::run([this, &file, partId]() {
-        try {
-            Imf::InputPart part(file, partId);
-
-            Imath::Box2i datW = part.header().dataWindow();
-            m_width           = datW.max.x - datW.min.x + 1;
-            m_height          = datW.max.y - datW.min.y + 1;
-
-            m_pixelAspectRatio = part.header().pixelAspectRatio();
-
-            Imf::Slice graySlice;
-            // TODO: Check it that can be guess from the header
-            // also, check if this can be nested
-            if (m_layer == "BY" || m_layer == "RY") {
-                m_width /= 2;
-                m_height /= 2;
-
-                m_dataWindow = QRect(datW.min.x, datW.min.y, m_width, m_height);
-
-                Imath::Box2i dispW = part.header().displayWindow();
-
-                int dispW_width  = dispW.max.x - dispW.min.x + 1;
-                int dispW_height = dispW.max.y - dispW.min.y + 1;
-
-                m_displayWindow = QRect(
-                  dispW.min.x,
-                  dispW.min.y,
-                  dispW_width / 2,
-                  dispW_height / 2);
-
-                // Check to avoid type overflow, width and height are 32bits int
-                // representing a 2 dimentional image. Can overflow the type when
-                // multiplied together
-                // TODO: Use larger type when manipulating framebuffer
-                const uint64_t partial_size
-                  = (uint64_t)m_width * (uint64_t)m_height;
-
-                if (partial_size > 0x7FFFFFFF) {
-                    throw std::runtime_error(
-                      "The total image size is too large. May be supported in "
-                      "a future revision.");
-                }
-
-                m_pixelBuffer.resize(m_width * m_height);
-
-                // Luminance Chroma channels
-                graySlice = Imf::Slice::Make(
-                  Imf::PixelType::FLOAT,
-                  m_pixelBuffer.data(),
-                  datW,
-                  sizeof(float),
-                  m_width * sizeof(float),
-                  2,
-                  2);
-            } else {
-                m_dataWindow = QRect(datW.min.x, datW.min.y, m_width, m_height);
-
-                Imath::Box2i dispW = part.header().displayWindow();
-
-                int dispW_width  = dispW.max.x - dispW.min.x + 1;
-                int dispW_height = dispW.max.y - dispW.min.y + 1;
-
-                m_displayWindow
-                  = QRect(dispW.min.x, dispW.min.y, dispW_width, dispW_height);
-
-                m_pixelBuffer.resize(m_width * m_height);
-
-                graySlice = Imf::Slice::Make(
-                  Imf::PixelType::FLOAT,
-                  m_pixelBuffer.data(),
-                  datW);
-            }
-
-            Imf::FrameBuffer framebuffer;
-
-            framebuffer.insert(m_layer, graySlice);
-
-            part.setFrameBuffer(framebuffer);
-            part.readPixels(datW.min.y, datW.max.y);
-
-            resetDatasetStats();
-
-            for (int i = 0; i < m_width * m_height; i++) {
-                collectDatasetStats(m_pixelBuffer[i]);
-            }
-
-            m_image         = QImage(m_width, m_height, QImage::Format_RGB888);
-            m_isImageLoaded = true;
-
-            emit imageLoaded();
-
-            updateImage();
-        } catch (std::exception& e) {
-            emit loadFailed(e.what());
-            return;
-        }
+    m_partID                                  = partId;
+    const std::array<std::string, 4> channels = {{m_layer, "", "", ""}};
+    startLoading([file, partId, channels](const Cancellation& cancel) {
+        return FramebufferLoader::decode(
+          file,
+          partId,
+          FramebufferLoader::Scalar,
+          channels,
+          cancel);
     });
-
-    m_imageLoadingWatcher->setFuture(imageLoading);
 }
 
 std::string YFramebufferModel::getColorInfo(int x, int y) const
 {
-    if (x < 0 || x >= width() || y < 0 || y >= height()) {
+    if (!isImageLoaded() || x < 0 || x >= width() || y < 0 || y >= height())
         return "";
-    }
-
-    std::stringstream ss;
-    ss << "x: " << x << " y: " << y << " | "
-       << "value = " << m_pixelBuffer[y * width() + x];
-
-    return ss.str();
+    std::stringstream text;
+    text << "x: " << x << " y: " << y
+         << " | value = " << getRawPixels()[size_t(y) * width() + x];
+    return text.str();
 }
-
-
 std::vector<std::string> YFramebufferModel::rawChannelNames() const
 {
-    return {m_layer.empty() ? "Y" : m_layer};
+    return {m_layer};
 }
-
-
 void YFramebufferModel::setMinValue(double value)
 {
-    m_min = value;
-    updateImage();
+    setRange(value, m_max);
 }
-
 void YFramebufferModel::setMaxValue(double value)
 {
-    m_max = value;
+    setRange(m_min, value);
+}
+void YFramebufferModel::setRange(double min, double max)
+{
+    if (!std::isfinite(min) || !std::isfinite(max) || min > max) return;
+    if (m_min == min && m_max == max) return;
+    m_min = min;
+    m_max = max;
     updateImage();
 }
-
 void YFramebufferModel::setColormap(ColormapModule::Map map)
 {
-    if (!m_isImageLoaded) {
-        return;
-    }
-
-    // Several calls can occur within a short time e.g., when changing exposure
-    // Ensure to cancel any previous running conversion and wait for the
-    // process to end
-    // Also, bad idea to change the colormap if a process is using it
-    if (m_imageEditingWatcher->isRunning()) {
-        m_imageEditingWatcher->cancel();
-        m_imageEditingWatcher->waitForFinished();
-    }
-
     m_cmap.reset(ColormapModule::create(map));
-
     updateImage();
 }
-
 void YFramebufferModel::updateImage()
 {
-    if (!m_isImageLoaded) {
-        return;
-    }
-
-    // Several calls can occur within a short time e.g., when changing exposure
-    // Ensure to cancel any previous running conversion and wait for the
-    // process to end
-    if (m_imageEditingWatcher->isRunning()) {
-        m_imageEditingWatcher->cancel();
-        m_imageEditingWatcher->waitForFinished();
-    }
-
-    const int            width      = m_width;
-    const int            height     = m_height;
-    const QImage::Format format     = m_image.format();
-    const double         min        = m_min;
-    const double         max        = m_max;
-    const Colormap*      colormap   = m_cmap.get();
-    const quint64        generation = nextRenderGeneration();
-
-    QFuture<void> imageConverting = QtConcurrent::run([=]() {
-        QImage image(width, height, format);
-
-        for (int y = 0; y < height; y++) {
-            unsigned char* line = image.scanLine(y);
-
-#pragma omp parallel for
-            for (int x = 0; x < width; x++) {
-                float value = m_pixelBuffer[y * width + x];
-                float RGB[3];
-
-                colormap->getRGBValue(value, min, max, RGB);
-
-                for (int c = 0; c < 3; c++) {
-                    line[3 * x + c] = qMax(0, qMin(255, int(255 * RGB[c])));
-                }
-            }
-
-            if (m_imageEditingWatcher->isCanceled()) {
-                break;
-            }
-        }
-
-        if (!m_imageEditingWatcher->isCanceled()) {
-            emit imageRendered(image, generation);
-        }
-    });
-
-    m_imageEditingWatcher->setFuture(imageConverting);
+    if (!isImageLoaded()) return;
+    const auto   data     = m_data;
+    const double minimum  = m_min;
+    const double maximum  = m_max;
+    const auto   colormap = m_cmap;
+    requestRender(
+      [data, minimum, maximum, colormap](const Cancellation& cancel) {
+          QImage image(data->width, data->height, QImage::Format_RGB888);
+          if (image.isNull()) return image;
+          uchar*     bits    = image.bits();
+          const auto stride  = image.bytesPerLine();
+          const int  threads = renderThreadCount();
+          Q_UNUSED(threads);
+#pragma omp parallel for num_threads(threads) if (data->pixels.size() >= 262144)
+          for (int y = 0; y < data->height; ++y) {
+              if (cancel->load()) continue;
+              uchar* line = bits + size_t(y) * stride;
+              for (int x = 0; x < data->width; ++x) {
+                  float rgb[3];
+                  colormap->getRGBValue(
+                    data->pixels[size_t(y) * data->width + x],
+                    minimum,
+                    maximum,
+                    rgb);
+                  for (int c = 0; c < 3; ++c)
+                      line[3 * x + c] = ToneMapping::toByte(rgb[c]);
+              }
+          }
+          return cancel->load() ? QImage() : image;
+      });
 }

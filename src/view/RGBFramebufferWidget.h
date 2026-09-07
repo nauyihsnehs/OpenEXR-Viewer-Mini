@@ -34,6 +34,7 @@
 
 #include <QPoint>
 #include <QWidget>
+#include "PreviewState.h"
 #include <model/framebuffer/RGBFramebufferModel.h>
 
 class QEvent;
@@ -56,7 +57,9 @@ class RGBFramebufferWidget: public QWidget
 
     void                    setModel(RGBFramebufferModel* model);
     const FramebufferModel* framebufferModel() const { return m_model; }
-    void setPreviewMode(RGBFramebufferModel::PreviewMode mode);
+    void         setPreviewMode(RGBFramebufferModel::PreviewMode mode);
+    PreviewState previewState() const;
+    void         restorePreviewState(const PreviewState& state);
 
   signals:
     void openFileOnDropEvent(const QString& filename);
@@ -95,7 +98,7 @@ class RGBFramebufferWidget: public QWidget
     void on_toneParamButton3_clicked();
 
     void onOpenFileOnDropEvent(const QString& filename);
-    void onControlWheel(int delta);
+    void onControlWheel(double steps);
     void updateZoomLevelText(double zoom);
     void updateFramebufferSummary();
     void updateFalseColorRangeBounds();
@@ -115,12 +118,12 @@ class RGBFramebufferWidget: public QWidget
     QDoubleSpinBox* compactSpinBox(QObject* watched) const;
     void            updateToneMappingControls();
     void            configureToneParam(
-                 int            index,
-                 const QString& label,
-                 double         minimum,
-                 double         maximum,
-                 double         step,
-                 double         value);
+      int            index,
+      const QString& label,
+      double         minimum,
+      double         maximum,
+      double         step,
+      double         value);
     void                hideToneParams(int firstHiddenIndex);
     void                setToneParamValue(int index, double value);
     void                setToneClampRange(double min, double max);

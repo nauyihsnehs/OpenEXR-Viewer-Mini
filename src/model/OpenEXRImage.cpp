@@ -44,6 +44,13 @@
 #include <stdexcept>
 #include <utility>
 
+#ifdef _WIN32
+#    define NOMINMAX
+#    include <windows.h>
+#    include <fcntl.h>
+#    include <io.h>
+#endif
+
 
 class QFileIStream: public Imf::IStream
 {
@@ -53,11 +60,29 @@ class QFileIStream: public Imf::IStream
       , m_file(file)
     {}
 
-    bool read(char c[], int n) override { return m_file.read(c, n) == n; }
+    bool read(char c[], int n) override
+    {
+        if (n < 0 || m_file.read(c, n) != n)
+            throw std::runtime_error(
+              "Unexpected end of EXR file or read error.");
+        return !m_file.atEnd();
+    }
 
-    uint64_t tellg() override { return static_cast<uint64_t>(m_file.pos()); }
+    uint64_t tellg() override
+    {
+        const qint64 pos = m_file.pos();
+        if (pos < 0)
+            throw std::runtime_error("Cannot query EXR file position.");
+        return static_cast<uint64_t>(pos);
+    }
 
-    void seekg(uint64_t pos) override { m_file.seek(static_cast<qint64>(pos)); }
+    void seekg(uint64_t pos) override
+    {
+        if (
+          pos > uint64_t(m_file.size())
+          || !m_file.seek(static_cast<qint64>(pos)))
+            throw std::runtime_error("Cannot seek in EXR file.");
+    }
 
     bool isMemoryMapped() const override { return false; }
 
@@ -71,9 +96,38 @@ OpenEXRImage::OpenEXRImage(const QString& filename, QObject* parent)
   , m_filename(filename)
   , m_isStream(false)
 {
-    std::unique_ptr<QFile> file(new QFile(filename));
+    std::shared_ptr<QFile> file(new QFile(filename));
 
-    if (!file->open(QFile::ReadOnly)) {
+#ifdef _WIN32
+    // Permit render tools to atomically replace a file while its old snapshot is open.
+    const HANDLE handle = CreateFileW(
+      reinterpret_cast<LPCWSTR>(filename.utf16()),
+      GENERIC_READ,
+      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+      nullptr,
+      OPEN_EXISTING,
+      FILE_ATTRIBUTE_NORMAL,
+      nullptr);
+    if (handle == INVALID_HANDLE_VALUE)
+        throw std::runtime_error(
+          QString("Cannot read image file \"%1\" (Windows error %2).")
+            .arg(filename)
+            .arg(GetLastError())
+            .toStdString());
+    const int descriptor = _open_osfhandle(
+      reinterpret_cast<intptr_t>(handle),
+      _O_RDONLY | _O_BINARY);
+    if (descriptor == -1) {
+        CloseHandle(handle);
+        throw std::runtime_error("Cannot open EXR file handle.");
+    }
+    const bool opened
+      = file->open(descriptor, QFile::ReadOnly, QFileDevice::AutoCloseHandle);
+    if (!opened) _close(descriptor);
+#else
+    const bool opened = file->open(QFile::ReadOnly);
+#endif
+    if (!opened) {
         throw std::runtime_error(QString("Cannot read image file \"%1\". %2.")
                                    .arg(filename, file->errorString())
                                    .toStdString());
@@ -81,18 +135,19 @@ OpenEXRImage::OpenEXRImage(const QString& filename, QObject* parent)
 
     m_streamName = filename.toUtf8();
 
-    std::unique_ptr<Imf::IStream> stream(new QFileIStream(m_streamName, *file));
-    std::unique_ptr<Imf::MultiPartInputFile> exrIn(
-      new Imf::MultiPartInputFile(*stream));
+    std::shared_ptr<Imf::IStream> stream(new QFileIStream(m_streamName, *file));
+    std::shared_ptr<Imf::MultiPartInputFile> exrIn(
+      new Imf::MultiPartInputFile(*stream),
+      [file, stream](Imf::MultiPartInputFile* input) {
+          delete input;
+      });
     std::unique_ptr<HeaderModel> headerModel(
       new HeaderModel(*exrIn, exrIn->parts(), nullptr));
     std::unique_ptr<LayerModel> layerModel(new LayerModel(*exrIn, nullptr));
 
     headerModel->addFile(*exrIn, filename);
 
-    m_file        = std::move(file);
-    m_stream      = std::move(stream);
-    m_exrIn       = std::move(exrIn);
+    m_input->file = std::move(exrIn);
     m_headerModel = std::move(headerModel);
     m_layerModel  = std::move(layerModel);
 }
@@ -102,17 +157,19 @@ OpenEXRImage::OpenEXRImage(std::istream& stream, QObject* parent)
   : QObject(parent)
   , m_isStream(true)
 {
-    std::unique_ptr<Imf::IStream> inputStream(new StdIStream(stream));
-    std::unique_ptr<Imf::MultiPartInputFile> exrIn(
-      new Imf::MultiPartInputFile(*inputStream));
+    std::shared_ptr<Imf::IStream> inputStream(new StdIStream(stream));
+    std::shared_ptr<Imf::MultiPartInputFile> exrIn(
+      new Imf::MultiPartInputFile(*inputStream),
+      [inputStream](Imf::MultiPartInputFile* input) {
+          delete input;
+      });
     std::unique_ptr<HeaderModel> headerModel(
       new HeaderModel(*exrIn, exrIn->parts(), nullptr));
     std::unique_ptr<LayerModel> layerModel(new LayerModel(*exrIn, nullptr));
 
     headerModel->addFile(*exrIn, "Stream");
 
-    m_stream      = std::move(inputStream);
-    m_exrIn       = std::move(exrIn);
+    m_input->file = std::move(exrIn);
     m_headerModel = std::move(headerModel);
     m_layerModel  = std::move(layerModel);
 }

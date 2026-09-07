@@ -65,6 +65,7 @@ QSize RangeSliderWidget::sizeHint() const
 
 void RangeSliderWidget::setBounds(double min, double max)
 {
+    if (!std::isfinite(min) || !std::isfinite(max)) return;
     if (min > max) std::swap(min, max);
     if (min == max) max = min + 1.;
 
@@ -81,6 +82,7 @@ void RangeSliderWidget::setBounds(double min, double max)
 
 void RangeSliderWidget::setRange(double min, double max)
 {
+    if (!std::isfinite(min) || !std::isfinite(max)) return;
     if (min > max) std::swap(min, max);
 
     m_min = std::max(m_boundMin, std::min(min, m_boundMax));
@@ -108,16 +110,16 @@ int RangeSliderWidget::positionFromValue(double value) const
     const double a    = span > 0. ? (value - m_boundMin) / span : 0.;
 
     return trackLeft()
-      + static_cast<int>(std::round(a * (trackRight() - trackLeft())));
+           + static_cast<int>(std::round(a * (trackRight() - trackLeft())));
 }
 
 
 double RangeSliderWidget::valueFromPosition(int x) const
 {
-    const int left  = trackLeft();
-    const int right = trackRight();
-    const int pos   = std::max(left, std::min(x, right));
-    const double a  = double(pos - left) / double(right - left);
+    const int    left  = trackLeft();
+    const int    right = trackRight();
+    const int    pos   = std::max(left, std::min(x, right));
+    const double a     = double(pos - left) / double(right - left);
 
     return m_boundMin + a * (m_boundMax - m_boundMin);
 }
@@ -134,6 +136,8 @@ RangeSliderWidget::Handle RangeSliderWidget::nearestHandle(int x) const
 
 void RangeSliderWidget::setRangeFromHandle(Handle handle, double value)
 {
+    const double previousMin = m_min;
+    const double previousMax = m_max;
     if (handle == Handle_Min) {
         m_min = std::max(m_boundMin, std::min(value, m_max));
     }
@@ -142,13 +146,19 @@ void RangeSliderWidget::setRangeFromHandle(Handle handle, double value)
         m_max = std::min(m_boundMax, std::max(value, m_min));
     }
 
-    update();
-    emit rangeChanged(m_min, m_max);
+    if (previousMin != m_min || previousMax != m_max) {
+        update();
+        emit rangeChanged(m_min, m_max);
+    }
 }
 
 
 void RangeSliderWidget::mousePressEvent(QMouseEvent* event)
 {
+    if (event->button() != Qt::LeftButton) {
+        event->ignore();
+        return;
+    }
     m_activeHandle = nearestHandle(event->pos().x());
     setRangeFromHandle(m_activeHandle, valueFromPosition(event->pos().x()));
 }
@@ -156,7 +166,8 @@ void RangeSliderWidget::mousePressEvent(QMouseEvent* event)
 
 void RangeSliderWidget::mouseMoveEvent(QMouseEvent* event)
 {
-    if (m_activeHandle == Handle_None) return;
+    if (m_activeHandle == Handle_None || !(event->buttons() & Qt::LeftButton))
+        return;
 
     setRangeFromHandle(m_activeHandle, valueFromPosition(event->pos().x()));
 }

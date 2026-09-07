@@ -31,37 +31,35 @@
  */
 
 #pragma once
-
 #include <QGraphicsView>
-
+#include <QPointer>
 #include <model/framebuffer/FramebufferModel.h>
-
-#include <iostream>
 
 class GraphicsView: public QGraphicsView
 {
     Q_OBJECT
   public:
-    GraphicsView(QWidget* parent = nullptr);
-    virtual ~GraphicsView();
-
-    bool isDisplayWindowVisible() const { return _showDisplayWindow; }
-    bool isDataWindowVisible() const { return _showDataWindow; }
+    struct ViewState {
+        double  zoom = 1.;
+        bool    fit  = true;
+        QPointF center;
+        bool    dataWindow    = true;
+        bool    displayWindow = true;
+    };
+    explicit GraphicsView(QWidget* parent = nullptr);
+    bool      isDisplayWindowVisible() const { return _showDisplayWindow; }
+    bool      isDataWindowVisible() const { return _showDataWindow; }
+    ViewState viewState() const;
+    void      restoreViewState(const ViewState& state);
 
   public slots:
     void setModel(const FramebufferModel* model);
-
     void onImageLoaded();
     void onImageChanged();
-
     void setZoomLevel(double zoom);
     void zoomIn();
     void zoomOut();
-
     void autoscale();
-
-    void open(const QString& filename);
-
     void showDisplayWindow(bool show);
     void showDataWindow(bool show);
 
@@ -69,40 +67,35 @@ class GraphicsView: public QGraphicsView
     void zoomLevelChanged(double zoom);
     void openFileOnDropEvent(const QString& filename);
     void queryPixelInfo(int x, int y);
-    void controlWheel(int delta);
+    void controlWheel(double steps);
 
   protected:
     void wheelEvent(QWheelEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
-
+    void keyPressEvent(QKeyEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
-
-    void dropEvent(QDropEvent* ev) override;
-    void dragEnterEvent(QDragEnterEvent* ev) override;
-
-    virtual void drawBackground(QPainter* painter, const QRectF& rect) override;
-    virtual void drawForeground(QPainter* painter, const QRectF& rect) override;
-
-    virtual void scrollContentsBy(int dx, int dy) override;
+    void leaveEvent(QEvent* event) override;
+    void dropEvent(QDropEvent* event) override;
+    void dragEnterEvent(QDragEnterEvent* event) override;
+    void dragMoveEvent(QDragMoveEvent* event) override;
+    void drawBackground(QPainter* painter, const QRectF& rect) override;
+    void drawForeground(QPainter* painter, const QRectF& rect) override;
+    void scrollContentsBy(int dx, int dy) override;
 
   private:
-    double autoscaleZoomLevel();
-
-    const FramebufferModel* _model;
-    QGraphicsPixmapItem*    _imageItem;
-    //    QGraphicsRectItem *_datawindowItem;
-    //    QGraphicsRectItem *_displaywindowItem;
-
-    QPoint _startDrag;
-
-    double _zoomLevel;
-    bool   _autoscale;
-
-    QRectF _dataWindow;
-    QRectF _displayWindow;
-
-    bool _showDataWindow;
-    bool _showDisplayWindow;
+    QPointer<const FramebufferModel> _model;
+    QGraphicsPixmapItem*             _imageItem;
+    QPoint                           _startDrag;
+    bool                             _dragging  = false;
+    double                           _zoomLevel = 1.;
+    bool                             _autoscale = true;
+    QRectF                           _dataWindow;
+    QRectF                           _displayWindow;
+    bool                             _showDataWindow    = true;
+    bool                             _showDisplayWindow = true;
+    bool                             _restorePending    = false;
+    ViewState                        _pendingState;
+    QPixmap                          _checkerboard;
 };

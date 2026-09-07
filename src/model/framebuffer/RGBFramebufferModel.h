@@ -34,10 +34,11 @@
 
 #include "FramebufferModel.h"
 #include "ToneMapping.h"
-#include <OpenEXR/ImfMultiPartInputFile.h>
+#include <model/ExrInput.h>
 #include <util/ColormapModule.h>
 
 #include <memory>
+#include <array>
 
 class RGBFramebufferModel: public FramebufferModel
 {
@@ -70,8 +71,10 @@ class RGBFramebufferModel: public FramebufferModel
 
     virtual ~RGBFramebufferModel();
 
-    virtual void
-    load(Imf::MultiPartInputFile& file, int partId, bool hasAlpha = false);
+    virtual void load(
+      const std::shared_ptr<ExrInput>& file,
+      int                                             partId,
+      const std::array<std::string, 4>&               channels);
 
     virtual std::string getColorInfo(int x, int y) const;
 
@@ -80,11 +83,11 @@ class RGBFramebufferModel: public FramebufferModel
     virtual float                    getBlueInfo(int x, int y) const;
     virtual float                    getAlphaInfo(int x, int y) const;
     virtual std::vector<std::string> rawChannelNames() const;
-    double getLuminanceMin() const { return m_luminanceMin; }
-    double getLuminanceMax() const { return m_luminanceMax; }
+    double getLuminanceMin() const { return m_data->luminanceMin; }
+    double getLuminanceMax() const { return m_data->luminanceMax; }
     bool   hasFiniteLuminanceSamples() const
     {
-        return m_hasFiniteLuminanceSamples;
+        return m_data->hasFiniteLuminance;
     }
 
   public slots:
@@ -99,17 +102,14 @@ class RGBFramebufferModel: public FramebufferModel
     void updateImage();
 
   private:
-    int                       m_partID;
-    std::string               m_parentLayer;
-    LayerType                 m_layerType;
-    PreviewMode               m_previewMode;
-    ToneMappingMethod         m_toneMappingMethod;
-    double                    m_exposure;
-    double                    m_toneParams[4];
-    double                    m_falseColorMin;
-    double                    m_falseColorMax;
-    double                    m_luminanceMin;
-    double                    m_luminanceMax;
-    bool                      m_hasFiniteLuminanceSamples;
-    std::unique_ptr<Colormap> m_falseColorMap;
+    float                           component(int x, int y, int channel) const;
+    std::string                     m_parentLayer;
+    LayerType                       m_layerType;
+    PreviewMode                     m_previewMode;
+    ToneMappingMethod               m_toneMappingMethod;
+    double                          m_exposure;
+    double                          m_toneParams[4];
+    double                          m_falseColorMin;
+    double                          m_falseColorMax;
+    std::shared_ptr<const Colormap> m_falseColorMap;
 };

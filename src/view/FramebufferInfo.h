@@ -4,13 +4,13 @@
 
 #include <model/framebuffer/FramebufferModel.h>
 
-inline QString framebufferDatasetValueText(
-  const FramebufferModel* model, bool minValue)
+inline QString
+framebufferDatasetValueText(const FramebufferModel* model, bool minValue)
 {
     if (!model || !model->hasFiniteSamples()) return "n/a";
 
-    const double value =
-      minValue ? model->getDatasetMin() : model->getDatasetMax();
+    const double value
+      = minValue ? model->getDatasetMin() : model->getDatasetMax();
 
     return QString::number(value, 'g', 6);
 }
@@ -26,6 +26,13 @@ inline QString framebufferSizeText(const FramebufferModel* model)
 
 inline QString framebufferSummaryText(const FramebufferModel* model)
 {
+    if (model) {
+        if (!model->errorString().isEmpty())
+            return "Error: " + model->errorString();
+        if (model->isLoading()) return "Loading...";
+        if (model->isImageLoaded() && !model->isPreviewReady())
+            return "Rendering...";
+    }
     return "Size " + framebufferSizeText(model) + "   Max "
-      + framebufferDatasetValueText(model, false);
+           + framebufferDatasetValueText(model, false);
 }

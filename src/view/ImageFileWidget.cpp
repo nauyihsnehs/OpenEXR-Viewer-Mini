@@ -55,10 +55,15 @@
 
 #include <OpenEXR/ImfHeader.h>
 
+#include <algorithm>
+#include <stdexcept>
 #include <vector>
 
 #include "GraphicsView.h"
 #include "FramebufferInfo.h"
+#include <QKeyEvent>
+#include <QPointer>
+#include <QSignalBlocker>
 #include "RGBFramebufferWidget.h"
 #include "YFramebufferWidget.h"
 
@@ -207,6 +212,39 @@ static QString compressionDescription(Imf::Compression compression)
 }
 
 
+struct ImageFileWidget::PreparedPreview {
+    QWidget*          widget = nullptr;
+    FramebufferModel* model  = nullptr;
+    QString           key;
+    QString           title;
+    QString           pixelType;
+    QString           compressionShort;
+    QString           compression;
+};
+
+struct ImageFileWidget::SavedPreview {
+    QString                 key;
+    PreviewState            preview;
+    GraphicsView::ViewState view;
+    QByteArray              geometry;
+};
+
+struct ImageFileWidget::SavedDocument {
+    std::vector<SavedPreview> previews;
+    QString                   activeKey;
+    bool                      previewTabbed = true;
+};
+
+struct ImageFileWidget::RefreshTransaction {
+    ~RefreshTransaction() { delete prepared.widget; }
+
+    std::unique_ptr<OpenEXRImage> image;
+    SavedDocument                 saved;
+    PreparedPreview               prepared;
+    QString                       gateKey;
+    bool                          stateApplied = false;
+};
+
 template<typename Widget, typename Model>
 void configureFramebuffer(
   Widget* widget, Model* model, ImageFileWidget* receiver)
@@ -237,6 +275,11 @@ void configureFramebuffer(
       receiver,
       SLOT(onFileInfoHoverLeft()));
 
+    QObject::connect(
+      model,
+      &FramebufferModel::readinessChanged,
+      receiver,
+      &ImageFileWidget::activeFramebufferChanged);
     widget->setModel(model);
 }
 
@@ -290,15 +333,43 @@ ImageFileWidget::ImageFileWidget(std::istream& stream, QWidget* parent)
 
 ImageFileWidget::~ImageFileWidget()
 {
+    m_refresh.reset();
+    disconnect(m_mdiArea, nullptr, this, nullptr);
     clearImage();
+}
+
+
+bool ImageFileWidget::isDocumentReady() const
+{
+    return m_documentState == DocumentReady;
+}
+
+
+bool ImageFileWidget::hasDocumentLoadFailed() const
+{
+    return m_documentState == DocumentFailed;
+}
+
+
+bool ImageFileWidget::isRefreshInProgress() const
+{
+    return bool(m_refresh);
 }
 
 
 void ImageFileWidget::clearImage()
 {
+    if (m_initialPrepared) {
+        delete m_initialPrepared->widget;
+        m_initialPrepared->widget = nullptr;
+        m_initialPrepared.reset();
+        m_initialPreview.clear();
+    }
+    const QSignalBlocker        blockActivation(m_mdiArea);
     const QList<QMdiSubWindow*> windows = m_mdiArea->subWindowList();
 
     for (QMdiSubWindow* window : windows) {
+        disconnect(window, nullptr, this, nullptr);
         m_mdiArea->removeSubWindow(window);
         delete window;
     }
@@ -308,20 +379,227 @@ void ImageFileWidget::clearImage()
 
     delete m_img;
     m_img = nullptr;
+    m_previewOrder.clear();
 }
 
+
+
+QString ImageFileWidget::layerKey(const LayerItem* item)
+{
+    return QString("%1:%2:%3")
+      .arg(item->getPart())
+      .arg(int(item->getType()))
+      .arg(QString::fromStdString(item->getOriginalFullName()));
+}
+
+
+ImageFileWidget::SavedDocument ImageFileWidget::captureDocumentState() const
+{
+    SavedDocument state;
+    state.previewTabbed = m_previewTabbed;
+    const QMdiSubWindow* active = m_mdiArea->activeSubWindow();
+    state.activeKey
+      = active ? active->property("layerKey").toString() : QString();
+    auto windows = m_mdiArea->subWindowList();
+    std::stable_sort(
+      windows.begin(),
+      windows.end(),
+      [this](QMdiSubWindow* a, QMdiSubWindow* b) {
+          return m_previewOrder.indexOf(a->property("layerKey").toString())
+                 < m_previewOrder.indexOf(b->property("layerKey").toString());
+      });
+    for (auto* window : windows) {
+        SavedPreview preview;
+        preview.key = window->property("layerKey").toString();
+        if (auto* rgb = qobject_cast<RGBFramebufferWidget*>(window->widget()))
+            preview.preview = rgb->previewState();
+        if (
+          auto* scalar
+          = qobject_cast<YFramebufferWidget*>(window->widget()))
+            preview.preview = scalar->previewState();
+        if (auto* view = window->findChild<GraphicsView*>())
+            preview.view = view->viewState();
+        preview.geometry = window->saveGeometry();
+        state.previews.push_back(preview);
+    }
+    return state;
+}
+
+
+void ImageFileWidget::restorePreview(
+  QWidget* widget, const SavedPreview& state) const
+{
+    if (auto* rgb = qobject_cast<RGBFramebufferWidget*>(widget))
+        rgb->restorePreviewState(state.preview);
+    if (auto* scalar = qobject_cast<YFramebufferWidget*>(widget))
+        scalar->restorePreviewState(state.preview);
+    if (auto* view = widget->findChild<GraphicsView*>())
+        view->restoreViewState(state.view);
+}
 
 
 void ImageFileWidget::refresh()
 {
-    // TODO:
-    // Better refresh handling: keep all window open, close those with no valid
-    // layer...
-    if (!m_isStream) {
-        open(m_openedFilename);
+    if (m_isStream || m_documentState != DocumentReady || m_refresh) return;
+    std::unique_ptr<RefreshTransaction> transaction(new RefreshTransaction);
+    try {
+        transaction->image.reset(new OpenEXRImage(m_openedFilename, nullptr));
+    } catch (const std::exception& error) {
+        showLoadError(QString::fromUtf8(error.what()));
+        return;
     }
+    transaction->saved = captureDocumentState();
+    QAbstractItemModel* layers = transaction->image->getLayerModel();
+    QModelIndex gate = findLayerIndexByKey(
+      layers,
+      QModelIndex(),
+      transaction->saved.activeKey);
+    if (!gate.isValid()) {
+        for (const SavedPreview& state : transaction->saved.previews) {
+            gate = findLayerIndexByKey(layers, QModelIndex(), state.key);
+            if (gate.isValid()) break;
+        }
+    }
+    const LayerItem* gateItem = gate.isValid()
+                                  ? static_cast<LayerItem*>(gate.internalPointer())
+                                  : transaction->image->getLayerModel()
+                                      ->defaultDisplayLayer();
+    if (!gateItem) {
+        showLoadError(tr("The refreshed file has no displayable layers."));
+        return;
+    }
+    try {
+        transaction->gateKey  = layerKey(gateItem);
+        transaction->prepared = createPreview(gateItem, transaction->image.get());
+    } catch (const std::exception& error) {
+        showLoadError(QString::fromUtf8(error.what()));
+        return;
+    }
+
+    m_refresh = std::move(transaction);
+    FramebufferModel* gateModel = m_refresh->prepared.model;
+    QWidget*          gateWidget = m_refresh->prepared.widget;
+    const auto savedGate = std::find_if(
+      m_refresh->saved.previews.begin(),
+      m_refresh->saved.previews.end(),
+      [this](const SavedPreview& state) {
+          return state.key == m_refresh->gateKey;
+      });
+    if (savedGate == m_refresh->saved.previews.end()) {
+        m_refresh->stateApplied = true;
+    } else {
+        const QString gateKey = m_refresh->gateKey;
+        connect(
+          gateModel,
+          &FramebufferModel::imageLoaded,
+          this,
+          [this, gateWidget, gateKey] {
+              if (!m_refresh || m_refresh->gateKey != gateKey) return;
+              const auto state = std::find_if(
+                m_refresh->saved.previews.begin(),
+                m_refresh->saved.previews.end(),
+                [&gateKey](const SavedPreview& saved) {
+                    return saved.key == gateKey;
+                });
+              if (state == m_refresh->saved.previews.end()) return;
+              restorePreview(gateWidget, *state);
+              m_refresh->stateApplied = true;
+          });
+    }
+    connect(
+      gateModel,
+      &FramebufferModel::imageChanged,
+      this,
+      [this, gateModel] {
+          if (
+            m_refresh && m_refresh->prepared.model == gateModel
+            && m_refresh->stateApplied && gateModel->isPreviewReady())
+              commitRefresh();
+      });
+    emit refreshInProgressChanged(true);
 }
 
+
+void ImageFileWidget::commitRefresh()
+{
+    if (!m_refresh) return;
+    std::unique_ptr<RefreshTransaction> transaction = std::move(m_refresh);
+    PreparedPreview gatePreview = transaction->prepared;
+    transaction->prepared.widget = nullptr;
+
+    clearImage();
+    m_img = transaction->image.release();
+    m_img->setParent(this);
+    m_previewTabbed = transaction->saved.previewTabbed;
+    afterOpen(false);
+
+    QPointer<QMdiSubWindow> restoredActive;
+    QPointer<QMdiSubWindow> gateWindow;
+    bool                    gateInstalled = false;
+    for (const SavedPreview& state : transaction->saved.previews) {
+        const QModelIndex index = findLayerIndexByKey(
+          m_layersTreeView->model(),
+          QModelIndex(),
+          state.key);
+        if (!index.isValid()) continue;
+
+        FramebufferModel* model  = nullptr;
+        QMdiSubWindow*    window = nullptr;
+        if (state.key == transaction->gateKey) {
+            model         = gatePreview.model;
+            window        = installPreview(gatePreview);
+            gateWindow    = window;
+            gateInstalled = true;
+        } else {
+            try {
+                model = openLayer(
+                  static_cast<LayerItem*>(index.internalPointer()));
+            } catch (const std::exception& error) {
+                showLoadError(QString::fromUtf8(error.what()));
+                continue;
+            }
+            window = m_mdiArea->activeSubWindow();
+            if (auto* view = window ? window->findChild<GraphicsView*>()
+                                    : nullptr)
+                view->restoreViewState(state.view);
+            if (model && window) {
+                const auto restore = [this, window, state] {
+                    restorePreview(window->widget(), state);
+                };
+                if (model->isImageLoaded())
+                    restore();
+                else
+                    connect(
+                      model,
+                      &FramebufferModel::imageLoaded,
+                      window,
+                      restore);
+            }
+        }
+        if (!window) continue;
+        if (!m_previewTabbed) window->restoreGeometry(state.geometry);
+        if (state.key == transaction->saved.activeKey)
+            restoredActive = window;
+    }
+
+    if (!gateInstalled) gateWindow = installPreview(gatePreview);
+    if (restoredActive)
+        m_mdiArea->setActiveSubWindow(restoredActive);
+    else if (gateWindow)
+        m_mdiArea->setActiveSubWindow(gateWindow);
+    syncActiveLayerSelection();
+    emit activeFramebufferChanged();
+    emit refreshInProgressChanged(false);
+}
+
+
+void ImageFileWidget::abortRefresh(const QString& message)
+{
+    if (!m_refresh) return;
+    m_refresh.reset();
+    emit refreshInProgressChanged(false);
+    showLoadError(message);
+}
 
 
 void ImageFileWidget::setTabbed()
@@ -369,6 +647,7 @@ void ImageFileWidget::setupLayout()
 
     m_layersTreeView = new QTreeView(m_splitterProperties);
     m_layersTreeView->setUniformRowHeights(true);
+    m_layersTreeView->installEventFilter(this);
     m_layersTreeView->setAlternatingRowColors(true);
     m_layersTreeView->setExpandsOnDoubleClick(false);
     m_layersTreeView->setIndentation(32);
@@ -401,6 +680,13 @@ void ImageFileWidget::setupLayout()
 
 bool ImageFileWidget::eventFilter(QObject* watched, QEvent* event)
 {
+    if (watched == m_layersTreeView && event->type() == QEvent::KeyPress) {
+        auto* key = static_cast<QKeyEvent*>(event);
+        if (key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter) {
+            onLayerDoubleClicked(m_layersTreeView->currentIndex());
+            return true;
+        }
+    }
     QTabBar*   tabBar = qobject_cast<QTabBar*>(watched);
     const bool previewTabRelease
       = tabBar && m_mdiArea->isAncestorOf(tabBar)
@@ -423,6 +709,15 @@ void ImageFileWidget::configurePreviewTabBar()
     if (!tabBar) return;
 
     tabBar->installEventFilter(this);
+    if (!tabBar->property("orderConnected").toBool()) {
+        tabBar->setProperty("orderConnected", true);
+        connect(tabBar, &QTabBar::tabMoved, this, [this](int from, int to) {
+            if (
+              from >= 0 && to >= 0 && from < m_previewOrder.size()
+              && to < m_previewOrder.size())
+                m_previewOrder.move(from, to);
+        });
+    }
 }
 
 
@@ -430,7 +725,8 @@ void ImageFileWidget::syncTabbedPreviewPresentation()
 {
     if (!m_previewTabbed) return;
 
-    QList<QMdiSubWindow*> subWindows = m_mdiArea->subWindowList();
+    QPointer<QMdiSubWindow> active     = m_mdiArea->activeSubWindow();
+    QList<QMdiSubWindow*>   subWindows = m_mdiArea->subWindowList();
 
     if (subWindows.size() > 1) {
         for (QMdiSubWindow* subWindow : subWindows) {
@@ -448,7 +744,7 @@ void ImageFileWidget::syncTabbedPreviewPresentation()
         for (QMdiSubWindow* subWindow : subWindows) {
             subWindow->showMaximized();
         }
-
+        if (active) m_mdiArea->setActiveSubWindow(active);
         return;
     }
 
@@ -554,159 +850,153 @@ void ImageFileWidget::openAttribute(const HeaderItem* item)
 }
 
 
-void ImageFileWidget::openLayer(const LayerItem* item)
+ImageFileWidget::PreparedPreview ImageFileWidget::createPreview(
+  const LayerItem* item, OpenEXRImage* source)
+{
+    if (
+      !item || !source || item->getType() == LayerItem::GROUP
+      || item->getType() == LayerItem::PART
+      || item->getType() == LayerItem::N_LAYERTYPES) {
+        throw std::runtime_error("The selected layer cannot be displayed.");
+    }
+
+    PreparedPreview preview;
+    preview.title     = getTitle(item);
+    preview.key       = layerKey(item);
+    preview.pixelType = pixelTypeName(item);
+    const int partId  = item->getPart();
+    const Imf::Compression compression
+      = source->getEXR().header(partId).compression();
+    preview.compressionShort = compressionShortName(compression);
+    preview.compression      = compressionDescription(compression);
+
+    const auto type   = item->getType();
+    const bool scalar = type == LayerItem::A || type == LayerItem::RY
+                        || type == LayerItem::BY || type == LayerItem::GENERAL;
+    if (scalar) {
+        std::unique_ptr<YFramebufferWidget> widget(
+          new YFramebufferWidget(this));
+        auto* model
+          = new YFramebufferModel(item->getOriginalFullName(), widget.get());
+        configureFramebuffer(widget.get(), model, this);
+        model->load(source->sharedEXR(), partId);
+        preview.widget = widget.release();
+        preview.model  = model;
+        return preview;
+    }
+
+    const auto layout = type == LayerItem::RGB || type == LayerItem::RGBA
+                          ? RGBFramebufferModel::Layer_RGB
+                        : type == LayerItem::YC || type == LayerItem::YCA
+                          ? RGBFramebufferModel::Layer_YC
+                          : RGBFramebufferModel::Layer_Y;
+    std::array<std::string, 4> channels;
+    auto channelName = [item](LayerItem::LayerType channel) {
+        const LayerItem* child = item->child(channel);
+        return child ? child->getOriginalFullName() : std::string();
+    };
+    if (layout == RGBFramebufferModel::Layer_RGB)
+        channels = {
+          {channelName(LayerItem::R),
+           channelName(LayerItem::G),
+           channelName(LayerItem::B),
+           channelName(LayerItem::A)}};
+    else if (layout == RGBFramebufferModel::Layer_YC)
+        channels = {
+          {channelName(LayerItem::Y),
+           channelName(LayerItem::RY),
+           channelName(LayerItem::BY),
+           channelName(LayerItem::A)}};
+    else
+        channels = {
+          {type == LayerItem::YA ? channelName(LayerItem::Y)
+                                 : item->getOriginalFullName(),
+           "",
+           "",
+           channelName(LayerItem::A)}};
+    std::unique_ptr<RGBFramebufferWidget> widget(
+      new RGBFramebufferWidget(this));
+    auto* model = new RGBFramebufferModel(
+      item->getOriginalFullName(),
+      layout,
+      widget.get());
+    widget->setPreviewMode(m_rgbPreviewMode);
+    configureFramebuffer(widget.get(), model, this);
+    model->load(source->sharedEXR(), partId, channels);
+    preview.widget = widget.release();
+    preview.model  = model;
+    return preview;
+}
+
+
+QMdiSubWindow* ImageFileWidget::installPreview(PreparedPreview& preview)
+{
+    if (!preview.widget || !preview.model) return nullptr;
+    QWidget*       widget    = preview.widget;
+    QMdiSubWindow* subWindow = m_mdiArea->addSubWindow(widget);
+    preview.widget           = nullptr;
+    m_previewOrder.removeAll(preview.key);
+    m_previewOrder.append(preview.key);
+    subWindow->setAttribute(Qt::WA_DeleteOnClose);
+    subWindow->setWindowTitle(preview.title);
+    subWindow->setProperty("layerKey", preview.key);
+    subWindow->setProperty("pixelType", preview.pixelType);
+    subWindow->setProperty("compressionShort", preview.compressionShort);
+    subWindow->setProperty("compression", preview.compression);
+    const QString key = preview.key;
+    connect(subWindow, &QObject::destroyed, this, [this, key] {
+        m_previewOrder.removeAll(key);
+        onSubWindowDestroyed();
+    });
+    if (m_previewTabbed) {
+        subWindow->showMaximized();
+    } else {
+        setSubWindowFrameVisible(subWindow, true);
+        subWindow->resize(800, 600);
+        subWindow->show();
+    }
+    m_mdiArea->setActiveSubWindow(subWindow);
+    syncTabbedPreviewPresentation();
+    syncActiveLayerSelection();
+    emit activeFramebufferChanged();
+    return subWindow;
+}
+
+
+FramebufferModel* ImageFileWidget::openLayer(const LayerItem* item)
 {
     if (
       !item || item->getType() == LayerItem::GROUP
       || item->getType() == LayerItem::PART
-      || item->getType() == LayerItem::N_LAYERTYPES) {
-        return;
-    }
+      || item->getType() == LayerItem::N_LAYERTYPES)
+        return nullptr;
 
-    const QString title  = getTitle(item);
-    const int     partId = item->getPart();
-    const QString layerKey
-      = QString("%1:%2:%3")
-          .arg(partId)
-          .arg(static_cast<int>(item->getType()))
-          .arg(QString::fromStdString(item->getOriginalFullName()));
-    const QString          pixelType = pixelTypeName(item);
-    const Imf::Compression compression
-      = m_img->getEXR().header(partId).compression();
+    const QString key = layerKey(item);
 
     // Check if the window already exists
     for (auto& w : m_mdiArea->subWindowList()) {
-        if (w->property("layerKey").toString() == layerKey) {
+        if (w->property("layerKey").toString() == key) {
+            const FramebufferModel* existing = framebufferModel(w);
+            if (
+              existing && !existing->isLoading()
+              && !existing->isImageLoaded()) {
+                m_mdiArea->removeSubWindow(w);
+                delete w;
+                break;
+            }
             m_mdiArea->setActiveSubWindow(w);
             w->setFocus();
             syncTabbedPreviewPresentation();
             syncActiveLayerSelection();
             emit activeFramebufferChanged();
-            return;
+            return const_cast<FramebufferModel*>(existing);
         }
     }
 
-    // If the window does not exist yet, create it
-    YFramebufferWidget*   graphicViewBW = nullptr;
-    YFramebufferModel*    imageModelBW  = nullptr;
-    RGBFramebufferWidget* graphicView   = nullptr;
-    RGBFramebufferModel*  imageModel    = nullptr;
-
-    QMdiSubWindow* subWindow = nullptr;
-
-    switch (item->getType()) {
-        case LayerItem::RGB:
-        case LayerItem::RGBA:
-            graphicView = new RGBFramebufferWidget(m_mdiArea);
-            imageModel  = new RGBFramebufferModel(
-              item->getOriginalFullName(),
-              RGBFramebufferModel::Layer_RGB,
-              graphicView);
-
-            graphicView->setPreviewMode(m_rgbPreviewMode);
-            configureFramebuffer(graphicView, imageModel, this);
-
-            imageModel->load(
-              m_img->getEXR(),
-              item->getPart(),
-              item->getType() == LayerItem::RGBA);
-
-            subWindow = m_mdiArea->addSubWindow(graphicView);
-
-            break;
-
-        case LayerItem::YCA:
-        case LayerItem::YC:
-            graphicView = new RGBFramebufferWidget(m_mdiArea);
-            imageModel  = new RGBFramebufferModel(
-              item->getOriginalFullName(),
-              RGBFramebufferModel::Layer_YC,
-              graphicView);
-
-            graphicView->setPreviewMode(m_rgbPreviewMode);
-            configureFramebuffer(graphicView, imageModel, this);
-
-            imageModel->load(
-              m_img->getEXR(),
-              item->getPart(),
-              item->getType() == LayerItem::YCA);
-
-            subWindow = m_mdiArea->addSubWindow(graphicView);
-            break;
-
-        case LayerItem::R:
-        case LayerItem::G:
-        case LayerItem::B:
-        case LayerItem::Y:
-        case LayerItem::YA:
-            graphicView = new RGBFramebufferWidget(m_mdiArea);
-            imageModel  = new RGBFramebufferModel(
-              item->getOriginalFullName(),
-              RGBFramebufferModel::Layer_Y,
-              graphicView);
-
-            graphicView->setPreviewMode(m_rgbPreviewMode);
-            configureFramebuffer(graphicView, imageModel, this);
-
-            imageModel->load(
-              m_img->getEXR(),
-              item->getPart(),
-              item->getType() == LayerItem::YA);
-
-            subWindow = m_mdiArea->addSubWindow(graphicView);
-            break;
-
-
-        case LayerItem::A:
-        case LayerItem::RY:
-        case LayerItem::BY:
-        case LayerItem::GENERAL:
-            graphicViewBW = new YFramebufferWidget(m_mdiArea);
-            imageModelBW  = new YFramebufferModel(
-              item->getOriginalFullName(),
-              graphicViewBW);
-
-            configureFramebuffer(graphicViewBW, imageModelBW, this);
-
-            imageModelBW->load(m_img->getEXR(), item->getPart());
-
-            subWindow = m_mdiArea->addSubWindow(graphicViewBW);
-            break;
-
-        case LayerItem::PART:
-        case LayerItem::GROUP:
-        case LayerItem::N_LAYERTYPES:
-            break;
-    }
-
-    if (subWindow) {
-        subWindow->setWindowTitle(title);
-        subWindow->setProperty("layerKey", layerKey);
-        subWindow->setProperty("pixelType", pixelType);
-        subWindow->setProperty(
-          "compressionShort",
-          compressionShortName(compression));
-        subWindow->setProperty(
-          "compression",
-          compressionDescription(compression));
-        connect(
-          subWindow,
-          SIGNAL(destroyed(QObject*)),
-          this,
-          SLOT(onSubWindowDestroyed()));
-
-        if (m_previewTabbed) {
-            subWindow->showMaximized();
-        } else {
-            setSubWindowFrameVisible(subWindow, true);
-            subWindow->resize(800, 600);
-            subWindow->show();
-        }
-
-        syncTabbedPreviewPresentation();
-        syncActiveLayerSelection();
-        emit activeFramebufferChanged();
-    }
+    PreparedPreview preview = createPreview(item, m_img);
+    FramebufferModel* model = preview.model;
+    installPreview(preview);
+    return model;
 }
 
 
@@ -755,11 +1045,15 @@ void ImageFileWidget::setRgbPreviewMode(RGBFramebufferModel::PreviewMode mode)
 {
     m_rgbPreviewMode = mode;
 
-    for (QMdiSubWindow* subWindow : m_mdiArea->subWindowList()) {
-        RGBFramebufferWidget* rgbWidget
-          = qobject_cast<RGBFramebufferWidget*>(subWindow->widget());
+    const auto applyMode = [mode](QWidget* widget) {
+        if (auto* rgb = qobject_cast<RGBFramebufferWidget*>(widget))
+            rgb->setPreviewMode(mode);
+    };
+    if (m_initialPrepared) applyMode(m_initialPrepared->widget);
+    if (m_refresh) applyMode(m_refresh->prepared.widget);
 
-        if (rgbWidget) rgbWidget->setPreviewMode(mode);
+    for (QMdiSubWindow* subWindow : m_mdiArea->subWindowList()) {
+        applyMode(subWindow->widget());
     }
 }
 
@@ -907,24 +1201,27 @@ QModelIndex ImageFileWidget::activeLayerIndex() const
 
     if (!subWindow) return QModelIndex();
 
-    return findLayerIndexByTitle(QModelIndex(), subWindow->windowTitle());
+    return findLayerIndexByKey(
+      m_layersTreeView->model(),
+      QModelIndex(),
+      subWindow->property("layerKey").toString());
 }
 
 
-QModelIndex ImageFileWidget::findLayerIndexByTitle(
-  const QModelIndex& parent, const QString& title) const
+QModelIndex ImageFileWidget::findLayerIndexByKey(
+  QAbstractItemModel* model,
+  const QModelIndex&  parent,
+  const QString&      key) const
 {
-    QAbstractItemModel* model = m_layersTreeView->model();
-
     if (!model) return QModelIndex();
 
     for (int row = 0; row < model->rowCount(parent); row++) {
         QModelIndex index = model->index(row, LayerModel::LAYER, parent);
         LayerItem*  item  = static_cast<LayerItem*>(index.internalPointer());
 
-        if (item && getTitle(item) == title) return index;
+        if (item && layerKey(item) == key) return index;
 
-        QModelIndex child = findLayerIndexByTitle(index, title);
+        QModelIndex child = findLayerIndexByKey(model, index, key);
         if (child.isValid()) return child;
     }
 
@@ -1031,7 +1328,7 @@ void ImageFileWidget::open(std::istream& stream)
 }
 
 
-void ImageFileWidget::afterOpen()
+void ImageFileWidget::afterOpen(bool defaultLayer)
 {
     m_attributesTreeView->setModel(m_img->getHeaderModel());
     m_attributesTreeView->expandAll();
@@ -1041,14 +1338,39 @@ void ImageFileWidget::afterOpen()
     m_layersTreeView->expandAll();
     m_layersTreeView->resizeColumnToContents(0);
 
-    openDefaultLayer();
+    if (!defaultLayer) return;
+    const LayerItem* layer = m_img->getLayerModel()->defaultDisplayLayer();
+    if (!layer) {
+        onLoadFailed(tr("The file has no displayable layers."));
+        return;
+    }
+    try {
+        m_initialPrepared.reset(new PreparedPreview(createPreview(layer, m_img)));
+        trackInitialPreview(m_initialPrepared->model);
+    } catch (const std::exception& error) {
+        onLoadFailed(QString::fromUtf8(error.what()));
+    }
 }
 
 
-void ImageFileWidget::openDefaultLayer()
+void ImageFileWidget::trackInitialPreview(FramebufferModel* model)
 {
-    const LayerItem* layer = m_img->getLayerModel()->defaultDisplayLayer();
-    if (layer) openLayer(layer);
+    m_initialPreview = model;
+    connect(
+      model,
+      &FramebufferModel::imageChanged,
+      this,
+      [this, model] {
+          if (
+            m_documentState != DocumentPending || m_initialPreview != model
+            || !model->isPreviewReady())
+              return;
+          installPreview(*m_initialPrepared);
+          m_initialPrepared.reset();
+          m_initialPreview.clear();
+          m_documentState = DocumentReady;
+          emit documentReady();
+      });
 }
 
 
@@ -1069,7 +1391,30 @@ void ImageFileWidget::onLayerDoubleClicked(const QModelIndex& index)
 void ImageFileWidget::onLoadFailed(const QString& msg)
 {
     std::cerr << "Loading error: " << msg.toStdString() << std::endl;
+    FramebufferModel* failedModel
+      = qobject_cast<FramebufferModel*>(sender());
+    if (
+      m_refresh && failedModel
+      && m_refresh->prepared.model == failedModel) {
+        const QString message = msg;
+        QTimer::singleShot(0, this, [this, message] {
+            if (m_refresh) abortRefresh(message);
+        });
+        return;
+    }
+    showLoadError(msg);
+    if (
+      m_documentState == DocumentPending
+      && (!failedModel || m_initialPreview == failedModel)) {
+        m_initialPreview.clear();
+        m_documentState = DocumentFailed;
+        emit documentLoadFailed(msg);
+    }
+}
 
+
+void ImageFileWidget::showLoadError(const QString& msg) const
+{
     QMessageBox msgBox;
     msgBox.setText(tr("Error while loading the framebuffer."));
     msgBox.setInformativeText(

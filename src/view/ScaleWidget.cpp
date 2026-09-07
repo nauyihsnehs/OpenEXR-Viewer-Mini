@@ -33,7 +33,7 @@
 #include "ScaleWidget.h"
 
 #include <QPainter>
-#include <QResizeEvent>
+#include <model/framebuffer/ToneMapping.h>
 
 ScaleWidget::ScaleWidget(QWidget* parent)
   : QWidget(parent)
@@ -83,13 +83,19 @@ void ScaleWidget::paintEvent(QPaintEvent* e)
     const int topBottom_margins = 10;
 
     const int start_y = topBottom_margins;
-    const int end_y   = m_height - topBottom_margins;
+    const int end_y   = height() - topBottom_margins;
+    if (end_y <= start_y) return;
 
     for (int y = start_y; y < end_y; y++) {
         float RGB[3];
-        m_cmap->getRGBValue(y, end_y, start_y, RGB);
+        m_cmap->getRGBValue(
+          float(end_y - 1 - y) / qMax(1, end_y - 1 - start_y),
+          RGB);
 
-        painter.setPen(QColor(255 * RGB[0], 255 * RGB[1], 255 * RGB[2]));
+        painter.setPen(QColor(
+          ToneMapping::toByte(RGB[0]),
+          ToneMapping::toByte(RGB[1]),
+          ToneMapping::toByte(RGB[2])));
         painter.drawLine(left_margin, y, barWidth + left_margin, y);
     }
 
@@ -118,20 +124,12 @@ void ScaleWidget::paintEvent(QPaintEvent* e)
         QRectF textBox(
           start_text_x,
           y - fontSize / 3,
-          m_width - start_text_x,
+          width() - start_text_x,
           fontSize);
-        painter.setPen(Qt::white);
+        painter.setPen(palette().color(QPalette::WindowText));
         painter.drawText(
           textBox,
           Qt::AlignLeft | Qt::AlignVCenter,
           QString::number(value));
     }
-}
-
-void ScaleWidget::resizeEvent(QResizeEvent* e)
-{
-    QWidget::resizeEvent(e);
-
-    m_width  = e->size().width();
-    m_height = e->size().height();
 }

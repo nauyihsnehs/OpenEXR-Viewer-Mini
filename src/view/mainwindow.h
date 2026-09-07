@@ -35,6 +35,8 @@
 #include <QTabWidget>
 #include <QLabel>
 #include <QMainWindow>
+#include <QList>
+#include <QPointer>
 #include <QVector>
 #include <QCloseEvent>
 #include <QDropEvent>
@@ -137,20 +139,31 @@ class MainWindow: public QMainWindow
     void updateShowActions();
 
   private:
+    struct PendingOpen {
+        QPointer<ImageFileWidget> widget;
+        QString                   title;
+        bool                      resolved  = false;
+        bool                      succeeded = false;
+    };
+
+    void             addFileTab(ImageFileWidget* widget, const QString& title);
+    void             queueFileTab(ImageFileWidget* widget, const QString& title);
+    void             resolvePendingOpen(ImageFileWidget* widget, bool succeeded);
+    void             flushPendingOpens();
     ImageFileWidget* currentFileWidget() const;
-    void applyPanelVisibility(ImageFileWidget* widget) const;
-    void applyPanelVisibilityToAllTabs() const;
-    void setupTitleBar();
-    void setupPreviewModeActions();
-    void setupThemeActions();
-    void applyRgbPreviewMode(RGBFramebufferModel::PreviewMode mode);
-    void applyTheme(const QString& themeName);
-    QString normalizedThemeName(const QString& themeName) const;
-    QString themeStyleSheetPath(const QString& themeName) const;
-    void updateTitleBarButtons();
-    void updateWindowFrame();
-    void updateFileTabPresentation();
-    void copyActiveImage(bool fullResolution) const;
+    void             applyPanelVisibility(ImageFileWidget* widget) const;
+    void             applyPanelVisibilityToAllTabs() const;
+    void             setupTitleBar();
+    void             setupPreviewModeActions();
+    void             setupThemeActions();
+    void             applyRgbPreviewMode(RGBFramebufferModel::PreviewMode mode);
+    void             applyTheme(const QString& themeName);
+    QString          normalizedThemeName(const QString& themeName) const;
+    QString          themeStyleSheetPath(const QString& themeName) const;
+    void             updateTitleBarButtons();
+    void             updateWindowFrame();
+    void             updateFileTabPresentation();
+    void             copyActiveImage(bool fullResolution) const;
 #ifdef _WIN32
     void applyWindowsWindowStyle();
 #endif
@@ -159,15 +172,16 @@ class MainWindow: public QMainWindow
     Ui::MainWindow* ui;
 
     QTabWidget* m_openFileTabs;
+    QList<PendingOpen> m_pendingOpens;
 
-    QLabel* m_windowTitleLabel;
-    QWidget* m_titleBar;
+    QLabel*      m_windowTitleLabel;
+    QWidget*     m_titleBar;
     QToolButton* m_minimizeButton;
     QToolButton* m_maximizeButton;
     QToolButton* m_closeButton;
 
-    QString m_currentTheme;
-    QString m_currentOpenedFolder;
+    QString                          m_currentTheme;
+    QString                          m_currentOpenedFolder;
     RGBFramebufferModel::PreviewMode m_rgbPreviewMode;
 
     QByteArray m_splitterImageState;

@@ -36,6 +36,7 @@
 
 #include <QMdiArea>
 #include <QMdiSubWindow>
+#include <QPointer>
 #include <QModelIndex>
 #include <QPoint>
 #include <QSplitter>
@@ -44,7 +45,10 @@
 #include <model/OpenEXRImage.h>
 #include <model/framebuffer/RGBFramebufferModel.h>
 
+#include <memory>
+
 class QEvent;
+class QAbstractItemModel;
 class FramebufferModel;
 class GraphicsView;
 
@@ -89,6 +93,9 @@ class ImageFileWidget: public QWidget
     bool                    isDisplayWindowVisible() const;
     const FramebufferModel* activeFramebufferModel() const;
     OpenEXRImage*           sourceImage() const { return m_img; }
+    bool                    isDocumentReady() const;
+    bool                    hasDocumentLoadFailed() const;
+    bool                    isRefreshInProgress() const;
     QString                 activeFramebufferStatusText() const;
     QString                 activeFramebufferStatusToolTip() const;
     QString                 activeLayerTitleText() const;
@@ -97,6 +104,9 @@ class ImageFileWidget: public QWidget
   signals:
     void openFileOnDropEvent(const QString& filename);
     void activeFramebufferChanged();
+    void documentReady();
+    void documentLoadFailed(const QString& message);
+    void refreshInProgressChanged(bool refreshing);
 
 
   public slots:
@@ -121,13 +131,12 @@ class ImageFileWidget: public QWidget
     QString        getTitle(int partId, const std::string& layer) const;
     void           openAttribute(const HeaderItem* item);
 
-    void openLayer(const LayerItem* item);
+    FramebufferModel* openLayer(const LayerItem* item);
 
     void open(const QString& filename);
     void open(std::istream& stream);
 
-    void afterOpen();
-    void openDefaultLayer();
+    void afterOpen(bool defaultLayer = true);
 
   private slots:
     void onAttributeDoubleClicked(const QModelIndex& index);
@@ -144,18 +153,42 @@ class ImageFileWidget: public QWidget
     void syncAfterSubWindowDestroyed();
 
   private:
-    void clearImage();
-    void configurePreviewTabBar();
-    void syncActiveLayerSelection();
-    void updatePropertiesVisibility();
+    enum DocumentState
+    {
+        DocumentPending,
+        DocumentReady,
+        DocumentFailed
+    };
+    struct PreparedPreview;
+    struct SavedPreview;
+    struct SavedDocument;
+    struct RefreshTransaction;
+
+    static QString layerKey(const LayerItem* item);
+    PreparedPreview createPreview(
+      const LayerItem* item, OpenEXRImage* source);
+    QMdiSubWindow* installPreview(PreparedPreview& preview);
+    SavedDocument captureDocumentState() const;
+    void          restorePreview(
+               QWidget* widget, const SavedPreview& state) const;
+    void trackInitialPreview(FramebufferModel* model);
+    void commitRefresh();
+    void abortRefresh(const QString& message);
+    void showLoadError(const QString& message) const;
+    void           clearImage();
+    void           configurePreviewTabBar();
+    void           syncActiveLayerSelection();
+    void           updatePropertiesVisibility();
 
     GraphicsView*           activeGraphicsView() const;
     const FramebufferModel* framebufferModel(QMdiSubWindow* subWindow) const;
     QString     framebufferStatusText(QMdiSubWindow* subWindow) const;
     QString     framebufferStatusToolTip(QMdiSubWindow* subWindow) const;
     QModelIndex activeLayerIndex() const;
-    QModelIndex findLayerIndexByTitle(
-      const QModelIndex& parent, const QString& title) const;
+    QModelIndex findLayerIndexByKey(
+      QAbstractItemModel* model,
+      const QModelIndex&  parent,
+      const QString&      key) const;
     QString layerTitleText(const QModelIndex& index) const;
 
     QSplitter* m_splitterImageView;
@@ -171,4 +204,9 @@ class ImageFileWidget: public QWidget
     RGBFramebufferModel::PreviewMode m_rgbPreviewMode;
     bool                             m_previewTabbed;
     bool                             m_isStream;
+    QStringList                      m_previewOrder;
+    DocumentState                    m_documentState = DocumentPending;
+    std::unique_ptr<PreparedPreview> m_initialPrepared;
+    QPointer<FramebufferModel>       m_initialPreview;
+    std::unique_ptr<RefreshTransaction> m_refresh;
 };
