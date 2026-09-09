@@ -34,6 +34,8 @@
 #include "FileDrop.h"
 #include <QDragEnterEvent>
 #include <QGraphicsPixmapItem>
+#include <QEvent>
+#include <QPalette>
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
@@ -49,11 +51,28 @@ GraphicsView::GraphicsView(QWidget* parent): QGraphicsView(parent)
     setFocusPolicy(Qt::StrongFocus);
     setTransformationAnchor(NoAnchor);
     setResizeAnchor(AnchorViewCenter);
+    updateCheckerboard();
+}
+
+void GraphicsView::updateCheckerboard()
+{
+    const QColor background = palette().color(QPalette::Window);
+    const QColor alternate = background.lightness() < 128
+                               ? background.lighter(120) : background.darker(104);
     _checkerboard = QPixmap(32, 32);
-    _checkerboard.fill(QColor(125, 125, 125));
+    _checkerboard.fill(background);
     QPainter painter(&_checkerboard);
-    painter.fillRect(16, 0, 16, 16, QColor(100, 100, 100));
-    painter.fillRect(0, 16, 16, 16, QColor(100, 100, 100));
+    painter.fillRect(16, 0, 16, 16, alternate);
+    painter.fillRect(0, 16, 16, 16, alternate);
+}
+
+void GraphicsView::changeEvent(QEvent* event)
+{
+    QGraphicsView::changeEvent(event);
+    if (event->type() == QEvent::PaletteChange) {
+        updateCheckerboard();
+        viewport()->update();
+    }
 }
 
 void GraphicsView::setModel(const FramebufferModel* model)

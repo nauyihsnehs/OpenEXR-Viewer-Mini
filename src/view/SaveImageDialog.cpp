@@ -37,7 +37,6 @@ SaveImageDialog::SaveImageDialog(const QString& path, QWidget* parent)
     restoreLastOptions();
     updateOptions();
     updatePathExtension();
-    setStatus(tr("Ready"), false);
 
     connect(
       ui->targetCombo,
@@ -100,9 +99,35 @@ ImageSave::Options SaveImageDialog::options() const
 
 void SaveImageDialog::setStatus(const QString& message, bool error)
 {
+    m_readinessStatus = false;
     ui->statusLabel->setText(message);
     ui->statusLabel->setStyleSheet(
       error ? "color: rgb(220, 80, 80);" : "color: rgb(80, 170, 80);");
+}
+
+
+void SaveImageDialog::setSourceState(bool available, bool previewReady, const QString& error)
+{
+    m_sourceAvailable = available;
+    m_previewReady = previewReady;
+    m_previewError = error;
+    updateSaveAvailability();
+}
+
+
+void SaveImageDialog::updateSaveAvailability()
+{
+    const bool waiting = target() == ImageSave::TargetPreview && !m_previewReady;
+    ui->buttonBox->button(QDialogButtonBox::Save)->setEnabled(m_sourceAvailable && !waiting);
+    if (!m_sourceAvailable || waiting) {
+        const QString message = !m_sourceAvailable ? tr("Image is no longer available.")
+                                  : !m_previewError.isEmpty() ? m_previewError
+                                  : tr("Updating preview...");
+        setStatus(message, !m_sourceAvailable || !m_previewError.isEmpty());
+        m_readinessStatus = true;
+    } else if (m_readinessStatus) {
+        setStatus(tr("Ready"), false);
+    }
 }
 
 
@@ -257,6 +282,7 @@ void SaveImageDialog::updateOptions()
     ui->multipartLabel->setVisible(layered);
     ui->multipartCombo->setVisible(layered);
     ui->hdrInfoLabel->setVisible(hdr);
+    updateSaveAvailability();
 }
 
 
@@ -279,6 +305,9 @@ void SaveImageDialog::updatePathExtension()
 
 void SaveImageDialog::requestSave()
 {
+    updateSaveAvailability();
+    if (!m_sourceAvailable || (target() == ImageSave::TargetPreview && !m_previewReady))
+        return;
     updatePathExtension();
 
     if (ui->pathEdit->text().trimmed().isEmpty()) {

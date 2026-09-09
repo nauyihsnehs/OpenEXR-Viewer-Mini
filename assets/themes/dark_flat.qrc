@@ -8,5 +8,13 @@
         <file>dark_flat/icons/right-scroll.svg</file>
         <file>dark_flat/icons/up-scroll.svg</file>
         <file>light_flat/icons/close-tab.svg</file>
+        <file>dark_flat/icons/chevron-up.svg</file>
+        <file>dark_flat/icons/chevron-up-disabled.svg</file>
+        <file>dark_flat/icons/chevron-down.svg</file>
+        <file>dark_flat/icons/chevron-down-disabled.svg</file>
+        <file>light_flat/icons/chevron-up.svg</file>
+        <file>light_flat/icons/chevron-up-disabled.svg</file>
+        <file>light_flat/icons/chevron-down.svg</file>
+        <file>light_flat/icons/chevron-down-disabled.svg</file>
     </qresource>
 </RCC>

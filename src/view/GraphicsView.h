@@ -70,6 +70,7 @@ class GraphicsView: public QGraphicsView
     void controlWheel(double steps);
 
   protected:
+    void changeEvent(QEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
@@ -85,6 +86,7 @@ class GraphicsView: public QGraphicsView
     void scrollContentsBy(int dx, int dy) override;
 
   private:
+    void updateCheckerboard();
     QPointer<const FramebufferModel> _model;
     QGraphicsPixmapItem*             _imageItem;
     QPoint                           _startDrag;

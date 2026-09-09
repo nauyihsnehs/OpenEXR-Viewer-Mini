@@ -32,6 +32,7 @@
 
 #include "mainwindow.h"
 #include "FileDrop.h"
+#include "WorkspaceWidgets.h"
 #include <QShortcut>
 #include <QSignalBlocker>
 #include "./ui_mainwindow.h"
@@ -69,6 +70,10 @@
 #include <QTabBar>
 #include <QTextStream>
 #include <QToolButton>
+#include <QToolBar>
+#include <QStackedWidget>
+#include <QMdiArea>
+#include <QPalette>
 #include <QUrl>
 #include <QVariant>
 
@@ -287,7 +292,7 @@ MainWindow::MainWindow(QWidget* parent)
             this,           SLOT(onTabCloseRequested(int)));
     // clang-format on
 
-    setCentralWidget(m_openFileTabs);
+    setupWorkspace();
     installEmptyOpenEventFilters();
     updateFileTabPresentation();
 
@@ -312,6 +317,38 @@ MainWindow::~MainWindow()
 }
 
 
+void MainWindow::setupWorkspace()
+{
+    auto* toolbar = new QToolBar(tr("Workspace"), this);
+    toolbar->setObjectName("workspaceToolbar");
+    toolbar->setMovable(false);
+    toolbar->setFloatable(false);
+    toolbar->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    ui->action_Open->setIconText(tr("Open"));
+    ui->action_Save->setIconText(tr("Export"));
+    toolbar->addAction(ui->action_Open);
+    toolbar->addAction(ui->action_Save);
+    toolbar->addSeparator();
+    toolbar->addAction(ui->action_ModeExposure);
+    toolbar->addAction(ui->action_ModeToneMapping);
+    toolbar->addAction(ui->action_ModeFalseColor);
+    toolbar->addSeparator();
+    toolbar->addAction(ui->action_ShowLayers);
+    toolbar->addAction(ui->action_ShowAttributes);
+    addToolBar(Qt::TopToolBarArea, toolbar);
+    animateToolbarButtons(toolbar);
+
+    m_workspace = new QStackedWidget(this);
+    m_workspace->setObjectName("workspace");
+    m_welcomePage = createWelcomePage(ui->action_Open, m_workspace);
+    m_workspace->addWidget(m_welcomePage);
+    m_openFileTabs->setObjectName("fileTabs");
+    m_openFileTabs->setDocumentMode(true);
+    m_workspace->addWidget(m_openFileTabs);
+    setCentralWidget(m_workspace);
+}
+
+
 void MainWindow::setupTitleBar()
 {
     setWindowFlags(windowFlags() | Qt::FramelessWindowHint);
@@ -319,7 +356,7 @@ void MainWindow::setupTitleBar()
     m_titleBar = new QWidget(this);
     m_titleBar->setObjectName("customTitleBar");
     m_titleBar->setAttribute(Qt::WA_StyledBackground, true);
-    m_titleBar->setFixedHeight(30);
+    m_titleBar->setFixedHeight(36);
 
     QHBoxLayout* layout = new QHBoxLayout(m_titleBar);
     layout->setContentsMargins(0, 0, 0, 0);
@@ -341,19 +378,21 @@ void MainWindow::setupTitleBar()
     m_minimizeButton->setObjectName("titleMinimizeButton");
     m_minimizeButton->setAutoRaise(true);
     m_minimizeButton->setToolTip(tr("Minimize"));
-    m_minimizeButton->setFixedSize(46, 30);
+    m_minimizeButton->setFixedSize(46, 36);
 
     m_maximizeButton = new QToolButton(m_titleBar);
     m_maximizeButton->setObjectName("titleMaximizeButton");
     m_maximizeButton->setAutoRaise(true);
     m_maximizeButton->setToolTip(tr("Maximize"));
-    m_maximizeButton->setFixedSize(46, 30);
+    m_maximizeButton->setFixedSize(46, 36);
 
     m_closeButton = new QToolButton(m_titleBar);
     m_closeButton->setObjectName("titleCloseButton");
     m_closeButton->setAutoRaise(true);
     m_closeButton->setToolTip(tr("Close"));
-    m_closeButton->setFixedSize(46, 30);
+    m_closeButton->setFixedSize(46, 36);
+    for (QToolButton* button : {m_minimizeButton, m_maximizeButton, m_closeButton})
+        button->setFocusPolicy(Qt::NoFocus);
 
     connect(
       m_minimizeButton,
@@ -464,7 +503,24 @@ void MainWindow::applyTheme(const QString& themeName)
     }
 
     QTextStream stream(&stylesheet);
+    const bool light = normalizedTheme == s_lightTheme;
+    QPalette palette = qApp->palette();
+    palette.setColor(QPalette::Window, QColor(light ? "#f2f3f5" : "#202226"));
+    palette.setColor(QPalette::Base, QColor(light ? "#ffffff" : "#26282d"));
+    palette.setColor(QPalette::AlternateBase, QColor(light ? "#f7f8fa" : "#2a2d32"));
+    palette.setColor(QPalette::Button, QColor(light ? "#ffffff" : "#2b2e34"));
+    palette.setColor(QPalette::WindowText, QColor(light ? "#272b32" : "#e2e5ea"));
+    palette.setColor(QPalette::Text, palette.color(QPalette::WindowText));
+    palette.setColor(QPalette::ButtonText, palette.color(QPalette::WindowText));
+    palette.setColor(QPalette::Highlight, QColor(light ? "#507aaa" : "#8baed6"));
+    palette.setColor(QPalette::HighlightedText, QColor(light ? "#ffffff" : "#15191f"));
+    for (QPalette::ColorRole role : {QPalette::WindowText, QPalette::Text,
+                                   QPalette::ButtonText})
+        palette.setColor(QPalette::Disabled, role, QColor(light ? "#989da6" : "#747b85"));
+    qApp->setPalette(palette);
     qApp->setStyleSheet(stream.readAll());
+    for (QMdiArea* area : findChildren<QMdiArea*>())
+        area->setBackground(palette.brush(QPalette::Window));
 
     m_currentTheme = normalizedTheme;
 
@@ -615,7 +671,7 @@ void MainWindow::updateShowActions()
 
     ui->action_ShowDataWindow->setEnabled(enabled);
     ui->action_ShowDisplayWindow->setEnabled(enabled);
-    ui->action_Save->setEnabled(copyEnabled);
+    ui->action_Save->setEnabled(model && model->isImageLoaded());
     ui->action_CopyImage->setEnabled(copyEnabled);
     ui->action_CopyImageFullResolution->setEnabled(copyEnabled);
 
@@ -632,6 +688,7 @@ void MainWindow::updateShowActions()
 void MainWindow::updateFileTabPresentation()
 {
     const int index = m_openFileTabs->currentIndex();
+    m_workspace->setCurrentWidget(index < 0 ? m_welcomePage : m_openFileTabs);
     QString   title;
 
     if (index >= 0) {
@@ -658,6 +715,10 @@ void MainWindow::updateFileTabPresentation()
 
 void MainWindow::installEmptyOpenEventFilters()
 {
+    m_welcomePage->installEventFilter(this);
+    for (QWidget* widget : m_welcomePage->findChildren<QWidget*>()) {
+        if (!qobject_cast<QPushButton*>(widget)) widget->installEventFilter(this);
+    }
     m_openFileTabs->installEventFilter(this);
 
     for (QWidget* widget : m_openFileTabs->findChildren<QWidget*>(
@@ -677,7 +738,9 @@ bool MainWindow::handleEmptyOpenClick(QObject* watched, QEvent* event)
     if (!watchedWidget) return false;
     if (
       watchedWidget != m_openFileTabs
-      && !m_openFileTabs->isAncestorOf(watchedWidget)) {
+      && !m_openFileTabs->isAncestorOf(watchedWidget)
+      && watchedWidget != m_welcomePage
+      && !m_welcomePage->isAncestorOf(watchedWidget)) {
         return false;
     }
     if (qobject_cast<QTabBar*>(watchedWidget)) return false;
@@ -693,6 +756,8 @@ bool MainWindow::handleEmptyOpenClick(QObject* watched, QEvent* event)
 
 void MainWindow::addFileTab(ImageFileWidget* fileWidget, const QString& title)
 {
+    applyPanelVisibility(fileWidget);
+    fileWidget->setRgbPreviewMode(m_rgbPreviewMode);
     connect(
       fileWidget,
       &ImageFileWidget::openFileOnDropEvent,
@@ -819,7 +884,7 @@ void MainWindow::on_action_Save_triggered()
     const FramebufferModel* model
       = widget ? widget->activeFramebufferModel() : nullptr;
 
-    if (!model || !model->isPreviewReady()) return;
+    if (!model || !model->isImageLoaded()) return;
 
     QString folder = m_currentOpenedFolder.isEmpty() ? QDir::homePath()
                                                      : m_currentOpenedFolder;
@@ -833,20 +898,46 @@ void MainWindow::on_action_Save_triggered()
 
     SaveImageDialog dialog(QDir(folder).filePath(base + ".png"), this);
 
-    ImageSave::Source source;
-    source.activeModel = model;
-    source.sourceImage = widget ? widget->sourceImage() : nullptr;
+    const QPointer<const FramebufferModel> guardedModel(model);
+    const QPointer<OpenEXRImage> guardedImage(widget ? widget->sourceImage() : nullptr);
+    const auto updateSource = [&dialog, guardedModel, guardedImage] {
+        dialog.setSourceState(
+          guardedModel && guardedImage && guardedModel->isImageLoaded(),
+          guardedModel && guardedModel->isPreviewReady(),
+          guardedModel ? guardedModel->errorString() : QString());
+    };
+    updateSource();
+    connect(model, &FramebufferModel::readinessChanged, &dialog, updateSource);
+    connect(model, &QObject::destroyed, &dialog, [&dialog] {
+        dialog.setSourceState(false, false);
+    });
+    if (guardedImage) {
+        connect(guardedImage.data(), &QObject::destroyed, &dialog, [&dialog] {
+            dialog.setSourceState(false, false);
+        });
+    }
 
     connect(
       &dialog,
       &SaveImageDialog::saveRequested,
-      this,
-      [this, &dialog, source]() {
+      &dialog,
+      [this, &dialog, guardedModel, guardedImage, updateSource]() {
+          updateSource();
+          if (!guardedModel || !guardedImage || !guardedModel->isImageLoaded()) return;
+          ImageSave::Source source;
+          source.activeModel = guardedModel.data();
+          source.sourceImage = guardedImage.data();
           ImageSave::Options options    = dialog.options();
+          if (options.target == ImageSave::TargetPreview && !guardedModel->isPreviewReady())
+              return;
           ImageSave::Result  saveResult = ImageSave::save(source, options);
 
           if (saveResult.status == ImageSave::StatusConflict) {
               options.conflict = conflictChoice(this, saveResult.paths);
+              updateSource();
+              if (!guardedModel || !guardedImage || !guardedModel->isImageLoaded()) return;
+              if (options.target == ImageSave::TargetPreview && !guardedModel->isPreviewReady())
+                  return;
               saveResult       = ImageSave::save(source, options);
           }
 
@@ -1105,8 +1196,8 @@ void MainWindow::writeSettings()
     settings.beginGroup("MainWindow");
     settings.setValue("geometry", saveGeometry());
     settings.setValue("state", saveState());
-    settings.setValue("splitterImage", m_splitterImageState);
-    settings.setValue("splitterProperties", m_splitterPropertiesState);
+    settings.setValue("workspaceV2/splitterImage", m_splitterImageState);
+    settings.setValue("workspaceV2/splitterProperties", m_splitterPropertiesState);
     settings.setValue("openedFolder", m_currentOpenedFolder);
     settings.setValue("theme", m_currentTheme);
     settings.endGroup();
@@ -1125,9 +1216,9 @@ void MainWindow::readSettings()
     restoreGeometry(settings.value("geometry").toByteArray());
     restoreState(settings.value("state").toByteArray());
 
-    m_splitterImageState = settings.value("splitterImage").toByteArray();
+    m_splitterImageState = settings.value("workspaceV2/splitterImage").toByteArray();
     m_splitterPropertiesState
-      = settings.value("splitterProperties").toByteArray();
+      = settings.value("workspaceV2/splitterProperties").toByteArray();
 
     if (settings.contains("openedFolder")) {
         m_currentOpenedFolder = settings.value("openedFolder").toString();

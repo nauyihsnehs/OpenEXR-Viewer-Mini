@@ -37,8 +37,11 @@
 #include <QFileInfo>
 #include <QItemSelectionModel>
 #include <QList>
+#include <QLabel>
 #include <QVBoxLayout>
 #include <QDir>
+#include <QDataStream>
+#include <QIODevice>
 #include <QMdiSubWindow>
 #include <QMessageBox>
 #include <QMouseEvent>
@@ -636,28 +639,52 @@ void ImageFileWidget::setTiled()
 void ImageFileWidget::setupLayout()
 {
     QVBoxLayout* layout = new QVBoxLayout(this);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(0);
 
     m_splitterImageView  = new QSplitter(this);
     m_splitterProperties = new QSplitter(Qt::Vertical, m_splitterImageView);
+    m_splitterProperties->setObjectName("informationSidebar");
+    m_splitterProperties->setMinimumWidth(200);
+    m_splitterProperties->setChildrenCollapsible(false);
+    m_splitterImageView->setChildrenCollapsible(false);
+    m_splitterImageView->setHandleWidth(5);
+    m_splitterProperties->setHandleWidth(5);
 
-    m_attributesTreeView = new QTreeView(m_splitterProperties);
+    auto makePanel = [this](const QString& title) {
+        auto* panel = new QWidget(m_splitterProperties);
+        panel->setObjectName("informationPanel");
+        auto* items = new QVBoxLayout(panel);
+        items->setContentsMargins(8, 8, 8, 8);
+        items->setSpacing(8);
+        auto* heading = new QLabel(title, panel);
+        heading->setObjectName("panelHeading");
+        items->addWidget(heading);
+        return panel;
+    };
+    m_layersPanel = makePanel(tr("Layers"));
+    m_attributesPanel = makePanel(tr("Attributes"));
+
+    m_attributesTreeView = new QTreeView(m_attributesPanel);
+    m_attributesPanel->layout()->addWidget(m_attributesTreeView);
     m_attributesTreeView->setAlternatingRowColors(true);
     m_attributesTreeView->setExpandsOnDoubleClick(false);
-    m_attributesTreeView->setIndentation(32);
+    m_attributesTreeView->setIndentation(16);
 
-    m_layersTreeView = new QTreeView(m_splitterProperties);
+    m_layersTreeView = new QTreeView(m_layersPanel);
+    m_layersPanel->layout()->addWidget(m_layersTreeView);
     m_layersTreeView->setUniformRowHeights(true);
     m_layersTreeView->installEventFilter(this);
     m_layersTreeView->setAlternatingRowColors(true);
     m_layersTreeView->setExpandsOnDoubleClick(false);
-    m_layersTreeView->setIndentation(32);
+    m_layersTreeView->setIndentation(16);
 
     m_mdiArea = new QMdiArea(m_splitterImageView);
     m_mdiArea->setViewMode(QMdiArea::TabbedView);
     m_mdiArea->setTabsMovable(true);
     m_mdiArea->setTabsClosable(true);
     m_mdiArea->setDocumentMode(true);
-    m_mdiArea->setBackground(QBrush(QColor(80, 80, 80)));
+    m_mdiArea->setBackground(palette().brush(QPalette::Window));
     syncTabbedPreviewPresentation();
 
     connect(
@@ -666,11 +693,19 @@ void ImageFileWidget::setupLayout()
       this,
       SLOT(onActiveSubWindowChanged(QMdiSubWindow*)));
 
-    m_splitterProperties->addWidget(m_attributesTreeView);
-    m_splitterProperties->addWidget(m_layersTreeView);
+    m_splitterProperties->addWidget(m_layersPanel);
+    m_splitterProperties->addWidget(m_attributesPanel);
 
-    m_splitterImageView->addWidget(m_splitterProperties);
     m_splitterImageView->addWidget(m_mdiArea);
+    m_splitterImageView->addWidget(m_splitterProperties);
+    m_splitterImageView->setStretchFactor(0, 1);
+    m_splitterImageView->setStretchFactor(1, 0);
+    m_splitterImageView->setSizes({700, m_propertiesWidth});
+    m_splitterImageView->installEventFilter(this);
+    connect(m_splitterImageView, &QSplitter::splitterMoved, this, [this] {
+        if (m_splitterProperties->isVisible())
+            m_propertiesWidth = m_splitterProperties->width();
+    });
 
     layout->addWidget(m_splitterImageView);
 
@@ -680,6 +715,13 @@ void ImageFileWidget::setupLayout()
 
 bool ImageFileWidget::eventFilter(QObject* watched, QEvent* event)
 {
+    if (watched == m_splitterImageView && event->type() == QEvent::Show
+        && !m_splitterProperties->isHidden()) {
+        const int available = m_splitterImageView->width()
+                              - m_splitterImageView->handleWidth();
+        m_splitterImageView->setSizes(
+          {qMax(1, available - m_propertiesWidth), m_propertiesWidth});
+    }
     if (watched == m_layersTreeView && event->type() == QEvent::KeyPress) {
         auto* key = static_cast<QKeyEvent*>(event);
         if (key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter) {
@@ -1172,16 +1214,41 @@ bool ImageFileWidget::isDisplayWindowVisible() const
 }
 
 
+QByteArray ImageFileWidget::getSplitterImageState() const
+{
+    QByteArray state;
+    QDataStream stream(&state, QIODevice::WriteOnly);
+    stream.setVersion(QDataStream::Qt_5_0);
+    const int width = m_splitterProperties->isVisible()
+                        ? m_splitterProperties->width() : m_propertiesWidth;
+    // QSplitter's hidden pane size is not its last expanded width.
+    stream << m_splitterImageView->saveState() << qint32(width);
+    return state;
+}
+
+void ImageFileWidget::setSplitterImageState(const QByteArray& state)
+{
+    if (state.isEmpty()) return;
+    QDataStream stream(state);
+    stream.setVersion(QDataStream::Qt_5_0);
+    QByteArray splitterState;
+    qint32 width = 0;
+    stream >> splitterState >> width;
+    if (stream.status() != QDataStream::Ok || width < 200 || width > QWIDGETSIZE_MAX)
+        return;
+    if (m_splitterImageView->restoreState(splitterState)) m_propertiesWidth = width;
+}
+
 void ImageFileWidget::setAttributesVisible(bool visible)
 {
-    m_attributesTreeView->setVisible(visible);
+    m_attributesPanel->setVisible(visible);
     updatePropertiesVisibility();
 }
 
 
 void ImageFileWidget::setLayersVisible(bool visible)
 {
-    m_layersTreeView->setVisible(visible);
+    m_layersPanel->setVisible(visible);
     updatePropertiesVisibility();
 }
 
@@ -1189,9 +1256,21 @@ void ImageFileWidget::setLayersVisible(bool visible)
 void ImageFileWidget::updatePropertiesVisibility()
 {
     const bool showProperties
-      = !m_attributesTreeView->isHidden() || !m_layersTreeView->isHidden();
+      = !m_attributesPanel->isHidden() || !m_layersPanel->isHidden();
+
+    if (showProperties == !m_splitterProperties->isHidden()) return;
+    if (!showProperties && m_splitterProperties->isVisible()) {
+        const QList<int> sizes = m_splitterImageView->sizes();
+        if (sizes.size() == 2 && sizes[1] > 0) m_propertiesWidth = sizes[1];
+    }
 
     m_splitterProperties->setVisible(showProperties);
+    if (showProperties) {
+        const int available = m_splitterImageView->width()
+                              - m_splitterImageView->handleWidth();
+        m_splitterImageView->setSizes(
+          {qMax(1, available - m_propertiesWidth), m_propertiesWidth});
+    }
 }
 
 

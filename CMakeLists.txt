@@ -88,6 +88,8 @@ set(PROJECT_SOURCES
     src/view/mainwindow.cpp
     src/view/mainwindow.h
     src/view/mainwindow.ui
+    src/view/WorkspaceWidgets.cpp
+    src/view/WorkspaceWidgets.h
 
     src/view/about.cpp
     src/view/about.h

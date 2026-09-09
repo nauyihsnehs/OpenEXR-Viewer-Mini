@@ -37,6 +37,7 @@
 #include "FramebufferInfo.h"
 #include "GraphicsView.h"
 #include "ComboBoxBehavior.h"
+#include "WorkspaceWidgets.h"
 
 #include <QAbstractSpinBox>
 #include <QComboBox>
@@ -82,6 +83,7 @@ RGBFramebufferWidget::RGBFramebufferWidget(QWidget* parent)
   , m_savedFalseColorMax(1.)
 {
     ui->setupUi(this);
+    wrapPreviewControls(ui->verticalLayout);
     m_toneParamControls[0] = {
       ui->toneParamWidget0,
       ui->toneParamButton0,
@@ -248,6 +250,12 @@ void RGBFramebufferWidget::setSpinBoxCompact(
     spinBox->setFixedWidth(compact ? 66 : 84);
     spinBox->setButtonSymbols(
       compact ? QAbstractSpinBox::NoButtons : QAbstractSpinBox::UpDownArrows);
+    if (spinBox->property("compactValue") != QVariant(compact)) {
+        spinBox->setProperty("compactValue", compact);
+        spinBox->style()->unpolish(spinBox);
+        spinBox->style()->polish(spinBox);
+        spinBox->update();
+    }
 }
 
 

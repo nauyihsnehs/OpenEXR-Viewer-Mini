@@ -60,6 +60,7 @@ QT_END_NAMESPACE
 class QEvent;
 class QResizeEvent;
 class QToolButton;
+class QStackedWidget;
 
 class MainWindow: public QMainWindow
 {
@@ -154,6 +155,7 @@ class MainWindow: public QMainWindow
     void             applyPanelVisibility(ImageFileWidget* widget) const;
     void             applyPanelVisibilityToAllTabs() const;
     void             setupTitleBar();
+    void             setupWorkspace();
     void             setupPreviewModeActions();
     void             setupThemeActions();
     void             applyRgbPreviewMode(RGBFramebufferModel::PreviewMode mode);
@@ -172,6 +174,8 @@ class MainWindow: public QMainWindow
     Ui::MainWindow* ui;
 
     QTabWidget* m_openFileTabs;
+    QStackedWidget* m_workspace = nullptr;
+    QWidget* m_welcomePage = nullptr;
     QList<PendingOpen> m_pendingOpens;
 
     QLabel*      m_windowTitleLabel;

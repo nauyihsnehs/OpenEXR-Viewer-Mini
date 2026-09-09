@@ -19,6 +19,7 @@ class SaveImageDialog: public QDialog
 
     ImageSave::Options options() const;
     void               setStatus(const QString& message, bool error);
+    void setSourceState(bool available, bool previewReady, const QString& error = QString());
 
   public slots:
     void reject() override;
@@ -31,6 +32,7 @@ class SaveImageDialog: public QDialog
     void restoreLastOptions();
     void rememberOptions();
     void updateOptions();
+    void updateSaveAvailability();
     void updatePathExtension();
     void requestSave();
     void browse();
@@ -39,4 +41,8 @@ class SaveImageDialog: public QDialog
     ImageSave::Format format() const;
 
     Ui::SaveImageDialog* ui;
+    bool m_sourceAvailable = false;
+    bool m_previewReady = false;
+    bool m_readinessStatus = true;
+    QString m_previewError;
 };

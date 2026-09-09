@@ -204,14 +204,14 @@ void RangeSliderWidget::paintEvent(QPaintEvent* event)
       barHeight);
 
     painter.setPen(Qt::NoPen);
-    painter.setBrush(QColor(80, 80, 80));
+    painter.setBrush(palette().color(QPalette::Button));
     painter.drawRoundedRect(trackRect, 2, 2);
 
-    painter.setBrush(QColor(210, 210, 210));
+    painter.setBrush(palette().color(QPalette::Highlight));
     painter.drawRoundedRect(selectedRect, 2, 2);
 
-    painter.setPen(QColor(35, 35, 35));
-    painter.setBrush(QColor(245, 245, 245));
+    painter.setPen(palette().color(QPalette::Window));
+    painter.setBrush(palette().color(QPalette::Highlight));
     painter.drawEllipse(QPoint(minX, centerY), 6, 6);
     painter.drawEllipse(QPoint(maxX, centerY), 6, 6);
 }

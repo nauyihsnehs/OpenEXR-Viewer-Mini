@@ -66,15 +66,8 @@ class ImageFileWidget: public QWidget
     QString getOpenedFolder() const { return m_openedFolder; }
     QString getOpenedFilename() const { return m_openedFilename; }
 
-    QByteArray getSplitterImageState() const
-    {
-        return m_splitterImageView->saveState();
-    }
-
-    void setSplitterImageState(const QByteArray& state)
-    {
-        m_splitterImageView->restoreState(state);
-    }
+    QByteArray getSplitterImageState() const;
+    void setSplitterImageState(const QByteArray& state);
 
     QByteArray getSplitterPropertiesState() const
     {
@@ -193,6 +186,9 @@ class ImageFileWidget: public QWidget
 
     QSplitter* m_splitterImageView;
     QSplitter* m_splitterProperties;
+    QWidget* m_attributesPanel;
+    QWidget* m_layersPanel;
+    int m_propertiesWidth = 280;
     QTreeView* m_attributesTreeView;
     QTreeView* m_layersTreeView;
     QMdiArea*  m_mdiArea;

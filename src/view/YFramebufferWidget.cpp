@@ -35,6 +35,7 @@
 #include "ui_YFramebufferWidget.h"
 
 #include "ComboBoxBehavior.h"
+#include "WorkspaceWidgets.h"
 #include "FramebufferInfo.h"
 
 #include <QPoint>
@@ -50,6 +51,7 @@ YFramebufferWidget::YFramebufferWidget(QWidget* parent)
   , m_zoomLevel(1.)
 {
     ui->setupUi(this);
+    wrapPreviewControls(ui->verticalLayout);
     ui->fileInfoButton->setIcon(
       style()->standardIcon(QStyle::SP_MessageBoxInformation));
     ui->fileInfoButton->setToolTip(QString());
