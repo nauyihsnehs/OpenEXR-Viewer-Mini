@@ -10,6 +10,22 @@ Luminance-Chroma and Y layers.
 
 ![Screenshot from 2021-09-11 01-58-27](https://user-images.githubusercontent.com/7930348/132928984-fd31c2c3-c66f-43c9-b63b-2f1836a09fe8.png)
 
+Viewing controls
+================
+
+- Double-click an image to switch between the full workspace and a minimal
+  image window. Double-click again to restore the workspace and its view position.
+- In the minimal view, drag the image to move the window. The wheel scales the
+  image and window together, up to the available screen size.
+- Ctrl + wheel keeps the current mode's adjustment: exposure, the first tone
+  mapping parameter, or the false-color upper bound. Scalar layers are unchanged.
+- Right-click an image to reset the current mode's parameters without changing
+  other layers. In tone mapping this also restores the Reinhard method. The full
+  workspace keeps its zoom; the minimal view resets to 100%, capped to fit the screen.
+- The minimal footer shows the raw pixel coordinates and values under the pointer,
+  prioritizing pixel information when the window is narrow. Hover over the footer
+  to read the full text.
+
 Disclaimer
 ==========
 

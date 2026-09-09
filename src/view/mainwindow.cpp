@@ -33,6 +33,9 @@
 #include "mainwindow.h"
 #include "FileDrop.h"
 #include "WorkspaceWidgets.h"
+#include "MinimalImageWidget.h"
+#include "RGBFramebufferWidget.h"
+#include "YFramebufferWidget.h"
 #include <QShortcut>
 #include <QSignalBlocker>
 #include "./ui_mainwindow.h"
@@ -74,8 +77,13 @@
 #include <QStackedWidget>
 #include <QMdiArea>
 #include <QPalette>
+#include <QScreen>
+#include <QWindow>
+#include <QMoveEvent>
+#include <QScopedValueRollback>
 #include <QUrl>
 #include <QVariant>
+#include <cmath>
 
 #ifdef _WIN32
 #    include <windows.h>
@@ -306,6 +314,8 @@ MainWindow::MainWindow(QWidget* parent)
 
 MainWindow::~MainWindow()
 {
+    m_minimalView = false;
+    for (const auto& connection : m_minimalConnections) disconnect(connection);
     const QSignalBlocker blockTabs(m_openFileTabs);
     while (m_openFileTabs->count()) {
         QWidget* widget = m_openFileTabs->widget(0);
@@ -320,6 +330,7 @@ MainWindow::~MainWindow()
 void MainWindow::setupWorkspace()
 {
     auto* toolbar = new QToolBar(tr("Workspace"), this);
+    m_workspaceToolbar = toolbar;
     toolbar->setObjectName("workspaceToolbar");
     toolbar->setMovable(false);
     toolbar->setFloatable(false);
@@ -346,6 +357,10 @@ void MainWindow::setupWorkspace()
     m_openFileTabs->setDocumentMode(true);
     m_workspace->addWidget(m_openFileTabs);
     setCentralWidget(m_workspace);
+    // Menu widgets are hidden in image-window mode; keep their shortcuts on the window.
+    for (QAction* action : findChildren<QAction*>()) {
+        if (!action->shortcut().isEmpty()) addAction(action);
+    }
 }
 
 
@@ -559,7 +574,7 @@ void MainWindow::updateTitleBarButtons()
 
 void MainWindow::updateWindowFrame()
 {
-    const bool     frameActive    = !isMaximized() && !isFullScreen();
+    const bool     frameActive    = !m_minimalView && !isMaximized() && !isFullScreen();
     const QVariant oldFrameActive = property("windowFrameActive");
 
     setContentsMargins(0, 0, 0, 0);
@@ -603,6 +618,7 @@ void MainWindow::applyWindowsWindowStyle()
 
 bool MainWindow::isTitleBarDragArea(const QPoint& pos) const
 {
+    if (m_minimalView) return false;
     if (!m_titleBar || !m_titleBar->geometry().contains(pos)) return false;
 
     QWidget* child = childAt(pos);
@@ -660,6 +676,14 @@ void MainWindow::applyPanelVisibilityToAllTabs() const
 
 void MainWindow::updateShowActions()
 {
+    if (m_minimalView && !m_switchingMinimalView) {
+        const auto* currentModel = currentFileWidget()
+                                     ? currentFileWidget()->activeFramebufferModel() : nullptr;
+        if (!m_minimalModel || (currentModel && currentModel != m_minimalModel.data()))
+            leaveMinimalView();
+        else
+            updateMinimalSummary();
+    }
     ImageFileWidget*        widget = currentFileWidget();
     const FramebufferModel* model
       = widget ? widget->activeFramebufferModel() : nullptr;
@@ -756,6 +780,8 @@ bool MainWindow::handleEmptyOpenClick(QObject* watched, QEvent* event)
 
 void MainWindow::addFileTab(ImageFileWidget* fileWidget, const QString& title)
 {
+    connect(fileWidget, &ImageFileWidget::minimalViewRequested,
+            this, &MainWindow::toggleMinimalView);
     applyPanelVisibility(fileWidget);
     fileWidget->setRgbPreviewMode(m_rgbPreviewMode);
     connect(
@@ -826,6 +852,190 @@ void MainWindow::queueFileTab(
         resolvePendingOpen(fileWidget, true);
 }
 
+QRect MainWindow::minimalScreenGeometry(const QPoint& center) const
+{
+    for (QScreen* screen : QGuiApplication::screens()) {
+        if (screen->geometry().contains(center)) return screen->availableGeometry();
+    }
+    QScreen* screen = windowHandle() ? windowHandle()->screen() : QGuiApplication::primaryScreen();
+    return screen ? screen->availableGeometry() : QRect(0, 0, 1024, 768);
+}
+
+void MainWindow::toggleMinimalView()
+{
+    if (m_switchingMinimalView) return;
+    if (m_minimalView) {
+        leaveMinimalView();
+        return;
+    }
+    ImageFileWidget* document = currentFileWidget();
+    const FramebufferModel* model = document ? document->activeFramebufferModel() : nullptr;
+    GraphicsView* view = document ? document->activeGraphicsView() : nullptr;
+    if (!model || !view || !model->isImageLoaded() || model->getLoadedImage().isNull()
+        || model->width() <= 0 || model->height() <= 0
+        || !std::isfinite(model->pixelAspectRatio()) || model->pixelAspectRatio() <= 0.)
+        return;
+
+    QScopedValueRollback<bool> switching(m_switchingMinimalView, true);
+    const QPoint center = frameGeometry().center();
+    m_completeGeometry = saveGeometry();
+    m_completeMinimumSize = minimumSize();
+    m_completeMaximumSize = maximumSize();
+    m_completeToolbarVisible = m_workspaceToolbar->isVisible();
+    m_completeTitleVisible = m_titleBar->isVisible();
+    m_completeView = view;
+    m_completeViewState = view->viewState();
+    m_minimalPreview = document->activePreviewWidget();
+    m_minimalModel = model;
+    m_minimalView = true;
+
+    // Keep the original workspace alive, outside the central layout's size constraints.
+    QWidget* complete = takeCentralWidget();
+    complete->setParent(this);
+    complete->hide();
+    m_workspaceToolbar->hide();
+    m_titleBar->hide();
+    m_minimalPage = new MinimalImageWidget(this);
+    setCentralWidget(m_minimalPage);
+    setMinimumSize(1, m_minimalPage->footerHeight() + 1);
+    setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
+    if (isMaximized() || isFullScreen()) showNormal();
+    updateWindowFrame();
+    m_minimalPage->view()->setModel(model);
+
+    connect(m_minimalPage->view(), &GraphicsView::minimalViewRequested,
+            this, &MainWindow::toggleMinimalView);
+    connect(m_minimalPage->view(), &GraphicsView::imageWindowZoomRequested,
+            this, &MainWindow::resizeMinimalView);
+    connect(m_minimalPage->view(), &GraphicsView::imageWindowMoveRequested,
+            this, &MainWindow::moveMinimalView);
+    connect(m_minimalPage->view(), &GraphicsView::resetParametersRequested,
+            this, &MainWindow::resetMinimalParameters);
+    connect(m_minimalPage->view(), &GraphicsView::controlWheel,
+            this, &MainWindow::adjustMinimalParameter);
+    const QPointer<const FramebufferModel> pixelModel(model);
+    MinimalImageWidget* pixelPage = m_minimalPage;
+    connect(pixelPage->view(), &GraphicsView::queryPixelInfo, pixelPage,
+            [pixelPage, pixelModel](int x, int y) {
+        pixelPage->setPixelInfo(pixelModel
+          ? QString::fromStdString(pixelModel->getColorInfo(x, y)) : QString());
+    });
+    connect(m_minimalPage->view(), &GraphicsView::openFileOnDropEvent,
+            this, static_cast<void (MainWindow::*)(const QString&)>(&MainWindow::open));
+    m_minimalConnections.append(connect(model, &QObject::destroyed, this, [this] {
+        leaveMinimalView();
+    }));
+    m_minimalConnections.append(connect(model, &FramebufferModel::readinessChanged,
+                                        this, [this] {
+        if (!m_minimalModel || !m_minimalModel->isImageLoaded()) leaveMinimalView();
+        else updateMinimalSummary();
+    }));
+    m_minimalConnections.append(connect(model, &FramebufferModel::imageLoaded,
+                                        this, [this] {
+        if (m_minimalView) resizeMinimalView(m_minimalPage->view()->viewState().zoom);
+    }));
+    move(center - QPoint(width() / 2, height() / 2));
+    resizeMinimalView(m_completeViewState.zoom);
+    m_minimalPage->view()->setFocus(Qt::OtherFocusReason);
+}
+
+void MainWindow::leaveMinimalView()
+{
+    if (!m_minimalView || m_switchingMinimalView) return;
+    QScopedValueRollback<bool> switching(m_switchingMinimalView, true);
+    m_minimalView = false;
+    for (const auto& connection : m_minimalConnections) disconnect(connection);
+    m_minimalConnections.clear();
+    m_minimalPage->view()->setModel(nullptr);
+    QWidget* page = takeCentralWidget();
+    page->setParent(this);
+    page->hide();
+    page->deleteLater();
+    m_minimalPage = nullptr;
+    m_minimalModel.clear();
+    m_minimalPreview.clear();
+    setCentralWidget(m_workspace);
+    m_workspace->show();
+    m_titleBar->setVisible(m_completeTitleVisible);
+    m_workspaceToolbar->setVisible(m_completeToolbarVisible);
+    setMinimumSize(m_completeMinimumSize);
+    setMaximumSize(m_completeMaximumSize);
+    restoreGeometry(m_completeGeometry);
+    updateWindowFrame();
+    layout()->activate();
+    if (m_completeView) {
+        m_completeView->restoreViewState(m_completeViewState);
+        m_completeView->setFocus(Qt::OtherFocusReason);
+    }
+    m_completeView.clear();
+}
+
+void MainWindow::resizeMinimalView(double zoom)
+{
+    if (!m_minimalView || !m_minimalModel || m_resizingMinimalView || !std::isfinite(zoom))
+        return;
+    QScopedValueRollback<bool> resizing(m_resizingMinimalView, true);
+    const QPoint center = frameGeometry().center();
+    const QRect available = minimalScreenGeometry(center);
+    const int footer = m_minimalPage->footerHeight();
+    const double imageWidth = m_minimalModel->width() * double(m_minimalModel->pixelAspectRatio());
+    const double imageHeight = m_minimalModel->height();
+    if (imageWidth <= 0. || imageHeight <= 0. || !std::isfinite(imageWidth)) return;
+    const double maximum = qMin(available.width() / imageWidth,
+                                qMax(1, available.height() - footer) / imageHeight);
+    if (maximum <= 0.) return;
+    zoom = zoom <= 0. ? maximum : qBound(qMin(0.01, maximum), zoom, maximum);
+    const QSize size(qBound(1, int(std::ceil(imageWidth * zoom)), available.width()),
+                     qBound(1, int(std::ceil(imageHeight * zoom)),
+                            qMax(1, available.height() - footer)) + footer);
+    QPoint position = center - QPoint(size.width() / 2, size.height() / 2);
+    position.setX(qBound(available.left(), position.x(), available.right() - size.width() + 1));
+    position.setY(qBound(available.top(), position.y(), available.bottom() - size.height() + 1));
+    setGeometry(QRect(position, size));
+    layout()->activate();
+    m_minimalPage->layout()->activate();
+    m_minimalPage->view()->applyImageWindowZoom(zoom);
+    updateMinimalSummary();
+}
+
+void MainWindow::moveMinimalView(const QPoint& position)
+{
+    if (!m_minimalView) return;
+    // Moving first allows the destination monitor to determine the new zoom limit.
+    move(position);
+    resizeMinimalView(m_minimalPage->view()->viewState().zoom);
+}
+
+void MainWindow::updateMinimalSummary()
+{
+    if (!m_minimalView || !m_minimalModel || !m_minimalPage) return;
+    QString parameter;
+    if (auto* rgb = qobject_cast<RGBFramebufferWidget*>(m_minimalPreview.data()))
+        parameter = rgb->currentParameterText();
+    else if (auto* scalar = qobject_cast<YFramebufferWidget*>(m_minimalPreview.data()))
+        parameter = scalar->currentParameterText();
+    const QString file = m_openFileTabs->tabText(m_openFileTabs->currentIndex());
+    m_minimalPage->setSummary(tr("%1 | %2 x %3 | %4% | %5")
+      .arg(file).arg(m_minimalModel->width()).arg(m_minimalModel->height())
+      .arg(m_minimalPage->view()->viewState().zoom * 100., 0, 'f', 1).arg(parameter));
+}
+
+void MainWindow::resetMinimalParameters()
+{
+    if (auto* rgb = qobject_cast<RGBFramebufferWidget*>(m_minimalPreview.data()))
+        rgb->resetCurrentMode();
+    else if (auto* scalar = qobject_cast<YFramebufferWidget*>(m_minimalPreview.data()))
+        scalar->resetCurrentMode();
+    resizeMinimalView(1.);
+}
+
+void MainWindow::adjustMinimalParameter(double steps)
+{
+    if (auto* rgb = qobject_cast<RGBFramebufferWidget*>(m_minimalPreview.data()))
+        rgb->onControlWheel(steps);
+    updateMinimalSummary();
+}
+
 
 void MainWindow::resolvePendingOpen(
   ImageFileWidget* fileWidget, bool succeeded)
@@ -854,6 +1064,7 @@ void MainWindow::flushPendingOpens()
 
 void MainWindow::open(std::istream& stream)
 {
+    leaveMinimalView();
     queueFileTab(
       new ImageFileWidget(stream, m_openFileTabs),
       tr("Stream"));
@@ -861,6 +1072,7 @@ void MainWindow::open(std::istream& stream)
 
 void MainWindow::open(const QString& filename)
 {
+    leaveMinimalView();
     const QFileInfo info(filename);
     queueFileTab(
       new ImageFileWidget(info.absoluteFilePath(), m_openFileTabs),
@@ -974,6 +1186,7 @@ void MainWindow::on_action_CopyImageFullResolution_triggered()
 
 void MainWindow::closeEvent(QCloseEvent* event)
 {
+    leaveMinimalView();
     writeSettings();
     event->accept();
 }
@@ -984,6 +1197,10 @@ void MainWindow::changeEvent(QEvent* event)
     QMainWindow::changeEvent(event);
 
     if (event->type() == QEvent::WindowStateChange) {
+        if (m_minimalView && !m_switchingMinimalView && !isMinimized()) {
+            if (isMaximized() || isFullScreen()) showNormal();
+            resizeMinimalView(m_minimalPage->view()->viewState().zoom);
+        }
         updateTitleBarButtons();
         updateWindowFrame();
     }
@@ -994,6 +1211,13 @@ void MainWindow::resizeEvent(QResizeEvent* event)
 {
     QMainWindow::resizeEvent(event);
     updateWindowFrame();
+}
+
+void MainWindow::moveEvent(QMoveEvent* event)
+{
+    QMainWindow::moveEvent(event);
+    if (m_minimalView && !m_switchingMinimalView && !m_resizingMinimalView)
+        resizeMinimalView(m_minimalPage->view()->viewState().zoom);
 }
 
 
@@ -1059,6 +1283,11 @@ bool MainWindow::nativeEvent(
 #    endif
 {
     MSG* msg = static_cast<MSG*>(message);
+
+    if (m_minimalView && msg->message == WM_NCHITTEST) {
+        *result = HTCLIENT;
+        return true;
+    }
 
     if (msg->message == WM_NCCALCSIZE) {
         *result = 0;
@@ -1234,6 +1463,7 @@ void MainWindow::readSettings()
 
 void MainWindow::onTabCloseRequested(int idx)
 {
+    leaveMinimalView();
     // Saves state in case this is the last opened tab
     auto* widget = qobject_cast<ImageFileWidget*>(m_openFileTabs->widget(idx));
     if (!widget) return;
@@ -1251,6 +1481,7 @@ void MainWindow::onTabCloseRequested(int idx)
 
 void MainWindow::on_action_Tabbed_triggered()
 {
+    leaveMinimalView();
     ImageFileWidget* widget = (ImageFileWidget*)m_openFileTabs->currentWidget();
 
     if (widget) {
@@ -1261,6 +1492,7 @@ void MainWindow::on_action_Tabbed_triggered()
 
 void MainWindow::on_action_Cascade_triggered()
 {
+    leaveMinimalView();
     ImageFileWidget* widget = (ImageFileWidget*)m_openFileTabs->currentWidget();
 
     if (widget) {
@@ -1271,6 +1503,7 @@ void MainWindow::on_action_Cascade_triggered()
 
 void MainWindow::on_action_Tiled_triggered()
 {
+    leaveMinimalView();
     ImageFileWidget* widget = (ImageFileWidget*)m_openFileTabs->currentWidget();
 
     if (widget) {
@@ -1349,6 +1582,7 @@ void MainWindow::on_action_Refresh_triggered()
 
 void MainWindow::onCurrentChanged(int index)
 {
+    if (!m_switchingMinimalView) leaveMinimalView();
     if (index == -1) {
         // deactivate close and refresh functions
         ui->action_Refresh->setEnabled(false);

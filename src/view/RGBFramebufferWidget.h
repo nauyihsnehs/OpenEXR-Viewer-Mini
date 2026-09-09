@@ -60,8 +60,14 @@ class RGBFramebufferWidget: public QWidget
     void         setPreviewMode(RGBFramebufferModel::PreviewMode mode);
     PreviewState previewState() const;
     void         restorePreviewState(const PreviewState& state);
+    QString currentParameterText() const;
+
+  public slots:
+    void resetCurrentMode();
+    void onControlWheel(double steps);
 
   signals:
+    void minimalViewRequested();
     void openFileOnDropEvent(const QString& filename);
     void fileInfoHoverRequested(QWidget* widget, const QPoint& position);
     void fileInfoHoverLeft();
@@ -98,7 +104,6 @@ class RGBFramebufferWidget: public QWidget
     void on_toneParamButton3_clicked();
 
     void onOpenFileOnDropEvent(const QString& filename);
-    void onControlWheel(double steps);
     void updateZoomLevelText(double zoom);
     void updateFramebufferSummary();
     void updateFalseColorRangeBounds();

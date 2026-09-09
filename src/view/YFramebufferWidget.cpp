@@ -52,6 +52,10 @@ YFramebufferWidget::YFramebufferWidget(QWidget* parent)
 {
     ui->setupUi(this);
     wrapPreviewControls(ui->verticalLayout);
+    connect(ui->graphicsView, &GraphicsView::minimalViewRequested,
+            this, &YFramebufferWidget::minimalViewRequested);
+    connect(ui->graphicsView, &GraphicsView::resetParametersRequested,
+            this, &YFramebufferWidget::resetCurrentMode);
     ui->fileInfoButton->setIcon(
       style()->standardIcon(QStyle::SP_MessageBoxInformation));
     ui->fileInfoButton->setToolTip(QString());
@@ -241,4 +245,20 @@ void YFramebufferWidget::restorePreviewState(const PreviewState& state)
         setRange(m_model->getDatasetMin(), m_model->getDatasetMax());
     else
         setRange(state.minimum, state.maximum);
+}
+
+void YFramebufferWidget::resetCurrentMode()
+{
+    if (!m_model || !m_model->isImageLoaded()) return;
+    m_autoRange = false;
+    ui->cbColormap->setCurrentIndex(ColormapModule::GRAYSCALE);
+    setRange(0., 1.);
+    ui->cbScale->setChecked(true);
+}
+
+QString YFramebufferWidget::currentParameterText() const
+{
+    return tr("%1 | %2 - %3").arg(ui->cbColormap->currentText())
+      .arg(ui->sbMinValue->value(), 0, 'g', 4)
+      .arg(ui->sbMaxValue->value(), 0, 'g', 4);
 }

@@ -51,6 +51,8 @@ class GraphicsView: public QGraphicsView
     bool      isDataWindowVisible() const { return _showDataWindow; }
     ViewState viewState() const;
     void      restoreViewState(const ViewState& state);
+    void setImageWindowMode();
+    void applyImageWindowZoom(double zoom);
 
   public slots:
     void setModel(const FramebufferModel* model);
@@ -62,12 +64,17 @@ class GraphicsView: public QGraphicsView
     void autoscale();
     void showDisplayWindow(bool show);
     void showDataWindow(bool show);
+    void refreshPixelInfo();
 
   signals:
     void zoomLevelChanged(double zoom);
     void openFileOnDropEvent(const QString& filename);
     void queryPixelInfo(int x, int y);
     void controlWheel(double steps);
+    void minimalViewRequested();
+    void resetParametersRequested();
+    void imageWindowZoomRequested(double zoom);
+    void imageWindowMoveRequested(const QPoint& position);
 
   protected:
     void changeEvent(QEvent* event) override;
@@ -75,6 +82,8 @@ class GraphicsView: public QGraphicsView
     void resizeEvent(QResizeEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
+    void mouseDoubleClickEvent(QMouseEvent* event) override;
+    void contextMenuEvent(QContextMenuEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
     void leaveEvent(QEvent* event) override;
@@ -87,10 +96,16 @@ class GraphicsView: public QGraphicsView
 
   private:
     void updateCheckerboard();
+    bool imageContains(const QPoint& position) const;
+    void queryPixelAt(const QPoint& position);
     QPointer<const FramebufferModel> _model;
     QGraphicsPixmapItem*             _imageItem;
     QPoint                           _startDrag;
     bool                             _dragging  = false;
+    bool                             _imageWindow = false;
+    bool                             _rightClick = false;
+    QPoint                           _rightPress;
+    QPoint                           _windowDragOffset;
     double                           _zoomLevel = 1.;
     bool                             _autoscale = true;
     QRectF                           _dataWindow;

@@ -85,6 +85,8 @@ class ImageFileWidget: public QWidget
     bool                    isDataWindowVisible() const;
     bool                    isDisplayWindowVisible() const;
     const FramebufferModel* activeFramebufferModel() const;
+    GraphicsView* activeGraphicsView() const;
+    QWidget* activePreviewWidget() const;
     OpenEXRImage*           sourceImage() const { return m_img; }
     bool                    isDocumentReady() const;
     bool                    hasDocumentLoadFailed() const;
@@ -95,6 +97,7 @@ class ImageFileWidget: public QWidget
     void setRgbPreviewMode(RGBFramebufferModel::PreviewMode mode);
 
   signals:
+    void minimalViewRequested();
     void openFileOnDropEvent(const QString& filename);
     void activeFramebufferChanged();
     void documentReady();
@@ -173,7 +176,6 @@ class ImageFileWidget: public QWidget
     void           syncActiveLayerSelection();
     void           updatePropertiesVisibility();
 
-    GraphicsView*           activeGraphicsView() const;
     const FramebufferModel* framebufferModel(QMdiSubWindow* subWindow) const;
     QString     framebufferStatusText(QMdiSubWindow* subWindow) const;
     QString     framebufferStatusToolTip(QMdiSubWindow* subWindow) const;

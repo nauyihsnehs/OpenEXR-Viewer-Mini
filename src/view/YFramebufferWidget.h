@@ -56,8 +56,13 @@ class YFramebufferWidget: public QWidget
     const FramebufferModel* framebufferModel() const { return m_model; }
     PreviewState            previewState() const;
     void                    restorePreviewState(const PreviewState& state);
+    QString currentParameterText() const;
+
+  public slots:
+    void resetCurrentMode();
 
   signals:
+    void minimalViewRequested();
     void openFileOnDropEvent(const QString& filename);
     void fileInfoHoverRequested(QWidget* widget, const QPoint& position);
     void fileInfoHoverLeft();

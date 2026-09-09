@@ -283,6 +283,8 @@ void configureFramebuffer(
       &FramebufferModel::readinessChanged,
       receiver,
       &ImageFileWidget::activeFramebufferChanged);
+    QObject::connect(widget, &Widget::minimalViewRequested,
+                     receiver, &ImageFileWidget::minimalViewRequested);
     widget->setModel(model);
 }
 
@@ -1097,6 +1099,12 @@ void ImageFileWidget::setRgbPreviewMode(RGBFramebufferModel::PreviewMode mode)
     for (QMdiSubWindow* subWindow : m_mdiArea->subWindowList()) {
         applyMode(subWindow->widget());
     }
+}
+
+QWidget* ImageFileWidget::activePreviewWidget() const
+{
+    QMdiSubWindow* subWindow = m_mdiArea->activeSubWindow();
+    return subWindow ? subWindow->widget() : nullptr;
 }
 
 

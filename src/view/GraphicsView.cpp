@@ -33,6 +33,9 @@
 #include "GraphicsView.h"
 #include "FileDrop.h"
 #include <QDragEnterEvent>
+#include <QApplication>
+#include <QContextMenuEvent>
+#include <QCursor>
 #include <QGraphicsPixmapItem>
 #include <QEvent>
 #include <QPalette>
@@ -79,8 +82,11 @@ void GraphicsView::setModel(const FramebufferModel* model)
 {
     if (_model) disconnect(_model, nullptr, this, nullptr);
     _model = model;
+    _dragging = _rightClick = false;
+    unsetCursor();
     _imageItem->setPixmap(QPixmap());
     _dataWindow = _displayWindow = QRectF();
+    emit queryPixelInfo(-1, -1);
     if (!model) return;
     connect(
       model,
@@ -112,7 +118,11 @@ void GraphicsView::onImageLoaded()
       qreal(display.y()) - dataWindow.y(),
       display.width() * aspect,
       display.height());
-    scene()->setSceneRect(_dataWindow.united(_displayWindow));
+    scene()->setSceneRect(_imageWindow ? _dataWindow : _dataWindow.united(_displayWindow));
+    if (_imageWindow) {
+        applyImageWindowZoom(_zoomLevel);
+        return;
+    }
     if (_restorePending) {
         _restorePending = false;
         restoreViewState(_pendingState);
@@ -129,6 +139,10 @@ void GraphicsView::onImageChanged()
 void GraphicsView::setZoomLevel(double zoom)
 {
     if (!_model || !_model->isImageLoaded() || !std::isfinite(zoom)) return;
+    if (_imageWindow) {
+        emit imageWindowZoomRequested(zoom);
+        return;
+    }
     const QPointF center = mapToScene(viewport()->rect().center());
     _zoomLevel           = qBound(0.01, zoom, 64.);
     _autoscale           = false;
@@ -146,11 +160,38 @@ void GraphicsView::zoomOut()
 }
 void GraphicsView::autoscale()
 {
+    if (_imageWindow) {
+        emit imageWindowZoomRequested(0.);
+        return;
+    }
     if (!_model || !_model->isImageLoaded() || _displayWindow.isEmpty()) return;
     fitInView(_displayWindow, Qt::KeepAspectRatio);
     _zoomLevel = transform().m11();
     _autoscale = true;
     emit zoomLevelChanged(_zoomLevel);
+}
+
+void GraphicsView::setImageWindowMode()
+{
+    _imageWindow = true;
+    _autoscale = false;
+    _showDataWindow = _showDisplayWindow = false;
+    setFrameShape(QFrame::NoFrame);
+    setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    setAlignment(Qt::AlignLeft | Qt::AlignTop);
+    setMinimumSize(1, 1);
+    setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
+}
+
+void GraphicsView::applyImageWindowZoom(double zoom)
+{
+    if (!_imageWindow || !std::isfinite(zoom) || zoom <= 0.) return;
+    _zoomLevel = zoom;
+    setTransform(QTransform::fromScale(zoom, zoom));
+    centerOn(_dataWindow.center());
+    emit zoomLevelChanged(zoom);
+    refreshPixelInfo();
 }
 
 GraphicsView::ViewState GraphicsView::viewState() const
@@ -205,6 +246,8 @@ void GraphicsView::wheelEvent(QWheelEvent* event)
     }
     if (event->modifiers() & Qt::ControlModifier)
         emit controlWheel(steps);
+    else if (_imageWindow)
+        emit imageWindowZoomRequested(_zoomLevel * std::pow(1.1, qBound(-100., steps, 100.)));
     else {
 #if QT_VERSION >= QT_VERSION_CHECK(5, 14, 0)
         const QPoint position = event->position().toPoint();
@@ -254,41 +297,113 @@ void GraphicsView::keyPressEvent(QKeyEvent* event)
 }
 void GraphicsView::mousePressEvent(QMouseEvent* event)
 {
+    _rightClick = event->button() == Qt::RightButton
+                  && event->modifiers() == Qt::NoModifier && imageContains(event->pos());
+    if (_rightClick) {
+        _rightPress = event->pos();
+        event->accept();
+        return;
+    }
     if (
       _model && _model->isImageLoaded()
       && (event->button() == Qt::LeftButton || event->button() == Qt::MiddleButton)) {
         setFocus(Qt::MouseFocusReason);
         _dragging  = true;
         _startDrag = event->pos();
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+        _windowDragOffset = event->globalPosition().toPoint() - window()->pos();
+#else
+        _windowDragOffset = event->globalPos() - window()->pos();
+#endif
         setCursor(Qt::ClosedHandCursor);
         event->accept();
     } else
         QGraphicsView::mousePressEvent(event);
 }
+
+bool GraphicsView::imageContains(const QPoint& position) const
+{
+    return _model && _model->isImageLoaded()
+           && _dataWindow.contains(mapToScene(position));
+}
+
+void GraphicsView::mouseDoubleClickEvent(QMouseEvent* event)
+{
+    if (event->button() == Qt::LeftButton && event->modifiers() == Qt::NoModifier
+        && imageContains(event->pos())) {
+        _dragging = _rightClick = false;
+        unsetCursor();
+        event->accept();
+        emit minimalViewRequested();
+        return;
+    }
+    QGraphicsView::mouseDoubleClickEvent(event);
+}
+
+void GraphicsView::contextMenuEvent(QContextMenuEvent* event)
+{
+    // Right clicks on the image are a direct reset gesture, not a menu request.
+    event->accept();
+}
 void GraphicsView::mouseMoveEvent(QMouseEvent* event)
 {
     if (!_model || !_model->isImageLoaded()) return;
+    if (_rightClick && (event->pos() - _rightPress).manhattanLength()
+                       >= QApplication::startDragDistance())
+        _rightClick = false;
     if (_dragging && (event->buttons() & (Qt::LeftButton | Qt::MiddleButton))) {
+        if (_imageWindow) {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+            const QPoint globalPosition = event->globalPosition().toPoint();
+#else
+            const QPoint globalPosition = event->globalPos();
+#endif
+            emit imageWindowMoveRequested(globalPosition - _windowDragOffset);
+            return;
+        }
         const QPoint delta = event->pos() - _startDrag;
         horizontalScrollBar()->setValue(
           horizontalScrollBar()->value() - delta.x());
         verticalScrollBar()->setValue(verticalScrollBar()->value() - delta.y());
         _startDrag = event->pos();
     } else {
-        const QPointF pixel
-          = _imageItem->mapFromScene(mapToScene(event->pos()));
-        if (
-          pixel.x() < 0 || pixel.y() < 0 || pixel.x() >= _model->width()
-          || pixel.y() >= _model->height())
-            emit queryPixelInfo(-1, -1);
-        else
-            emit queryPixelInfo(
-              int(std::floor(pixel.x())),
-              int(std::floor(pixel.y())));
+        queryPixelAt(event->pos());
     }
+}
+
+void GraphicsView::queryPixelAt(const QPoint& position)
+{
+    if (!_model || !_model->isImageLoaded() || !viewport()->isVisible()
+        || !viewport()->rect().contains(position)) {
+        emit queryPixelInfo(-1, -1);
+        return;
+    }
+    const QPointF pixel = _imageItem->mapFromScene(mapToScene(position));
+    if (!std::isfinite(pixel.x()) || !std::isfinite(pixel.y())
+        || pixel.x() < 0 || pixel.y() < 0
+        || pixel.x() >= _model->width() || pixel.y() >= _model->height()) {
+        emit queryPixelInfo(-1, -1);
+        return;
+    }
+    emit queryPixelInfo(int(std::floor(pixel.x())), int(std::floor(pixel.y())));
+}
+
+void GraphicsView::refreshPixelInfo()
+{
+    queryPixelAt(viewport()->mapFromGlobal(QCursor::pos()));
 }
 void GraphicsView::mouseReleaseEvent(QMouseEvent* event)
 {
+    if (event->button() == Qt::RightButton) {
+        const bool reset = _rightClick && event->modifiers() == Qt::NoModifier
+                           && imageContains(event->pos())
+                           && (event->pos() - _rightPress).manhattanLength()
+                                < QApplication::startDragDistance();
+        _rightClick = false;
+        event->accept();
+        if (reset) emit resetParametersRequested();
+        return;
+    }
     if (
       event->button() == Qt::LeftButton
       || event->button() == Qt::MiddleButton) {
@@ -296,6 +411,7 @@ void GraphicsView::mouseReleaseEvent(QMouseEvent* event)
         unsetCursor();
     }
     QGraphicsView::mouseReleaseEvent(event);
+    if (_imageWindow) refreshPixelInfo();
 }
 void GraphicsView::leaveEvent(QEvent* event)
 {

@@ -90,6 +90,8 @@ set(PROJECT_SOURCES
     src/view/mainwindow.ui
     src/view/WorkspaceWidgets.cpp
     src/view/WorkspaceWidgets.h
+    src/view/MinimalImageWidget.cpp
+    src/view/MinimalImageWidget.h
 
     src/view/about.cpp
     src/view/about.h

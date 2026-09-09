@@ -84,6 +84,10 @@ RGBFramebufferWidget::RGBFramebufferWidget(QWidget* parent)
 {
     ui->setupUi(this);
     wrapPreviewControls(ui->verticalLayout);
+    connect(ui->graphicsView, &GraphicsView::minimalViewRequested,
+            this, &RGBFramebufferWidget::minimalViewRequested);
+    connect(ui->graphicsView, &GraphicsView::resetParametersRequested,
+            this, &RGBFramebufferWidget::resetCurrentMode);
     m_toneParamControls[0] = {
       ui->toneParamWidget0,
       ui->toneParamButton0,
@@ -666,6 +670,41 @@ void RGBFramebufferWidget::on_slExposure_valueChanged(int value)
 void RGBFramebufferWidget::on_exposureButton_clicked()
 {
     ui->sbExposure->setValue(0.);
+}
+
+void RGBFramebufferWidget::resetCurrentMode()
+{
+    if (!m_model || !m_model->isImageLoaded()) return;
+    switch (m_previewMode) {
+        case RGBFramebufferModel::Preview_Exposure:
+            ui->sbExposure->setValue(0.);
+            break;
+        case RGBFramebufferModel::Preview_ToneMapping:
+            ui->cbToneMappingMethod->setCurrentIndex(0);
+            updateToneMappingControls();
+            break;
+        case RGBFramebufferModel::Preview_FalseColor:
+            ui->cbFalseColorColormap->setCurrentIndex(ColormapModule::TURBO);
+            m_savedFalseColorMin = 0.;
+            m_savedFalseColorMax = 1.;
+            setFalseColorAutoRange(false);
+            setFalseColorRange(0., 1., false);
+            ui->cbFalseColorScale->setChecked(true);
+            break;
+    }
+}
+
+QString RGBFramebufferWidget::currentParameterText() const
+{
+    if (m_previewMode == RGBFramebufferModel::Preview_ToneMapping)
+        return tr("%1 | %2 %3")
+          .arg(ui->cbToneMappingMethod->currentText(), ui->toneParamButton0->text())
+          .arg(ui->sbToneParam0->value(), 0, 'g', 4);
+    if (m_previewMode == RGBFramebufferModel::Preview_FalseColor)
+        return tr("%1 | %2 - %3").arg(ui->cbFalseColorColormap->currentText())
+          .arg(ui->sbFalseColorMinValue->value(), 0, 'g', 4)
+          .arg(ui->sbFalseColorMaxValue->value(), 0, 'g', 4);
+    return tr("EV %1").arg(ui->sbExposure->value(), 0, 'f', 2);
 }
 
 

@@ -49,6 +49,7 @@
 #include <model/framebuffer/RGBFramebufferModel.h>
 
 #include "ImageFileWidget.h"
+#include "GraphicsView.h"
 
 QT_BEGIN_NAMESPACE
 namespace Ui
@@ -61,6 +62,9 @@ class QEvent;
 class QResizeEvent;
 class QToolButton;
 class QStackedWidget;
+class QToolBar;
+class QMoveEvent;
+class MinimalImageWidget;
 
 class MainWindow: public QMainWindow
 {
@@ -85,6 +89,7 @@ class MainWindow: public QMainWindow
     void closeEvent(QCloseEvent* event) override;
     void changeEvent(QEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
+    void moveEvent(QMoveEvent* event) override;
     bool eventFilter(QObject* watched, QEvent* event) override;
 
 #ifdef _WIN32
@@ -138,6 +143,7 @@ class MainWindow: public QMainWindow
     void toggleMaximized();
 
     void updateShowActions();
+    void toggleMinimalView();
 
   private:
     struct PendingOpen {
@@ -166,6 +172,13 @@ class MainWindow: public QMainWindow
     void             updateWindowFrame();
     void             updateFileTabPresentation();
     void             copyActiveImage(bool fullResolution) const;
+    void leaveMinimalView();
+    void resizeMinimalView(double zoom);
+    void moveMinimalView(const QPoint& position);
+    void updateMinimalSummary();
+    void resetMinimalParameters();
+    void adjustMinimalParameter(double steps);
+    QRect minimalScreenGeometry(const QPoint& center) const;
 #ifdef _WIN32
     void applyWindowsWindowStyle();
 #endif
@@ -176,6 +189,21 @@ class MainWindow: public QMainWindow
     QTabWidget* m_openFileTabs;
     QStackedWidget* m_workspace = nullptr;
     QWidget* m_welcomePage = nullptr;
+    QToolBar* m_workspaceToolbar = nullptr;
+    MinimalImageWidget* m_minimalPage = nullptr;
+    QPointer<GraphicsView> m_completeView;
+    QPointer<QWidget> m_minimalPreview;
+    QPointer<const FramebufferModel> m_minimalModel;
+    GraphicsView::ViewState m_completeViewState;
+    QByteArray m_completeGeometry;
+    QSize m_completeMinimumSize;
+    QSize m_completeMaximumSize;
+    bool m_minimalView = false;
+    bool m_switchingMinimalView = false;
+    bool m_resizingMinimalView = false;
+    bool m_completeToolbarVisible = true;
+    bool m_completeTitleVisible = true;
+    QVector<QMetaObject::Connection> m_minimalConnections;
     QList<PendingOpen> m_pendingOpens;
 
     QLabel*      m_windowTitleLabel;

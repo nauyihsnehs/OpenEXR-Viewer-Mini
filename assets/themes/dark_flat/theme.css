@@ -225,3 +225,7 @@ QDoubleSpinBox::up-button:disabled, QDoubleSpinBox::down-button:disabled,
 QDoubleSpinBox::up-button:off, QDoubleSpinBox::down-button:off { background: transparent; }
 QDoubleSpinBox[compactValue="true"] { padding-right: 8px; }
 QWidget#previewControlsViewport { background: #26282d; }
+QWidget#minimalImageFooter, QLabel#minimalImageInfo, QLabel#minimalPixelInfo {
+    color: #a1a8b3;
+    background: #26282d;
+}
