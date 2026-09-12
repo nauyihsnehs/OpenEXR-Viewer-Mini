@@ -65,6 +65,33 @@ namespace
     }
 
 
+    const LayerItem* findFirstChannel(const LayerItem* root)
+    {
+        switch (root->getType()) {
+            case LayerItem::R:
+            case LayerItem::G:
+            case LayerItem::B:
+            case LayerItem::A:
+            case LayerItem::Y:
+            case LayerItem::RY:
+            case LayerItem::BY:
+            case LayerItem::GENERAL:
+                if (root->getPixelType() != Imf::PixelType::NUM_PIXELTYPES)
+                    return root;
+                break;
+            default:
+                break;
+        }
+
+        for (LayerItem* child : root->children()) {
+            const LayerItem* item = findFirstChannel(child);
+            if (item) return item;
+        }
+
+        return nullptr;
+    }
+
+
     const LayerItem*
     findChannel(const LayerItem* root, int part, const std::string& channelName)
     {
@@ -135,7 +162,11 @@ LayerModel::~LayerModel() = default;
 
 const LayerItem* LayerModel::defaultDisplayLayer() const
 {
-    return findPreferredLayer(m_rootItem.get());
+    const LayerItem* preferred = findPreferredLayer(m_rootItem.get());
+    if (preferred) return preferred;
+
+    // Search all standard layers before falling back to a single channel.
+    return findFirstChannel(m_rootItem.get());
 }
 
 
