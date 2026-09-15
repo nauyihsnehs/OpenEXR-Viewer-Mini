@@ -68,7 +68,8 @@ std::string YFramebufferModel::getColorInfo(int x, int y) const
     if (!isImageLoaded() || x < 0 || x >= width() || y < 0 || y >= height())
         return "";
     std::stringstream text;
-    text << "x: " << x << " y: " << y
+    text << "x: " << x + getDataWindow().x()
+         << " y: " << y + getDataWindow().y()
          << " | " << m_layer << ": "
          << PixelDiagnostics::sampleText(getRawPixels()[size_t(y) * width() + x]);
     return text.str();

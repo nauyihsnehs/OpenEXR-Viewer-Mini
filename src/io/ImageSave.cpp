@@ -8,6 +8,7 @@
 #include <util/ColorTransform.h>
 
 #include <OpenEXR/ImfChannelList.h>
+#include <OpenEXR/ImfChromaticitiesAttribute.h>
 #include <OpenEXR/ImfFrameBuffer.h>
 #include <OpenEXR/ImfHeader.h>
 #include <OpenEXR/ImfInputPart.h>
@@ -52,6 +53,8 @@ namespace
         float                    pixelAspect;
         Imath::Box2i             dataWindow;
         Imath::Box2i             displayWindow;
+        bool                     hasChromaticities = false;
+        Imf::Chromaticities       chromaticities;
         std::vector<ChannelData> channels;
     };
 
@@ -178,6 +181,10 @@ namespace
           = boxFromRect(model->getDataWindow(), part.width, part.height);
         part.displayWindow
           = boxFromRect(model->getDisplayWindow(), part.width, part.height);
+        if (const auto* chromaticities = model->rawChromaticities()) {
+            part.hasChromaticities = true;
+            part.chromaticities = *chromaticities;
+        }
 
         const std::vector<std::string> names = model->rawChannelNames();
         const std::vector<int> indexes = selectedChannelIndexes(names, scope);
@@ -224,6 +231,11 @@ namespace
         part.pixelAspect   = header.pixelAspectRatio();
         part.dataWindow    = dataWindow;
         part.displayWindow = header.displayWindow();
+        if (const auto* attribute
+            = header.findTypedAttribute<Imf::ChromaticitiesAttribute>("chromaticities")) {
+            part.hasChromaticities = true;
+            part.chromaticities = attribute->value();
+        }
 
         if (header.hasName()) {
             part.name = header.name();
@@ -312,6 +324,8 @@ namespace
                                     : 1.f;
         Imf::Header header(part.displayWindow, part.dataWindow, pixelAspect);
         header.compression() = exrCompression(options.compression);
+        if (options.metadata == ImageSave::MetadataBasic && part.hasChromaticities)
+            header.insert("chromaticities", Imf::ChromaticitiesAttribute(part.chromaticities));
 
         for (const ChannelData& channel : part.channels) {
             header.channels().insert(
@@ -426,8 +440,18 @@ namespace
         flattened.pixelAspect   = parts[0].pixelAspect;
         flattened.dataWindow    = parts[0].dataWindow;
         flattened.displayWindow = parts[0].displayWindow;
+        flattened.hasChromaticities = parts[0].hasChromaticities;
+        flattened.chromaticities = parts[0].chromaticities;
 
         for (const PartData& part : parts) {
+            // A single output header cannot describe different source gamuts.
+            if (options.metadata == ImageSave::MetadataBasic
+                && part.chromaticities != flattened.chromaticities) {
+                return result(
+                  ImageSave::StatusFailed,
+                  QObject::tr("Cannot flatten parts with different chromaticities. Preserve parts instead."));
+            }
+            flattened.hasChromaticities |= part.hasChromaticities;
             if (
               part.width != flattened.width
               || part.height != flattened.height) {
@@ -513,7 +537,7 @@ namespace
     writeHdr(const FramebufferModel* model, const ImageSave::Options& options)
     {
         const std::vector<std::string> names  = model->rawChannelNames();
-        const std::vector<float>&      pixels = model->getRawPixels();
+        const std::vector<float>&      pixels = model->getDisplayPixels();
         const int channelCount                = static_cast<int>(names.size());
         const int width                       = model->width();
         const int height                      = model->height();
@@ -629,7 +653,7 @@ namespace
         }
 
         const std::vector<std::string> names  = model->rawChannelNames();
-        const std::vector<float>&      pixels = model->getRawPixels();
+        const std::vector<float>&      pixels = model->getDisplayPixels();
         const int channelCount                = static_cast<int>(names.size());
         const int width                       = model->width();
         const int height                      = model->height();

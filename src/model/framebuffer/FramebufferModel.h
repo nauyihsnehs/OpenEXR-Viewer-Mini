@@ -47,7 +47,15 @@ class FramebufferModel: public QObject
     ~FramebufferModel() override;
 
     const QImage&             getLoadedImage() const { return m_image; }
-    const std::vector<float>& getRawPixels() const { return m_data->pixels; }
+    const std::vector<float>& getRawPixels() const
+    {
+        return m_data->sourcePixels.empty() ? m_data->pixels : m_data->sourcePixels;
+    }
+    const std::vector<float>& getDisplayPixels() const { return m_data->pixels; }
+    const Imf::Chromaticities* rawChromaticities() const
+    {
+        return m_data->hasRawChromaticities ? &m_data->rawChromaticities : nullptr;
+    }
     bool                      isImageLoaded() const { return m_loaded; }
     bool                      isPreviewReady() const { return m_ready; }
     bool                      isLoading() const { return m_loading; }

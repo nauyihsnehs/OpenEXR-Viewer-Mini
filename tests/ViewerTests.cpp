@@ -37,6 +37,7 @@
 #include <view/ScaleWidget.h>
 #include <view/mainwindow.h>
 #include <OpenEXR/ImfChannelList.h>
+#include <OpenEXR/ImfChromaticitiesAttribute.h>
 #include <OpenEXR/ImfOutputFile.h>
 #include <OpenEXR/ImfFrameBuffer.h>
 #include <OpenEXR/ImfHeader.h>
@@ -57,12 +58,15 @@ namespace
       int                                              originX  = 0,
       int                                              originY  = 0,
       float                                            aspect   = 1.f,
-      int                                              sampling = 1)
+      int                                              sampling = 1,
+      const Imf::Header*                                headerTemplate = nullptr)
     {
         const Imath::Box2i window(
           Imath::V2i(originX, originY),
           Imath::V2i(originX + width - 1, originY + height - 1));
-        Imf::Header header(window, window, aspect);
+        Imf::Header header = headerTemplate ? *headerTemplate : Imf::Header(window, window, aspect);
+        header.dataWindow() = window;
+        header.pixelAspectRatio() = aspect;
         header.compression() = Imf::ZIP_COMPRESSION;
         Imf::FrameBuffer framebuffer;
         for (const auto& channel : channels) {
@@ -370,7 +374,7 @@ class ViewerTests: public QObject
         QCOMPARE(model->getRawPixels()[3], 0.25f);
         QCOMPARE(model->getRawPixels()[7], 0.75f);
         QVERIFY(std::abs(model->getRawPixels()[0] - 0.2f) < 0.00001f);
-        QCOMPARE(model->getLoadedImage().pixelColor(1, 0).alpha(), 191);
+        QCOMPARE(model->getLoadedImage().pixelColor(1, 0).alpha(), 255);
 
         RGBFramebufferModel detached("beauty.", RGBFramebufferModel::Layer_Y);
         {
@@ -407,6 +411,7 @@ class ViewerTests: public QObject
         QCOMPARE(model.getRawPixels()[3], 2.f);
         QCOMPARE(model.getRawPixels()[12], 3.f);
         QCOMPARE(model.getRawPixels()[15], 4.f);
+        QVERIFY(model.getColorInfo(0, 0).find("x: -4 y: 6") == 0);
     }
 
     void oneRowChromaAndConcurrentLayers()
@@ -434,8 +439,137 @@ class ViewerTests: public QObject
           && luminance.isPreviewReady());
         QVERIFY(std::abs(rgb.getRedInfo(0, 0) - 0.25f) < 0.002f);
         QCOMPARE(rgb.getAlphaInfo(0, 0), 0.125f);
+        QCOMPARE(rgb.getLoadedImage().pixelColor(0, 0).alpha(), 255);
         QCOMPARE(alpha.getRawPixels()[1], 0.75f);
         QCOMPARE(luminance.getRawPixels()[1], 0.5f);
+    }
+
+    void premultipliedColorsUseOpaqueBlackPreview()
+    {
+        const QString path = fixture("premultiplied");
+        writeFixture(path, 3, 1,
+          {{"R", {0.25f, 0.25f, 0.25f}}, {"G", {0.5f, 0.5f, 0.5f}},
+           {"B", {0.75f, 0.75f, 0.75f}}, {"A", {0.f, 0.25f, 1.f}}});
+        OpenEXRImage source(path, nullptr);
+        RGBFramebufferModel model("");
+        model.load(source.sharedEXR(), 0, {{"R", "G", "B", "A"}});
+        QTRY_VERIFY(model.isPreviewReady());
+        // Missing/standard chromaticities need no second pixel buffer.
+        QVERIFY(&model.getRawPixels() == &model.getDisplayPixels());
+        QCOMPARE(model.getAlphaInfo(0, 0), 0.f);
+        QCOMPARE(model.getAlphaInfo(1, 0), 0.25f);
+        for (int x = 0; x < 3; ++x)
+            QCOMPARE(model.getLoadedImage().pixelColor(x, 0), QColor(136, 187, 224));
+
+        ImageSave::Source input;
+        input.activeModel = &model;
+        ImageSave::Options options;
+        options.path = m_directory.filePath("black-preview.png");
+        QCOMPARE(ImageSave::save(input, options).status, ImageSave::StatusSaved);
+        const QImage exported(options.path);
+        for (int x = 0; x < 3; ++x)
+            QCOMPARE(exported.pixelColor(x, 0), model.getLoadedImage().pixelColor(x, 0));
+
+        for (auto mode : {RGBFramebufferModel::Preview_ToneMapping,
+                          RGBFramebufferModel::Preview_FalseColor}) {
+            model.setPreviewMode(mode);
+            QTRY_VERIFY(model.isPreviewReady());
+            for (int x = 0; x < 3; ++x) {
+                QCOMPARE(model.getLoadedImage().pixelColor(x, 0).alpha(), 255);
+                QCOMPARE(model.getLoadedImage().pixelColor(x, 0),
+                         model.getLoadedImage().pixelColor(2, 0));
+            }
+        }
+    }
+
+    void gamutConversionPreservesRawValuesAndExrMetadata()
+    {
+        const Imf::Chromaticities ap0(
+          Imath::V2f(0.7347f, 0.2653f), Imath::V2f(0.f, 1.f),
+          Imath::V2f(0.0001f, -0.077f), Imath::V2f(0.32168f, 0.33767f));
+        Imf::Header header(2, 1);
+        header.insert("chromaticities", Imf::ChromaticitiesAttribute(ap0));
+        const QString path = fixture("ap0");
+        writeFixture(path, 2, 1,
+          {{"R", {0.25f, -0.125f}}, {"G", {0.125f, 0.25f}},
+           {"B", {0.0625f, 0.5f}}, {"A", {0.f, 0.5f}}},
+          0, 0, 1.f, 1, &header);
+        OpenEXRImage source(path, nullptr);
+        RGBFramebufferModel model("");
+        YFramebufferModel red("R");
+        model.load(source.sharedEXR(), 0, {{"R", "G", "B", "A"}});
+        red.load(source.sharedEXR(), 0);
+        QTRY_VERIFY(model.isPreviewReady() && red.isPreviewReady());
+        const std::vector<float> original = {
+          0.25f, 0.125f, 0.0625f, 0.f, -0.125f, 0.25f, 0.5f, 0.5f};
+        QVERIFY(model.getRawPixels() == original);
+        QVERIFY(model.getDisplayPixels() != original);
+        QCOMPARE(model.getRedInfo(1, 0), red.getRawPixels()[1]);
+        QCOMPARE(model.getDatasetMin(), -0.125);
+        QVERIFY(model.anomalyRegions().empty());
+        QVERIFY(model.rawChromaticities() && *model.rawChromaticities() == ap0);
+        ImageSave::Source input;
+        input.activeModel = &model;
+        input.sourceImage = &source;
+        for (auto target : {ImageSave::TargetActiveOriginal, ImageSave::TargetLayeredOriginal}) {
+            for (auto metadata : {ImageSave::MetadataBasic, ImageSave::MetadataNone}) {
+                ImageSave::Options options;
+                options.target = target;
+                options.format = ImageSave::FormatExr;
+                options.pixelType = ImageSave::PixelFloat;
+                options.metadata = metadata;
+                options.path = fixture(QString("raw-%1-%2").arg(int(target)).arg(int(metadata)));
+                QCOMPARE(ImageSave::save(input, options).status, ImageSave::StatusSaved);
+                OpenEXRImage exported(options.path, nullptr);
+                const auto* attribute = exported.getEXR().header(0)
+                  .findTypedAttribute<Imf::ChromaticitiesAttribute>("chromaticities");
+                if (metadata == ImageSave::MetadataBasic) {
+                    QVERIFY(attribute);
+                    QVERIFY(attribute->value() == ap0);
+                } else {
+                    QVERIFY(!attribute);
+                }
+                RGBFramebufferModel roundTrip("");
+                roundTrip.load(exported.sharedEXR(), 0, {{"R", "G", "B", "A"}});
+                QTRY_VERIFY(roundTrip.isPreviewReady());
+                QVERIFY(roundTrip.getRawPixels() == original);
+            }
+        }
+        ImageSave::Options bracket;
+        bracket.target = ImageSave::TargetHdrBracketedImages;
+        bracket.bracketCount = 3;
+        bracket.path = m_directory.filePath("ap0-bracket.png");
+        const auto saved = ImageSave::save(input, bracket);
+        QCOMPARE(saved.status, ImageSave::StatusSaved);
+        QCOMPARE(saved.paths.size(), 3);
+        const QImage displayExport(saved.paths[1]); // Middle exposure is 0 EV.
+        QCOMPARE(displayExport.pixelColor(0, 0), model.getLoadedImage().pixelColor(0, 0));
+    }
+
+    void negativeOriginAndDecreasingScanlinesKeepLocalIndexing()
+    {
+        Imf::Header header(1, 1); // Display window smaller than the data window.
+        header.lineOrder() = Imf::DECREASING_Y;
+        const QString path = fixture("negative-decreasing");
+        writeFixture(path, 2, 2,
+          {{"R", {1.f, 2.f, 3.f, 4.f}}, {"G", {0.f, 0.f, 0.f, 0.f}},
+           {"B", {0.f, 0.f, 0.f, 0.f}}, {"Z", {5.f, 6.f, 7.f, 8.f}}},
+          -1, -1, 1.f, 1, &header);
+        OpenEXRImage source(path, nullptr);
+        QCOMPARE(source.getEXR().header(0).lineOrder(), Imf::DECREASING_Y);
+        RGBFramebufferModel rgb("");
+        YFramebufferModel depth("Z");
+        rgb.load(source.sharedEXR(), 0, {{"R", "G", "B", ""}});
+        depth.load(source.sharedEXR(), 0);
+        QTRY_VERIFY(rgb.isPreviewReady() && depth.isPreviewReady());
+        QCOMPARE(rgb.getDataWindow(), QRect(-1, -1, 2, 2));
+        QCOMPARE(rgb.getDisplayWindow(), QRect(0, 0, 1, 1));
+        QCOMPARE(rgb.getRedInfo(0, 0), 1.f);
+        QCOMPARE(rgb.getRedInfo(1, 1), 4.f);
+        QCOMPARE(depth.getRawPixels()[0], 5.f);
+        QCOMPARE(depth.getRawPixels()[3], 8.f);
+        QVERIFY(rgb.getColorInfo(0, 0).find("x: -1 y: -1") == 0);
+        QVERIFY(depth.getColorInfo(1, 1).find("x: 0 y: 0") == 0);
     }
 
     void unsupportedPartsAndInvalidMetadata()

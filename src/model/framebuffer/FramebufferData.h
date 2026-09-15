@@ -2,6 +2,7 @@
 
 #include <QRect>
 #include <QString>
+#include <OpenEXR/ImfChromaticities.h>
 #include <atomic>
 #include <cstdint>
 #include <memory>
@@ -15,6 +16,10 @@ struct FramebufferData {
     QRect              dataWindow;
     QRect              displayWindow;
     std::vector<float> pixels;
+    // Only populated when RGB gamut conversion changes the display buffer.
+    std::vector<float> sourcePixels;
+    bool               hasRawChromaticities = false;
+    Imf::Chromaticities rawChromaticities;
     // Source-channel flags, before color conversion or display mapping.
     enum NonFiniteFlag { NaN = 1, PositiveInf = 2, NegativeInf = 4 };
     struct AnomalyRegion {

@@ -227,7 +227,13 @@ DecodeResult FramebufferLoader::decode(
     const auto*         attribute
       = header.findTypedAttribute<Imf::ChromaticitiesAttribute>(
         "chromaticities");
-    if (attribute) chromaticities = attribute->value();
+    if (attribute) {
+        chromaticities = attribute->value();
+        data->hasRawChromaticities = true;
+        // YC exports retain the existing converted Rec.709 RGB representation.
+        data->rawChromaticities = layout == Chroma
+                                    ? Imf::Chromaticities() : chromaticities;
+    }
     if (layout == Chroma) {
         const Imath::V3f weights = Imf::RgbaYca::computeYw(chromaticities);
         std::vector<Imf::Rgba> rgba(count);
@@ -270,18 +276,19 @@ DecodeResult FramebufferLoader::decode(
         && chromaticities.blue == standard.blue && chromaticities.white == standard.white;
     // An approximate identity matrix still mixes NaN/Inf into other channels.
     if ((layout == RGB || layout == Chroma) && !standardChromaticities) {
-        const Imath::M44f conversion
-          = Imf::RGBtoXYZ(chromaticities, 1.f)
-            * Imf::XYZtoRGB(Imf::Chromaticities(), 1.f);
+        if (layout == RGB) data->sourcePixels = data->pixels;
+        const Imath::M44d conversion
+          = Imath::M44d(Imf::RGBtoXYZ(chromaticities, 1.f))
+            * Imath::M44d(Imf::XYZtoRGB(standard, 1.f));
         for (size_t i = 0; i < count; ++i) {
             if (i % size_t(data->width) == 0 && cancel->load())
                 return DecodeResult();
             float*           pixel = &data->pixels[4 * i];
-            const Imath::V3f rgb
-              = Imath::V3f(pixel[0], pixel[1], pixel[2]) * conversion;
-            pixel[0] = rgb.x;
-            pixel[1] = rgb.y;
-            pixel[2] = rgb.z;
+            const Imath::V3d rgb
+              = Imath::V3d(pixel[0], pixel[1], pixel[2]) * conversion;
+            pixel[0] = static_cast<float>(rgb.x);
+            pixel[1] = static_cast<float>(rgb.y);
+            pixel[2] = static_cast<float>(rgb.z);
         }
     }
     for (size_t i = 0; i < count; ++i) {

@@ -79,15 +79,18 @@ std::string RGBFramebufferModel::getColorInfo(int x, int y) const
         return "";
     const float*      pixel = &getRawPixels()[4 * (size_t(y) * width() + x)];
     std::stringstream text;
-    text << "x: " << x << " y: " << y << " |";
+    text << "x: " << x + getDataWindow().x()
+         << " y: " << y + getDataWindow().y() << " |";
     const auto names = rawChannelNames();
     const auto components = rawChannelComponents();
     for (size_t c = 0; c < names.size(); ++c)
         text << " " << names[c] << ": "
              << PixelDiagnostics::sampleText(pixel[components[c]]);
-    if (m_layerType == Layer_RGB || m_layerType == Layer_YC)
+    if (m_layerType == Layer_RGB || m_layerType == Layer_YC) {
+        const float* display = &getDisplayPixels()[4 * (size_t(y) * width() + x)];
         text << " | Luminance: " << std::setprecision(9)
-             << ToneMapping::luminance(pixel[0], pixel[1], pixel[2]);
+             << ToneMapping::luminance(display[0], display[1], display[2]);
+    }
     return text.str();
 }
 
@@ -230,7 +233,8 @@ void RGBFramebufferModel::updateImage()
                           line[4 * x + c] = ToneMapping::toByte(value);
                       }
                   }
-                  line[4 * x + 3] = ToneMapping::toByte(pixel[3]);
+                  // Premultiplied EXR color composited over black is already RGB.
+                  line[4 * x + 3] = 255;
               }
           }
           return cancel->load() ? QImage() : image;

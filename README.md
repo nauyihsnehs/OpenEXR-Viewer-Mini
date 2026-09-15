@@ -26,7 +26,8 @@ Viewing controls
 - Right-click an image to reset the current mode's parameters without changing
   other layers. In tone mapping this also restores the Reinhard method. The full
   workspace keeps its zoom; the minimal view resets to 100%, capped to fit the screen.
-- The minimal footer shows the raw pixel coordinates and values under the pointer,
+- The minimal footer shows file coordinates (including the data-window origin)
+  and raw channel values under the pointer,
   prioritizing pixel information when the window is narrow. Hover over the footer
   to read the full text.
 - All individual channels (R/G/B/A/Y/RY/BY and custom names such as V) use the same
@@ -34,7 +35,17 @@ Viewing controls
   uses the source channel value directly, without exposure or an sRGB transform.
   Pixel readouts and active-layer EXR exports retain source channel names.
 - Combined RGB/RGBA/YA/YC/YCA layers retain the color preview modes. Changing the
-  color preview mode does not change individual-channel previews.
+  color preview mode does not change individual-channel previews. Combined color
+  previews and their PNG/JPEG exports and copies are opaque over black: premultiplied
+  RGB is neither multiplied nor divided by alpha, preserving zero-alpha emission.
+  Source alpha remains available in raw data, statistics, and the A channel.
+- Nonstandard RGB chromaticities are converted to linear Rec.709 for display using
+  the existing matrix transform, without white-point adaptation or a full ACES/OCIO
+  display pipeline. Raw readouts and EXR exports retain source values; Basic metadata
+  preserves their chromaticities, while None removes it. Existing YC/YCA active-layer
+  exports remain converted RGB. HDR and exposure-bracket exports use display-linear
+  colors. See the [ScanLines manual checklist](docs/scanline-images.md) for checks
+  still requiring a running viewer.
 - RGB false-color and scalar ranges accept scientific notation, including tiny
   values and the full finite FLOAT range. Auto range is unavailable without finite
   samples. A constant range maps finite values to the bottom of the color scale.

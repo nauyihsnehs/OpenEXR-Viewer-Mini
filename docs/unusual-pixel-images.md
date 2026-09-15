@@ -49,7 +49,7 @@
 | GrayRampsHorizontal | Y 使用统一 Colormap 页面；检查横向渐变、极暗区域以及范围调整连续性。 |
 | RgbRampsDiagonal | 合并 RGB 保持彩色；分别打开 R/G/B，确认都使用相同的灰度默认值和 Colormap 控件，读数对应各自源通道。 |
 | SquaresSwirls | 核对彩色图案、边缘和梯度，比较高亮关闭与开启时正常区域一致。 |
-| stripes | 检查 RGBA 颜色与透明度，单独 Alpha 使用标量预览；真实 Alpha 纳入源统计，默认补充 Alpha 不计入。 |
+| stripes | 检查 RGBA 在固定黑底上的颜色，不重复乘 Alpha；单独 Alpha 使用标量预览并保留源值。真实 Alpha 纳入源统计，默认补充 Alpha 不计入。 |
 
 ## 待运行的交互与导出核对
 
