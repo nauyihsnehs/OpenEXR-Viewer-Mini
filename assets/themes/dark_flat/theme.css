@@ -70,7 +70,7 @@ QToolBar#workspaceToolbar {
 }
 QToolBar#workspaceToolbar::separator { background: #3a3f47; width: 1px; margin: 5px 8px; }
 QToolBar#workspaceToolbar QToolButton { padding: 6px 10px; }
-QToolButton#fileInfoButton { padding: 2px; border-radius: 4px; }
+QToolButton#fileInfoButton, QToolButton#anomalyMarkerButton { padding: 2px; border-radius: 4px; }
 QPushButton, QToolButton {
     background: #2e3239;
     border: 1px solid transparent;

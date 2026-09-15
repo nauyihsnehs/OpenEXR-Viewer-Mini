@@ -35,6 +35,7 @@
 #include "WorkspaceWidgets.h"
 #include "MinimalImageWidget.h"
 #include "RGBFramebufferWidget.h"
+#include <util/AnomalyMarkers.h>
 #include "YFramebufferWidget.h"
 #include <QShortcut>
 #include <QSignalBlocker>
@@ -650,6 +651,7 @@ void MainWindow::copyActiveImage(bool fullResolution) const
           = image.scaledToWidth(s_clipboardMaxWidth, Qt::SmoothTransformation);
     }
 
+    AnomalyMarkers::composite(image, *model);
     QApplication::clipboard()->setImage(image);
 }
 

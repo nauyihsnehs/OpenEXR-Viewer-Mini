@@ -114,13 +114,13 @@ void ScaleWidget::paintEvent(QPaintEvent* e)
     painter.setFont(font);
 
     for (int i = 0; i < n_sec; i++) {
-        float a = float(i) / float(n_sec - 1);
-        float y = a * (end_y - start_y) + start_y;
+        const double a = double(i) / double(n_sec - 1);
+        const double y = a * (end_y - start_y) + start_y;
 
         painter.setPen(QColor(125, 125, 125));
         painter.drawLine(left_margin, y, start_text_x - 5, y);
 
-        float  value = (1.f - a) * (m_max - m_min) + m_min;
+        const double value = (1. - a) * m_max + a * m_min;
         QRectF textBox(
           start_text_x,
           y - fontSize / 3,

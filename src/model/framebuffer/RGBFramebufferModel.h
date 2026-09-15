@@ -83,6 +83,8 @@ class RGBFramebufferModel: public FramebufferModel
     virtual float                    getBlueInfo(int x, int y) const;
     virtual float                    getAlphaInfo(int x, int y) const;
     virtual std::vector<std::string> rawChannelNames() const;
+    std::vector<int> rawChannelComponents() const override;
+    int rawPixelStride() const override { return 4; }
     double getLuminanceMin() const { return m_data->luminanceMin; }
     double getLuminanceMax() const { return m_data->luminanceMax; }
     bool   hasFiniteLuminanceSamples() const
@@ -105,6 +107,7 @@ class RGBFramebufferModel: public FramebufferModel
     float                           component(int x, int y, int channel) const;
     std::string                     m_parentLayer;
     LayerType                       m_layerType;
+    std::array<std::string, 4>       m_channels;
     PreviewMode                     m_previewMode;
     ToneMappingMethod               m_toneMappingMethod;
     double                          m_exposure;

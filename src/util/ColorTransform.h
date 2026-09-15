@@ -35,6 +35,6 @@
 class ColorTransform
 {
   public:
-    static float         to_sRGB(float rgb_color);
+    static double        to_sRGB(double rgb_color);
     static unsigned char to_sRGB_255(float rgb_color);
 };

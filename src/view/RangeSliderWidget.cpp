@@ -67,10 +67,11 @@ void RangeSliderWidget::setBounds(double min, double max)
 {
     if (!std::isfinite(min) || !std::isfinite(max)) return;
     if (min > max) std::swap(min, max);
-    if (min == max) max = min + 1.;
 
     m_boundMin = min;
     m_boundMax = max;
+    setEnabled(min < max);
+    if (min == max) m_activeHandle = Handle_None;
     m_min      = std::max(m_boundMin, std::min(m_min, m_boundMax));
     m_max      = std::max(m_boundMin, std::min(m_max, m_boundMax));
 
@@ -136,6 +137,7 @@ RangeSliderWidget::Handle RangeSliderWidget::nearestHandle(int x) const
 
 void RangeSliderWidget::setRangeFromHandle(Handle handle, double value)
 {
+    if (m_boundMin == m_boundMax) return;
     const double previousMin = m_min;
     const double previousMax = m_max;
     if (handle == Handle_Min) {

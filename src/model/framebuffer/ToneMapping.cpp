@@ -7,82 +7,82 @@
 
 namespace
 {
-    float clamp(float value, float minimum, float maximum)
+    double clamp(double value, double minimum, double maximum)
     {
         if (value < minimum) return minimum;
         if (value > maximum) return maximum;
         return value;
     }
 
-    float safeInput(float value)
+    double safeInput(double value)
     {
-        if (!std::isfinite(value) || value < 0.f) return 0.f;
-        return clamp(value, 0.f, 1.e10f);
+        if (!std::isfinite(value) || value < 0.) return 0.;
+        return value;
     }
 
-    float positive(float value)
+    double positive(double value)
     {
-        return value > 0.001f ? value : 0.001f;
+        return value > 0.001 ? value : 0.001;
     }
 
-    float reinhard(float value, float key, float shoulder)
+    double reinhard(double value, double key, double shoulder)
     {
-        const float scaled  = value * positive(key);
-        const float rolloff = positive(shoulder);
-        return scaled * (1.f + scaled / (rolloff * rolloff)) / (1.f + scaled);
+        const double scaled  = value * positive(key);
+        const double rolloff = positive(shoulder);
+        return scaled * (1. + scaled / (rolloff * rolloff)) / (1. + scaled);
     }
 
-    float acesFitted(float value, float shoulder, float toe)
+    double acesFitted(double value, double shoulder, double toe)
     {
-        const float a = 2.51f;
-        const float b = 0.03f * positive(toe);
-        const float c = 2.43f * positive(shoulder);
-        const float d = 0.59f;
-        const float e = 0.14f * positive(toe);
+        const double a = 2.51;
+        const double b = 0.03 * positive(toe);
+        const double c = 2.43 * positive(shoulder);
+        const double d = 0.59;
+        const double e = 0.14 * positive(toe);
         return value * (a * value + b) / (value * (c * value + d) + e);
     }
 
-    float hablePartial(
-      float value, float shoulder, float linear, float angle, float toe)
+    double hablePartial(
+      double value, double shoulder, double linear, double angle, double toe)
     {
-        const float b = positive(linear);
-        const float d = positive(toe);
-        const float e = 0.02f;
-        const float f = 0.30f;
+        const double b = positive(linear);
+        const double d = positive(toe);
+        const double e = 0.02;
+        const double f = 0.30;
         return (value * (shoulder * value + angle * b) + d * e)
                  / (value * (shoulder * value + b) + d * f)
                - e / f;
     }
 
-    float
-    filmic(float value, float shoulder, float linear, float angle, float toe)
+    double
+    filmic(double value, double shoulder, double linear, double angle, double toe)
     {
-        const float white = hablePartial(11.2f, shoulder, linear, angle, toe);
-        if (!std::isfinite(white) || white <= 0.f) return 0.f;
+        const double white = hablePartial(11.2, shoulder, linear, angle, toe);
+        if (!std::isfinite(white) || white <= 0.) return 0.;
         return hablePartial(value, shoulder, linear, angle, toe) / white;
     }
 
-    float logarithmic(float value, float range, float compression)
+    double logarithmic(double value, double range, double compression)
     {
-        const float amount = positive(compression);
-        const float scale  = std::log1p(positive(range) * amount);
-        if (!std::isfinite(scale) || scale <= 0.f) return 0.f;
+        const double amount = positive(compression);
+        const double scale  = std::log1p(positive(range) * amount);
+        if (!std::isfinite(scale) || scale <= 0.) return 0.;
         return std::log1p(value * amount) / scale;
     }
 
-    float clipped(float value, float minimum, float maximum)
+    double clipped(double value, double minimum, double maximum)
     {
-        const float upper = maximum > minimum ? maximum : minimum + 0.001f;
-        return (clamp(value, minimum, upper) - minimum) / (upper - minimum);
+        if (maximum <= minimum) return 0.;
+        return (clamp(value, minimum, maximum) - minimum) / (maximum - minimum);
     }
 
-    float apply(
-      float               value,
+    double apply(
+      double               value,
       ToneMapping::Method method,
-      float               p0,
-      float               p1,
-      float               p2,
-      float               p3)
+      double               p0,
+      double               p1,
+      double               p2,
+      double               p3)
     {
         switch (method) {
             case ToneMapping::Aces:
@@ -102,23 +102,25 @@ namespace
 
 namespace ToneMapping
 {
-    float luminance(float r, float g, float b)
+    double luminance(double r, double g, double b)
     {
-        return 0.2126f * r + 0.7152f * g + 0.0722f * b;
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b;
     }
 
-    unsigned char toByte(float value)
+    unsigned char toByte(double value)
     {
-        if (!std::isfinite(value)) return 0;
-        return static_cast<unsigned char>(
-          std::max(0, std::min(255, int(255.f * value))));
+        if (std::isnan(value) || value <= 0.) return 0;
+        if (value >= 1.) return 255;
+        return static_cast<unsigned char>(255. * value);
     }
 
-    float
-    toSrgb(float value, Method method, float p0, float p1, float p2, float p3)
+    double
+    toSrgb(double value, Method method, double p0, double p1, double p2, double p3)
     {
-        float mapped = apply(safeInput(value), method, p0, p1, p2, p3);
-        if (!std::isfinite(mapped)) mapped = 0.f;
-        return ColorTransform::to_sRGB(clamp(mapped, 0.f, 1.f));
+        if (std::isnan(value)) return 0.;
+        if (std::isinf(value)) return value > 0. ? 1. : 0.;
+        double mapped = apply(safeInput(value), method, p0, p1, p2, p3);
+        if (std::isnan(mapped)) mapped = 0.;
+        return ColorTransform::to_sRGB(clamp(mapped, 0., 1.));
     }
 }   // namespace ToneMapping

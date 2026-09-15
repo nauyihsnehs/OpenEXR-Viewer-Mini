@@ -479,32 +479,14 @@
          </widget>
         </item>
         <item>
-         <widget class="QDoubleSpinBox" name="sbFalseColorMinValue">
-          <property name="decimals">
-           <number>4</number>
-          </property>
-          <property name="minimum">
-           <double>-999999999.000000000000000</double>
-          </property>
-          <property name="maximum">
-           <double>999999999.000000000000000</double>
-          </property>
+         <widget class="ScientificDoubleSpinBox" name="sbFalseColorMinValue">
           <property name="singleStep">
            <double>0.010000000000000</double>
           </property>
          </widget>
         </item>
         <item>
-         <widget class="QDoubleSpinBox" name="sbFalseColorMaxValue">
-          <property name="decimals">
-           <number>4</number>
-          </property>
-          <property name="minimum">
-           <double>-999999999.000000000000000</double>
-          </property>
-          <property name="maximum">
-           <double>999999999.000000000000000</double>
-          </property>
+         <widget class="ScientificDoubleSpinBox" name="sbFalseColorMaxValue">
           <property name="singleStep">
            <double>0.010000000000000</double>
           </property>
@@ -535,6 +517,9 @@
         </size>
        </property>
       </spacer>
+     </item>
+     <item>
+      <widget class="AnomalyMarkerButton" name="anomalyMarkerButton"/>
      </item>
      <item>
       <widget class="QPushButton" name="zoomButton">
@@ -643,6 +628,11 @@
  </widget>
  <customwidgets>
   <customwidget>
+   <class>AnomalyMarkerButton</class>
+   <extends>QToolButton</extends>
+   <header>view/AnomalyMarkerButton.h</header>
+  </customwidget>
+  <customwidget>
    <class>GraphicsView</class>
    <extends>QGraphicsView</extends>
    <header>view/GraphicsView.h</header>
@@ -662,6 +652,11 @@
    <extends>QWidget</extends>
    <header>view/RangeSliderWidget.h</header>
    <container>1</container>
+  </customwidget>
+  <customwidget>
+   <class>ScientificDoubleSpinBox</class>
+   <extends>QDoubleSpinBox</extends>
+   <header>view/ScientificDoubleSpinBox.h</header>
   </customwidget>
  </customwidgets>
  <resources/>

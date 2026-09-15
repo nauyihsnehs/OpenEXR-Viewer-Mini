@@ -31,6 +31,7 @@
  */
 
 #include "YFramebufferModel.h"
+#include "PixelDiagnostics.h"
 #include "FramebufferLoader.h"
 #include "ToneMapping.h"
 #include <cmath>
@@ -68,7 +69,8 @@ std::string YFramebufferModel::getColorInfo(int x, int y) const
         return "";
     std::stringstream text;
     text << "x: " << x << " y: " << y
-         << " | value = " << getRawPixels()[size_t(y) * width() + x];
+         << " | " << m_layer << ": "
+         << PixelDiagnostics::sampleText(getRawPixels()[size_t(y) * width() + x]);
     return text.str();
 }
 std::vector<std::string> YFramebufferModel::rawChannelNames() const

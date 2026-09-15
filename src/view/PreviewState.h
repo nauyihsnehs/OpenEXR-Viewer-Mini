@@ -13,4 +13,5 @@ struct PreviewState {
     double                savedMaximum   = 1.;
     bool                  automatic      = false;
     bool                  scaleVisible   = false;
+    bool                  highlightNonFinite = false;
 };

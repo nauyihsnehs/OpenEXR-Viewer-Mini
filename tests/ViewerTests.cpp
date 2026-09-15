@@ -23,7 +23,9 @@
 #include <io/ImageSave.h>
 #include <model/StdIStream.h>
 #include <model/framebuffer/FramebufferLoader.h>
+#include <model/framebuffer/PixelDiagnostics.h>
 #include <model/framebuffer/RGBFramebufferModel.h>
+#include <util/AnomalyMarkers.h>
 #include <util/YColormap.h>
 #include <util/ColormapModule.h>
 #include <view/FileDrop.h>
@@ -160,6 +162,116 @@ class ViewerTests: public QObject
 #ifdef _WIN32
         QApplication::setFont(QFont("Segoe UI", 9));
 #endif
+    }
+
+    void anomalyRegionsJoinDiagonalsAndKeepSourceCounts()
+    {
+        const auto nan = uint8_t(FramebufferData::NaN);
+        const auto positive = uint8_t(FramebufferData::PositiveInf);
+        const auto negative = uint8_t(FramebufferData::NegativeInf);
+        const std::vector<uint8_t> mask = {
+          nan, 0, positive, 0, 0,
+          0, nan, 0, 0, 0,
+          0, 0, 0, 0, 0,
+          0, 0, 0, 0, negative};
+        const auto cancel = std::make_shared<std::atomic_bool>(false);
+        const auto regions = PixelDiagnostics::connectedRegions(mask, 5, 4, cancel);
+        QCOMPARE(regions.size(), size_t(2));
+        uint64_t pixels = 0;
+        for (const auto& region : regions) {
+            pixels += region.pixelCount;
+            if (region.flags & nan) {
+                QCOMPARE(region.bounds, QRect(0, 0, 3, 2));
+                QCOMPARE(region.pixelCount, uint64_t(3));
+                QCOMPARE(region.flags, uint8_t(nan | positive));
+            } else {
+                QCOMPARE(region.bounds, QRect(4, 3, 1, 1));
+                QCOMPARE(region.flags, negative);
+            }
+        }
+        QCOMPARE(pixels, uint64_t(4));
+        cancel->store(true);
+        QVERIFY(PixelDiagnostics::connectedRegions(mask, 5, 4, cancel).empty());
+    }
+
+    void anomalyMarkersStayReadableWithoutRerenderingPixels()
+    {
+        const QString path = fixture("anomaly-markers");
+        std::vector<float> samples(128 * 128, 0.25f);
+        samples[64 * 128 + 64] = std::numeric_limits<float>::quiet_NaN();
+        writeFixture(path, 128, 128, {{"V", samples}});
+        OpenEXRImage source(path, nullptr);
+        YFramebufferModel model("V");
+        model.load(source.sharedEXR(), 0);
+        QTRY_VERIFY(model.isPreviewReady());
+        QCOMPARE(model.getDatasetNaNCount(), uint64_t(1));
+        QCOMPARE(model.anomalyRegions().size(), size_t(1));
+        const QImage base = model.getLoadedImage();
+        QSignalSpy rendered(&model, &FramebufferModel::imageChanged);
+        QSignalSpy readiness(&model, &FramebufferModel::readinessChanged);
+        QSignalSpy markers(&model, &FramebufferModel::anomalyMarkersChanged);
+        model.setHighlightNonFinite(true);
+        QVERIFY(model.isPreviewReady());
+        QCOMPARE(markers.count(), 1);
+        QCOMPARE(rendered.count(), 0);
+        QCOMPARE(readiness.count(), 0);
+        for (int size : {32, 128}) {
+            const QImage resized = base.scaled(size, size, Qt::IgnoreAspectRatio,
+                                               Qt::SmoothTransformation);
+            QImage marked = resized;
+            AnomalyMarkers::composite(marked, model);
+            QRect changed;
+            for (int y = 0; y < size; ++y)
+                for (int x = 0; x < size; ++x)
+                    if (marked.pixel(x, y) != resized.pixel(x, y))
+                        changed = changed.united(QRect(x, y, 1, 1));
+            QVERIFY(changed.width() >= 12 && changed.width() <= 18);
+            QVERIFY(changed.height() >= 12 && changed.height() <= 18);
+            QCOMPARE(marked.pixel(size / 2, size / 2), resized.pixel(size / 2, size / 2));
+        }
+        QCOMPARE(model.getLoadedImage(), base);
+        QVERIFY(std::isnan(model.getRawPixels()[64 * 128 + 64]));
+        model.setHighlightNonFinite(false);
+        QImage unmarked = base;
+        AnomalyMarkers::composite(unmarked, model);
+        QCOMPARE(unmarked, base);
+    }
+
+    void overlappingMarkersMergeAndRemainVisibleOverTransparency()
+    {
+        SyntheticModel model;
+        model.startLoading([](const Cancellation&) {
+            auto data = std::make_shared<FramebufferData>();
+            data->width = data->height = 64;
+            FramebufferData::AnomalyRegion first, second;
+            first.bounds = QRect(20, 20, 1, 1);
+            first.pixelCount = 1;
+            first.flags = FramebufferData::PositiveInf;
+            second.bounds = QRect(24, 20, 1, 1);
+            second.pixelCount = 1;
+            second.flags = FramebufferData::NaN;
+            data->anomalyRegions = {first, second};
+            DecodeResult result;
+            result.data = data;
+            return result;
+        });
+        QTRY_VERIFY(model.isImageLoaded());
+        model.setHighlightNonFinite(true);
+        QImage image(64, 64, QImage::Format_RGBA8888);
+        image.fill(Qt::transparent);
+        AnomalyMarkers::composite(image, model);
+        bool opaqueMagenta = false;
+        for (int y = 0; y < image.height(); ++y)
+            for (int x = 0; x < image.width(); ++x) {
+                const QColor pixel = image.pixelColor(x, y);
+                if (pixel.alpha() == 0) continue;
+                // NaN wins when the disconnected source points' screen markers merge.
+                QCOMPARE(pixel.green(), 0);
+                if (pixel.alpha() == 255 && pixel.red() > 0 && pixel.blue() > 0)
+                    opaqueMagenta = true;
+            }
+        QVERIFY(opaqueMagenta);
+        QCOMPARE(image.pixelColor(22, 20).alpha(), 0); // No interior fill.
     }
 
     void newestRenderWinsWithoutBlocking()
@@ -566,7 +678,8 @@ class ViewerTests: public QObject
     void refreshPreservesPreviewAndFailedRefreshKeepsSource()
     {
         const QString path = fixture("refresh");
-        writeFixture(path, 2, 2, {{"Y", {0.f, 1.f, 2.f, 3.f}}});
+        writeFixture(path, 2, 2,
+          {{"Y", {0.f, 1.f, 2.f, 3.f}}, {"A", {1.f, 1.f, 1.f, 1.f}}});
         FileWidget widget(path);
         widget.resize(800, 500);
         widget.show();
@@ -619,35 +732,37 @@ class ViewerTests: public QObject
         FileWidget widget(path);
         widget.resize(900, 600);
         widget.show();
-        auto* rgb = widget.findChild<RGBFramebufferWidget*>();
-        QTRY_VERIFY(rgb->framebufferModel()->isPreviewReady());
-        auto state      = rgb->previewState();
-        state.automatic = true;
-        rgb->restorePreviewState(state);
-        const LayerItem* depth
-          = widget.sourceImage()->getLayerModel()->findChannel(0, "depth");
-        QVERIFY(depth);
-        widget.openLayer(depth);
         auto* scalar = widget.findChild<YFramebufferWidget*>();
         QVERIFY(scalar);
         QTRY_VERIFY(scalar->framebufferModel()->isPreviewReady());
+        auto state      = scalar->previewState();
+        state.automatic = true;
+        scalar->restorePreviewState(state);
+        const LayerItem* depth
+          = widget.sourceImage()->getLayerModel()->findChannel(0, "depth");
+        QVERIFY(depth);
+        auto* depthModel = widget.openLayer(depth);
+        QVERIFY(depthModel);
+        QTRY_VERIFY(depthModel->isPreviewReady());
+        QCOMPARE(widget.findChildren<YFramebufferWidget*>().size(), 2);
         QCOMPARE(
           widget.findChild<QMdiArea*>()->viewMode(),
           QMdiArea::TabbedView);
-        QPointer<YFramebufferWidget> previous = scalar;
+        QPointer<FramebufferModel> previous = depthModel;
         QVERIFY(QFile::rename(path, path + ".old"));
         writeFixture(path, 2, 2, {{"Y", {10.f, 11.f, 12.f, 13.f}}});
         widget.refresh();
         QVERIFY(widget.isRefreshInProgress());
         QTRY_VERIFY(!widget.isRefreshInProgress());
         QVERIFY(previous.isNull());
-        QCOMPARE(widget.findChildren<YFramebufferWidget*>().size(), 0);
-        rgb = widget.findChild<RGBFramebufferWidget*>();
-        QVERIFY(rgb);
-        QTRY_VERIFY(rgb->framebufferModel()->isPreviewReady());
-        QVERIFY(rgb->previewState().automatic);
-        QVERIFY(std::abs(rgb->previewState().minimum - 10.) < 0.001);
-        QVERIFY(std::abs(rgb->previewState().maximum - 13.) < 0.001);
+        QCOMPARE(widget.findChildren<YFramebufferWidget*>().size(), 1);
+        QVERIFY(widget.findChildren<RGBFramebufferWidget*>().isEmpty());
+        scalar = widget.findChild<YFramebufferWidget*>();
+        QVERIFY(scalar);
+        QTRY_VERIFY(scalar->framebufferModel()->isPreviewReady());
+        QVERIFY(scalar->previewState().automatic);
+        QVERIFY(std::abs(scalar->previewState().minimum - 10.) < 0.001);
+        QVERIFY(std::abs(scalar->previewState().maximum - 13.) < 0.001);
         // A single remaining preview fills the workspace without a tab bar.
         QCOMPARE(
           widget.findChild<QMdiArea*>()->viewMode(),
@@ -798,8 +913,9 @@ class ViewerTests: public QObject
           && active->activeFramebufferModel()->isPreviewReady());
         auto* copy = window.findChild<QAction*>("action_CopyImage");
         QVERIFY(copy->isEnabled());
-        auto* rgb = active->findChild<RGBFramebufferWidget*>();
-        rgb->findChild<QDoubleSpinBox*>("sbExposure")->setValue(1.);
+        auto* scalar = active->findChild<YFramebufferWidget*>();
+        QVERIFY(scalar);
+        scalar->findChild<QDoubleSpinBox*>("sbMaxValue")->setValue(2.);
         QVERIFY(!copy->isEnabled());
         QTRY_VERIFY(copy->isEnabled());
         QPointer<ImageFileWidget> closing = active;

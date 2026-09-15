@@ -874,7 +874,9 @@ ImageFileWidget::PreparedPreview ImageFileWidget::createPreview(
     preview.compression      = compressionDescription(compression);
 
     const auto type   = item->getType();
-    const bool scalar = type == LayerItem::A || type == LayerItem::RY
+    const bool scalar = type == LayerItem::R || type == LayerItem::G
+                        || type == LayerItem::B || type == LayerItem::A
+                        || type == LayerItem::Y || type == LayerItem::RY
                         || type == LayerItem::BY || type == LayerItem::GENERAL;
     if (scalar) {
         std::unique_ptr<YFramebufferWidget> widget(
@@ -912,8 +914,7 @@ ImageFileWidget::PreparedPreview ImageFileWidget::createPreview(
            channelName(LayerItem::A)}};
     else
         channels = {
-          {type == LayerItem::YA ? channelName(LayerItem::Y)
-                                 : item->getOriginalFullName(),
+          {channelName(LayerItem::Y),
            "",
            "",
            channelName(LayerItem::A)}};
@@ -1100,15 +1101,18 @@ ImageFileWidget::framebufferStatusToolTip(QMdiSubWindow* subWindow) const
     lines << "Pixel type: " + subWindow->property("pixelType").toString();
     lines << "Compression: " + subWindow->property("compression").toString();
     lines << "Size: " + framebufferSizeText(model);
-    lines << "Min value: " + framebufferDatasetValueText(model, true);
-    lines << "Max value: " + framebufferDatasetValueText(model, false);
+    lines << "Source finite min: " + framebufferDatasetValueText(model, true);
+    lines << "Source finite max: " + framebufferDatasetValueText(model, false);
 
     if (loaded) {
+        lines << "Source channel samples (not pixels):";
         lines << "NaN count: " + QString::number(model->getDatasetNaNCount());
-        lines << "Inf count: " + QString::number(model->getDatasetInfCount());
+        lines << "+Inf count: " + QString::number(model->getDatasetPositiveInfCount());
+        lines << "-Inf count: " + QString::number(model->getDatasetNegativeInfCount());
     } else {
         lines << "NaN count: n/a";
-        lines << "Inf count: n/a";
+        lines << "+Inf count: n/a";
+        lines << "-Inf count: n/a";
     }
 
     return lines.join("\n");

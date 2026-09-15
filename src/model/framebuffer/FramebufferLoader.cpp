@@ -1,5 +1,6 @@
 #include "FramebufferLoader.h"
 #include "ToneMapping.h"
+#include "PixelDiagnostics.h"
 
 #include <OpenEXR/ImfChannelList.h>
 #include <OpenEXR/ImfChromaticitiesAttribute.h>
@@ -168,8 +169,34 @@ DecodeResult FramebufferLoader::decode(
           static_cast<int>(y),
           static_cast<int>(std::min<int64_t>(window.max.y, y + 31)));
     }
+    // Count stored channel samples, not resampled pixels or synthesized RGBA.
+    for (const Channel& channel : channels) {
+        if (channel.pixels.empty()) continue;
+        for (size_t i = 0; i < channel.pixels.size(); ++i) {
+            if (i % size_t(channel.width) == 0 && cancel->load())
+                return DecodeResult();
+            const float value = channel.pixels[i];
+            switch (PixelDiagnostics::classify(value)) {
+                case FramebufferData::NaN: ++data->nanCount; break;
+                case FramebufferData::PositiveInf:
+                    ++data->positiveInfCount;
+                    ++data->infCount;
+                    break;
+                case FramebufferData::NegativeInf:
+                    ++data->negativeInfCount;
+                    ++data->infCount;
+                    break;
+                default:
+                    collect(value, data->minimum, data->maximum,
+                            data->hasFiniteSamples);
+                    break;
+            }
+        }
+    }
     const int components = layout == Scalar ? 1 : 4;
     data->pixels.resize(count * components);
+    std::vector<uint8_t> nonFiniteFlags;
+    if (data->nanCount || data->infCount) nonFiniteFlags.resize(count, 0);
     for (int y = 0; y < data->height; ++y) {
         if (cancel->load()) return DecodeResult();
         for (int x = 0; x < data->width; ++x) {
@@ -177,6 +204,12 @@ DecodeResult FramebufferLoader::decode(
               = &data->pixels[(size_t(y) * data->width + x) * components];
             const int64_t sx = int64_t(window.min.x) + x;
             const int64_t sy = int64_t(window.min.y) + y;
+            if (!nonFiniteFlags.empty()) {
+                uint8_t& flags = nonFiniteFlags[size_t(y) * data->width + x];
+                for (size_t c = 0; c < channels.size(); ++c)
+                    if (!names[c].empty())
+                        flags |= PixelDiagnostics::classify(channels[c].at(sx, sy));
+            }
             pixel[0]         = channels[0].at(sx, sy);
             if (layout == Scalar) continue;
             pixel[1] = layout == Luminance ? pixel[0] : channels[1].at(sx, sy);
@@ -184,6 +217,11 @@ DecodeResult FramebufferLoader::decode(
             pixel[3] = names[3].empty() ? 1.f : channels[3].at(sx, sy);
         }
     }
+
+    data->anomalyRegions = PixelDiagnostics::connectedRegions(
+      nonFiniteFlags, data->width, data->height, cancel);
+    if (cancel->load()) return DecodeResult();
+    std::vector<uint8_t>().swap(nonFiniteFlags);
 
     Imf::Chromaticities chromaticities;
     const auto*         attribute
@@ -226,7 +264,12 @@ DecodeResult FramebufferLoader::decode(
             }
         }
     }
-    if (layout == RGB || layout == Chroma) {
+    const Imf::Chromaticities standard;
+    const bool standardChromaticities
+      = chromaticities.red == standard.red && chromaticities.green == standard.green
+        && chromaticities.blue == standard.blue && chromaticities.white == standard.white;
+    // An approximate identity matrix still mixes NaN/Inf into other channels.
+    if ((layout == RGB || layout == Chroma) && !standardChromaticities) {
         const Imath::M44f conversion
           = Imf::RGBtoXYZ(chromaticities, 1.f)
             * Imf::XYZtoRGB(Imf::Chromaticities(), 1.f);
@@ -245,20 +288,6 @@ DecodeResult FramebufferLoader::decode(
         if (i % size_t(data->width) == 0 && cancel->load())
             return DecodeResult();
         const float* pixel = &data->pixels[components * i];
-        const int    statsChannels
-          = layout == Scalar || layout == Luminance ? 1 : 3;
-        for (int c = 0; c < statsChannels; ++c) {
-            if (std::isnan(pixel[c]))
-                ++data->nanCount;
-            else if (std::isinf(pixel[c]))
-                ++data->infCount;
-            else
-                collect(
-                  pixel[c],
-                  data->minimum,
-                  data->maximum,
-                  data->hasFiniteSamples);
-        }
         if (layout != Scalar)
             collect(
               ToneMapping::luminance(pixel[0], pixel[1], pixel[2]),

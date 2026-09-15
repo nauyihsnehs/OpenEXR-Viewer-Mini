@@ -1,8 +1,10 @@
 #include "ImageSave.h"
+#include <util/AnomalyMarkers.h>
 
 #include <io/ImageSavePlan.h>
 #include <model/OpenEXRImage.h>
 #include <model/framebuffer/FramebufferModel.h>
+#include <model/framebuffer/ToneMapping.h>
 #include <util/ColorTransform.h>
 
 #include <OpenEXR/ImfChannelList.h>
@@ -25,6 +27,7 @@
 #include <QRect>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <exception>
@@ -178,8 +181,9 @@ namespace
 
         const std::vector<std::string> names = model->rawChannelNames();
         const std::vector<int> indexes = selectedChannelIndexes(names, scope);
+        const std::vector<int> components = model->rawChannelComponents();
         const std::vector<float>& raw  = model->getRawPixels();
-        const int                 rawCount = static_cast<int>(names.size());
+        const int rawCount = model->rawPixelStride();
 
         part.channels.reserve(indexes.size());
 
@@ -194,7 +198,7 @@ namespace
             channel.pixels.resize(part.width * part.height);
 
             for (int i = 0; i < part.width * part.height; i++) {
-                channel.pixels[i] = raw[i * rawCount + srcIndex];
+                channel.pixels[i] = raw[size_t(i) * rawCount + components[srcIndex]];
             }
 
             part.channels.push_back(channel);
@@ -481,6 +485,30 @@ namespace
         return -1;
     }
 
+    std::array<int, 3> rgbComponents(const FramebufferModel* model)
+    {
+        const auto names = model->rawChannelNames();
+        const auto components = model->rawChannelComponents();
+        std::array<int, 3> rgb = {{-1, -1, -1}};
+        const char* colorNames[] = {"R", "G", "B"};
+        for (int c = 0; c < 3; ++c) {
+            const int index = findChannel(names, colorNames[c]);
+            if (index >= 0) rgb[c] = components[index];
+        }
+        // Preserve single R/G/B colors, rather than treating them as luminance.
+        if (rgb[0] >= 0 || rgb[1] >= 0 || rgb[2] >= 0) return rgb;
+        const int y = findChannel(names, "Y");
+        if (y >= 0) return {{components[y], components[y], components[y]}};
+        for (int c = 0; c < 3; ++c)
+            rgb[c] = components[c < int(components.size()) ? c : 0];
+        return rgb;
+    }
+
+    float rgbSample(const std::vector<float>& pixels, size_t offset, int component)
+    {
+        return component < 0 ? 0.f : pixels[offset + component];
+    }
+
     ImageSave::Result
     writeHdr(const FramebufferModel* model, const ImageSave::Options& options)
     {
@@ -497,22 +525,14 @@ namespace
         }
 
         const uint64_t expected
-          = uint64_t(width) * uint64_t(height) * uint64_t(channelCount);
+          = uint64_t(width) * uint64_t(height) * uint64_t(model->rawPixelStride());
         if (pixels.size() < expected) {
             return result(
               ImageSave::StatusFailed,
               QObject::tr("The raw framebuffer data is incomplete."));
         }
 
-        int rIndex = findChannel(names, "R");
-        int gIndex = findChannel(names, "G");
-        int bIndex = findChannel(names, "B");
-
-        if (rIndex < 0 || gIndex < 0 || bIndex < 0) {
-            rIndex = 0;
-            gIndex = channelCount > 1 ? 1 : 0;
-            bIndex = channelCount > 2 ? 2 : 0;
-        }
+        const auto rgb = rgbComponents(model);
 
         QFile file(options.path);
         if (!file.open(QFile::WriteOnly)) {
@@ -530,10 +550,10 @@ namespace
 
         for (int y = 0; y < height; y++) {
             for (int x = 0; x < width; x++) {
-                const int   offset = channelCount * (y * width + x);
-                const float r      = saneHdrValue(pixels[offset + rIndex]);
-                const float g      = saneHdrValue(pixels[offset + gIndex]);
-                const float b      = saneHdrValue(pixels[offset + bIndex]);
+                const size_t offset = model->rawPixelStride() * (size_t(y) * width + x);
+                const float r = saneHdrValue(rgbSample(pixels, offset, rgb[0]));
+                const float g = saneHdrValue(rgbSample(pixels, offset, rgb[1]));
+                const float b = saneHdrValue(rgbSample(pixels, offset, rgb[2]));
                 rgbe(r, g, b, line.data() + 4 * x);
             }
 
@@ -571,6 +591,7 @@ namespace
               = image.scaledToWidth(options.maxWidth, Qt::SmoothTransformation);
         }
 
+        AnomalyMarkers::composite(image, *model);
         if (
           options.format == ImageSave::FormatJpeg && image.hasAlphaChannel()) {
             image = image.convertToFormat(QImage::Format_RGB888);
@@ -591,15 +612,9 @@ namespace
           QStringList() << options.path);
     }
 
-    unsigned char bracketByte(float value, float exposureMul)
+    unsigned char bracketByte(float value, double exposureMul)
     {
-        if (!std::isfinite(value) || value < 0.f) return 0;
-
-        const float srgb = ColorTransform::to_sRGB(exposureMul * value);
-        if (!std::isfinite(srgb)) return srgb > 0.f ? 255 : 0;
-
-        return static_cast<unsigned char>(
-          std::max(0, std::min(255, int(255.f * srgb))));
+        return ToneMapping::toByte(ColorTransform::to_sRGB(exposureMul * value));
     }
 
     ImageSave::Result saveBracketedImages(
@@ -626,22 +641,14 @@ namespace
         }
 
         const uint64_t expected
-          = uint64_t(width) * uint64_t(height) * uint64_t(channelCount);
+          = uint64_t(width) * uint64_t(height) * uint64_t(model->rawPixelStride());
         if (pixels.size() < expected) {
             return result(
               ImageSave::StatusFailed,
               QObject::tr("The raw framebuffer data is incomplete."));
         }
 
-        int rIndex = findChannel(names, "R");
-        int gIndex = findChannel(names, "G");
-        int bIndex = findChannel(names, "B");
-
-        if (rIndex < 0 || gIndex < 0 || bIndex < 0) {
-            rIndex = 0;
-            gIndex = channelCount > 1 ? 1 : 0;
-            bIndex = channelCount > 2 ? 2 : 0;
-        }
+        const auto rgb = rgbComponents(model);
 
         const QStringList         paths = ImageSavePlan::outputPaths(options);
         const std::vector<double> values
@@ -649,19 +656,19 @@ namespace
 
         for (int i = 0; i < static_cast<int>(values.size()); i++) {
             QImage      image(width, height, QImage::Format_RGB888);
-            const float exposureMul = std::exp2(values[i]);
+            const double exposureMul = std::exp2(values[i]);
 
             for (int y = 0; y < height; y++) {
                 unsigned char* line = image.scanLine(y);
 
                 for (int x = 0; x < width; x++) {
-                    const int offset = channelCount * (y * width + x);
+                    const size_t offset = model->rawPixelStride() * (size_t(y) * width + x);
                     line[3 * x + 0]
-                      = bracketByte(pixels[offset + rIndex], exposureMul);
+                      = bracketByte(rgbSample(pixels, offset, rgb[0]), exposureMul);
                     line[3 * x + 1]
-                      = bracketByte(pixels[offset + gIndex], exposureMul);
+                      = bracketByte(rgbSample(pixels, offset, rgb[1]), exposureMul);
                     line[3 * x + 2]
-                      = bracketByte(pixels[offset + bIndex], exposureMul);
+                      = bracketByte(rgbSample(pixels, offset, rgb[2]), exposureMul);
                 }
             }
 
@@ -707,7 +714,7 @@ namespace
 
         const uint64_t expected = uint64_t(model->width())
                                   * uint64_t(model->height())
-                                  * uint64_t(model->rawChannelNames().size());
+                                  * uint64_t(model->rawPixelStride());
 
         if (model->getRawPixels().size() < expected) {
             return result(

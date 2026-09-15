@@ -45,13 +45,18 @@ class Colormap
     virtual void getRGBValue(float v, float RGB[3]) const = 0;
 
     virtual void
-    getRGBValue(float v, float v_min, float v_max, float RGB[3]) const
+    getRGBValue(double v, double v_min, double v_max, float RGB[3]) const
     {
-        const double span = double(v_max) - v_min;
-        const double normalized
-          = std::isfinite(v) && std::isfinite(span) && span > 0.
-              ? (double(v) - v_min) / span
-              : 0.;
+        if (std::isnan(v)) {
+            RGB[0] = RGB[1] = RGB[2] = 0.f;
+            return;
+        }
+        const double span = v_max - v_min;
+        double normalized = 0.;
+        if (std::isinf(v))
+            normalized = v > 0. ? 1. : 0.;
+        else if (std::isfinite(span) && span > 0.)
+            normalized = (v - v_min) / span;
         getRGBValue(
           static_cast<float>(std::max(0., std::min(1., normalized))),
           RGB);

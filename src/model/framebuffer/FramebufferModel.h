@@ -61,12 +61,36 @@ class FramebufferModel: public QObject
     double   getDatasetMax() const { return m_data->maximum; }
     uint64_t getDatasetNaNCount() const { return m_data->nanCount; }
     uint64_t getDatasetInfCount() const { return m_data->infCount; }
+    uint64_t getDatasetPositiveInfCount() const { return m_data->positiveInfCount; }
+    uint64_t getDatasetNegativeInfCount() const { return m_data->negativeInfCount; }
     bool     hasFiniteSamples() const { return m_data->hasFiniteSamples; }
+    bool highlightNonFinite() const { return m_highlightNonFinite; }
+    const std::vector<FramebufferData::AnomalyRegion>& anomalyRegions() const
+    {
+        return m_data->anomalyRegions;
+    }
+    void setHighlightNonFinite(bool enabled)
+    {
+        if (m_highlightNonFinite == enabled) return;
+        m_highlightNonFinite = enabled;
+        emit anomalyMarkersChanged();
+    }
+    virtual int rawPixelStride() const
+    {
+        return int(rawChannelNames().size());
+    }
 
     virtual std::string              getColorInfo(int x, int y) const = 0;
     virtual std::vector<std::string> rawChannelNames() const          = 0;
+    virtual std::vector<int> rawChannelComponents() const
+    {
+        std::vector<int> components(rawChannelNames().size());
+        for (size_t i = 0; i < components.size(); ++i) components[i] = int(i);
+        return components;
+    }
 
   signals:
+    void anomalyMarkersChanged();
     void imageChanged();
     void imageLoaded();
     void loadFailed(QString message);
@@ -101,4 +125,5 @@ class FramebufferModel: public QObject
     bool                         m_loading          = false;
     bool                         m_ready            = false;
     QString                      m_error;
+    bool                         m_highlightNonFinite = false;
 };

@@ -11,8 +11,8 @@ namespace ToneMapping
         Clamp,
     };
 
-    float         luminance(float r, float g, float b);
-    unsigned char toByte(float value);
-    float
-    toSrgb(float value, Method method, float p0, float p1, float p2, float p3);
+    double         luminance(double r, double g, double b);
+    unsigned char toByte(double value);
+    double
+    toSrgb(double value, Method method, double p0, double p1, double p2, double p3);
 }   // namespace ToneMapping

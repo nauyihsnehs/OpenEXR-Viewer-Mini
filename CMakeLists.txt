@@ -129,6 +129,9 @@ set(PROJECT_SOURCES
     src/view/ScaleWidget.h
     src/view/RangeSliderWidget.cpp
     src/view/RangeSliderWidget.h
+    src/view/ScientificDoubleSpinBox.h
+    src/view/AnomalyMarkerButton.h
+    src/view/AnomalyMarkerButton.cpp
 
     # ------------------------------------------------------------------------
     # Model
@@ -153,6 +156,8 @@ set(PROJECT_SOURCES
     src/model/framebuffer/FramebufferModel.cpp
     src/model/framebuffer/FramebufferModel.h
     src/model/framebuffer/FramebufferData.h
+    src/model/framebuffer/PixelDiagnostics.h
+    src/model/framebuffer/PixelDiagnostics.cpp
     src/model/framebuffer/FramebufferLoader.h
     src/model/framebuffer/FramebufferLoader.cpp
     src/model/framebuffer/YFramebufferModel.cpp
@@ -181,6 +186,8 @@ set(PROJECT_SOURCES
     src/util/ColormapModule.cpp
     src/util/ColorTransform.h
     src/util/ColorTransform.cpp
+    src/util/AnomalyMarkers.h
+    src/util/AnomalyMarkers.cpp
 
     openexr-viewer.rc
     assets/themes/dark_flat.qrc

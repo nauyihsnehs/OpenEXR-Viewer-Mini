@@ -38,8 +38,10 @@
 #include "GraphicsView.h"
 #include "ComboBoxBehavior.h"
 #include "WorkspaceWidgets.h"
+#include "ScientificDoubleSpinBox.h"
 
 #include <QAbstractSpinBox>
+#include <QToolButton>
 #include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QEvent>
@@ -83,6 +85,9 @@ RGBFramebufferWidget::RGBFramebufferWidget(QWidget* parent)
   , m_savedFalseColorMax(1.)
 {
     ui->setupUi(this);
+    connect(ui->anomalyMarkerButton, &QToolButton::toggled, this, [this](bool enabled) {
+        if (m_model) m_model->setHighlightNonFinite(enabled);
+    });
     wrapPreviewControls(ui->verticalLayout);
     connect(ui->graphicsView, &GraphicsView::minimalViewRequested,
             this, &RGBFramebufferWidget::minimalViewRequested);
@@ -164,6 +169,7 @@ RGBFramebufferWidget::RGBFramebufferWidget(QWidget* parent)
     ui->falseColorRangeSlider->setBounds(0., 1.);
     ui->falseColorRangeSlider->setRange(0., 1.);
     ui->falseColorScaleWidget->setColormap(ColormapModule::TURBO);
+    setFalseColorRange(0., 1., false);
 
     applyComboBoxBehavior(this);
 
@@ -188,6 +194,7 @@ RGBFramebufferWidget::~RGBFramebufferWidget()
 void RGBFramebufferWidget::setModel(RGBFramebufferModel* model)
 {
     m_model = model;
+    if (m_model) m_model->setHighlightNonFinite(ui->anomalyMarkerButton->isChecked());
     if (m_model && m_model->parent() != this) m_model->setParent(this);
     m_model->setExposure(ui->sbExposure->value());
     m_model->setPreviewMode(m_previewMode);
@@ -251,7 +258,10 @@ void RGBFramebufferWidget::setSpinBoxCompact(
 {
     spinBox->setReadOnly(compact);
     spinBox->setFrame(!compact);
-    spinBox->setFixedWidth(compact ? 66 : 84);
+    const int scientificWidth = spinBox->fontMetrics()
+      .boundingRect(QStringLiteral("-1.2345678901234567e-38")).width();
+    spinBox->setFixedWidth(spinBox->property("scientificRange").toBool()
+      ? scientificWidth + (compact ? 16 : 36) : (compact ? 66 : 84));
     spinBox->setButtonSymbols(
       compact ? QAbstractSpinBox::NoButtons : QAbstractSpinBox::UpDownArrows);
     if (spinBox->property("compactValue") != QVariant(compact)) {
@@ -482,8 +492,6 @@ void RGBFramebufferWidget::updateFalseColorRangeBounds(double min, double max)
     boundMin = std::min(boundMin, min);
     boundMax = std::max(boundMax, max);
 
-    if (boundMin == boundMax) boundMax = boundMin + 1.;
-
     ui->falseColorRangeSlider->setBounds(boundMin, boundMax);
     ui->falseColorRangeSlider->setRange(min, max);
 }
@@ -502,10 +510,8 @@ void RGBFramebufferWidget::setFalseColorRange(
     const QSignalBlocker blocker_falseColorRangeSlider(
       ui->falseColorRangeSlider);
 
-    ui->sbFalseColorMinValue->setMinimum(-999999999.);
-    ui->sbFalseColorMinValue->setMaximum(max);
-    ui->sbFalseColorMaxValue->setMinimum(min);
-    ui->sbFalseColorMaxValue->setMaximum(999999999.);
+    ui->sbFalseColorMinValue->setRange(-ScientificDoubleSpinBox::sampleLimit(), max);
+    ui->sbFalseColorMaxValue->setRange(min, ScientificDoubleSpinBox::sampleLimit());
     ui->sbFalseColorMinValue->setValue(min);
     ui->sbFalseColorMaxValue->setValue(max);
     ui->falseColorRangeSlider->setRange(min, max);
@@ -889,6 +895,9 @@ void RGBFramebufferWidget::updateZoomLevelText(double zoom)
 void RGBFramebufferWidget::updateFramebufferSummary()
 {
     ui->framebufferSummaryLabel->setText(framebufferSummaryText(m_model));
+    const bool loaded = m_model && m_model->isImageLoaded();
+    ui->anomalyMarkerButton->setEnabled(loaded);
+    ui->falseColorAutoButton->setEnabled(loaded && m_model->hasFiniteLuminanceSamples());
 }
 
 
@@ -917,11 +926,13 @@ PreviewState RGBFramebufferWidget::previewState() const
     state.savedMaximum = m_savedFalseColorMax;
     state.automatic    = m_falseColorAutoRange;
     state.scaleVisible = ui->cbFalseColorScale->isChecked();
+    state.highlightNonFinite = ui->anomalyMarkerButton->isChecked();
     return state;
 }
 
 void RGBFramebufferWidget::restorePreviewState(const PreviewState& state)
 {
+    ui->anomalyMarkerButton->setChecked(state.highlightNonFinite);
     setPreviewMode(static_cast<RGBFramebufferModel::PreviewMode>(state.mode));
     ui->sbExposure->setValue(state.exposure);
     ui->cbToneMappingMethod->setCurrentIndex(state.toneMethod);
@@ -936,8 +947,8 @@ void RGBFramebufferWidget::restorePreviewState(const PreviewState& state)
     ui->cbFalseColorScale->setChecked(state.scaleVisible);
     m_savedFalseColorMin = state.savedMinimum;
     m_savedFalseColorMax = state.savedMaximum;
-    setFalseColorAutoRange(state.automatic);
-    if (state.automatic && m_model->hasFiniteLuminanceSamples())
+    setFalseColorAutoRange(state.automatic && m_model->hasFiniteLuminanceSamples());
+    if (m_falseColorAutoRange)
         setFalseColorRange(
           m_model->getLuminanceMin(),
           m_model->getLuminanceMax(),

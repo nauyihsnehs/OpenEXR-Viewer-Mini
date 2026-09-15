@@ -85,6 +85,7 @@ class GraphicsView: public QGraphicsView
     void dragEnterEvent(QDragEnterEvent* event) override;
     void dragMoveEvent(QDragMoveEvent* event) override;
     void drawBackground(QPainter* painter, const QRectF& rect) override;
+    void drawForeground(QPainter* painter, const QRectF& rect) override;
     void scrollContentsBy(int dx, int dy) override;
 
   private:

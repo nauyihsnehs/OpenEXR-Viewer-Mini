@@ -3,6 +3,7 @@
 #include <QRect>
 #include <QString>
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <vector>
 
@@ -14,10 +15,20 @@ struct FramebufferData {
     QRect              dataWindow;
     QRect              displayWindow;
     std::vector<float> pixels;
+    // Source-channel flags, before color conversion or display mapping.
+    enum NonFiniteFlag { NaN = 1, PositiveInf = 2, NegativeInf = 4 };
+    struct AnomalyRegion {
+        QRect bounds; // Pixel edges in framebuffer-local coordinates.
+        uint64_t pixelCount = 0;
+        uint8_t flags = 0;
+    };
+    std::vector<AnomalyRegion> anomalyRegions;
     double             minimum            = 0.;
     double             maximum            = 0.;
     uint64_t           nanCount           = 0;
     uint64_t           infCount           = 0;
+    uint64_t           positiveInfCount   = 0;
+    uint64_t           negativeInfCount   = 0;
     bool               hasFiniteSamples   = false;
     double             luminanceMin       = 0.;
     double             luminanceMax       = 0.;

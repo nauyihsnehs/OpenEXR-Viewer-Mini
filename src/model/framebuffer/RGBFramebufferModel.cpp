@@ -31,6 +31,7 @@
  */
 
 #include "RGBFramebufferModel.h"
+#include "PixelDiagnostics.h"
 #include "FramebufferLoader.h"
 #include <util/ColorTransform.h>
 #include <cmath>
@@ -57,6 +58,7 @@ void RGBFramebufferModel::load(
   int                                             partId,
   const std::array<std::string, 4>&               channels)
 {
+    m_channels = channels;
     const auto layout = m_layerType == Layer_RGB ? FramebufferLoader::RGB
                         : m_layerType == Layer_YC
                           ? FramebufferLoader::Chroma
@@ -77,10 +79,15 @@ std::string RGBFramebufferModel::getColorInfo(int x, int y) const
         return "";
     const float*      pixel = &getRawPixels()[4 * (size_t(y) * width() + x)];
     std::stringstream text;
-    text << "x: " << x << " y: " << y << " | "
-         << " R: " << pixel[0] << " G: " << pixel[1] << " B: " << pixel[2]
-         << " A: " << pixel[3]
-         << " Y: " << ToneMapping::luminance(pixel[0], pixel[1], pixel[2]);
+    text << "x: " << x << " y: " << y << " |";
+    const auto names = rawChannelNames();
+    const auto components = rawChannelComponents();
+    for (size_t c = 0; c < names.size(); ++c)
+        text << " " << names[c] << ": "
+             << PixelDiagnostics::sampleText(pixel[components[c]]);
+    if (m_layerType == Layer_RGB || m_layerType == Layer_YC)
+        text << " | Luminance: " << std::setprecision(9)
+             << ToneMapping::luminance(pixel[0], pixel[1], pixel[2]);
     return text.str();
 }
 
@@ -108,7 +115,21 @@ float RGBFramebufferModel::getAlphaInfo(int x, int y) const
 }
 std::vector<std::string> RGBFramebufferModel::rawChannelNames() const
 {
-    return {"R", "G", "B", "A"};
+    // YCA is converted to RGB by the loader; preserve that export contract.
+    if (m_layerType == Layer_YC) return {"R", "G", "B", "A"};
+    std::vector<std::string> names;
+    for (const auto& channel : m_channels)
+        if (!channel.empty()) names.push_back(channel);
+    return names;
+}
+
+std::vector<int> RGBFramebufferModel::rawChannelComponents() const
+{
+    if (m_layerType == Layer_YC) return {0, 1, 2, 3};
+    std::vector<int> components;
+    for (size_t i = 0; i < m_channels.size(); ++i)
+        if (!m_channels[i].empty()) components.push_back(int(i));
+    return components;
 }
 
 void RGBFramebufferModel::setExposure(double value)
@@ -162,12 +183,9 @@ void RGBFramebufferModel::updateImage()
     const auto                 data     = m_data;
     const auto                 mode     = m_previewMode;
     const auto                 method   = m_toneMappingMethod;
-    const float                exposure = std::exp2(m_exposure);
-    const std::array<float, 4> params   = {
-      {float(m_toneParams[0]),
-       float(m_toneParams[1]),
-       float(m_toneParams[2]),
-       float(m_toneParams[3])}};
+    const double exposure = std::exp2(m_exposure);
+    const std::array<double, 4> params = {
+      {m_toneParams[0], m_toneParams[1], m_toneParams[2], m_toneParams[3]}};
     const double minimum  = m_falseColorMin;
     const double maximum  = m_falseColorMax;
     const auto   colormap = m_falseColorMap;
@@ -189,17 +207,18 @@ void RGBFramebufferModel::updateImage()
                 = data->pixels.data() + size_t(y) * data->width * 4;
               for (int x = 0; x < data->width; ++x) {
                   const float* pixel = pixels + 4 * x;
-                  float        rgb[3];
                   if (mode == Preview_FalseColor) {
+                      float rgb[3];
                       colormap->getRGBValue(
                         ToneMapping::luminance(pixel[0], pixel[1], pixel[2]),
                         minimum,
                         maximum,
                         rgb);
-                  } else {
                       for (int c = 0; c < 3; ++c)
-                          rgb[c]
-                            = mode == Preview_ToneMapping
+                          line[4 * x + c] = ToneMapping::toByte(rgb[c]);
+                  } else {
+                      for (int c = 0; c < 3; ++c) {
+                          const double value = mode == Preview_ToneMapping
                                 ? ToneMapping::toSrgb(
                                     pixel[c],
                                     method,
@@ -208,9 +227,9 @@ void RGBFramebufferModel::updateImage()
                                     params[2],
                                     params[3])
                                 : ColorTransform::to_sRGB(exposure * pixel[c]);
+                          line[4 * x + c] = ToneMapping::toByte(value);
+                      }
                   }
-                  for (int c = 0; c < 3; ++c)
-                      line[4 * x + c] = ToneMapping::toByte(rgb[c]);
                   line[4 * x + 3] = ToneMapping::toByte(pixel[3]);
               }
           }

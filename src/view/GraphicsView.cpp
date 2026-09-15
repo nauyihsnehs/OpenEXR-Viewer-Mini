@@ -32,6 +32,7 @@
 
 #include "GraphicsView.h"
 #include "FileDrop.h"
+#include <util/AnomalyMarkers.h>
 #include <QDragEnterEvent>
 #include <QApplication>
 #include <QContextMenuEvent>
@@ -86,8 +87,13 @@ void GraphicsView::setModel(const FramebufferModel* model)
     unsetCursor();
     _imageItem->setPixmap(QPixmap());
     _dataWindow = _displayWindow = QRectF();
+    viewport()->update();
     emit queryPixelInfo(-1, -1);
     if (!model) return;
+    connect(model, &FramebufferModel::anomalyMarkersChanged, this,
+            [this] { viewport()->update(); });
+    connect(model, &FramebufferModel::readinessChanged, this,
+            [this] { viewport()->update(); });
     connect(
       model,
       &FramebufferModel::imageChanged,
@@ -435,6 +441,19 @@ void GraphicsView::drawBackground(QPainter* painter, const QRectF&)
     painter->drawTiledPixmap(viewport()->rect(), _checkerboard);
     painter->restore();
 }
+void GraphicsView::drawForeground(QPainter* painter, const QRectF&)
+{
+    if (!_model || !_model->isImageLoaded()) return;
+    const QTransform imageToViewport = _imageItem->deviceTransform(viewportTransform());
+    const QRectF clip = imageToViewport.mapRect(
+      QRectF(0., 0., _model->width(), _model->height()))
+        .intersected(QRectF(viewport()->rect()));
+    painter->save();
+    painter->resetTransform();
+    AnomalyMarkers::draw(*painter, *_model, imageToViewport, clip);
+    painter->restore();
+}
+
 void GraphicsView::scrollContentsBy(int dx, int dy)
 {
     QGraphicsView::scrollContentsBy(dx, dy);

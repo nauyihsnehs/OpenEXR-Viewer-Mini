@@ -31,6 +31,8 @@
  */
 
 #include "YFramebufferWidget.h"
+#include "ScientificDoubleSpinBox.h"
+#include <QToolButton>
 #include <QSignalBlocker>
 #include "ui_YFramebufferWidget.h"
 
@@ -51,6 +53,10 @@ YFramebufferWidget::YFramebufferWidget(QWidget* parent)
   , m_zoomLevel(1.)
 {
     ui->setupUi(this);
+    setRange(0., 1.);
+    connect(ui->anomalyMarkerButton, &QToolButton::toggled, this, [this](bool enabled) {
+        if (m_model) m_model->setHighlightNonFinite(enabled);
+    });
     wrapPreviewControls(ui->verticalLayout);
     connect(ui->graphicsView, &GraphicsView::minimalViewRequested,
             this, &YFramebufferWidget::minimalViewRequested);
@@ -94,6 +100,7 @@ YFramebufferWidget::~YFramebufferWidget()
 void YFramebufferWidget::setModel(YFramebufferModel* model)
 {
     m_model = model;
+    if (m_model) m_model->setHighlightNonFinite(ui->anomalyMarkerButton->isChecked());
     if (m_model && m_model->parent() != this) m_model->setParent(this);
     ui->graphicsView->setModel(model);
     connect(
@@ -201,6 +208,9 @@ void YFramebufferWidget::updateZoomLevelText(double zoom)
 void YFramebufferWidget::updateFramebufferSummary()
 {
     ui->framebufferSummaryLabel->setText(framebufferSummaryText(m_model));
+    const bool loaded = m_model && m_model->isImageLoaded();
+    ui->anomalyMarkerButton->setEnabled(loaded);
+    ui->buttonAuto->setEnabled(loaded && m_model->hasFiniteSamples());
 }
 
 
@@ -217,8 +227,8 @@ void YFramebufferWidget::on_zoomButton_clicked()
 void YFramebufferWidget::setRange(double min, double max)
 {
     const QSignalBlocker low(ui->sbMinValue), high(ui->sbMaxValue);
-    ui->sbMinValue->setRange(-999999999., max);
-    ui->sbMaxValue->setRange(min, 999999999.);
+    ui->sbMinValue->setRange(-ScientificDoubleSpinBox::sampleLimit(), max);
+    ui->sbMaxValue->setRange(min, ScientificDoubleSpinBox::sampleLimit());
     ui->sbMinValue->setValue(min);
     ui->sbMaxValue->setValue(max);
     ui->scaleWidget->setMin(ui->sbMinValue->value());
@@ -234,14 +244,16 @@ PreviewState YFramebufferWidget::previewState() const
     state.maximum      = ui->sbMaxValue->value();
     state.automatic    = m_autoRange;
     state.scaleVisible = ui->cbScale->isChecked();
+    state.highlightNonFinite = ui->anomalyMarkerButton->isChecked();
     return state;
 }
 void YFramebufferWidget::restorePreviewState(const PreviewState& state)
 {
+    ui->anomalyMarkerButton->setChecked(state.highlightNonFinite);
     ui->cbColormap->setCurrentIndex(state.colormap);
     ui->cbScale->setChecked(state.scaleVisible);
-    m_autoRange = state.automatic;
-    if (m_autoRange && m_model->hasFiniteSamples())
+    m_autoRange = state.automatic && m_model->hasFiniteSamples();
+    if (m_autoRange)
         setRange(m_model->getDatasetMin(), m_model->getDatasetMax());
     else
         setRange(state.minimum, state.maximum);

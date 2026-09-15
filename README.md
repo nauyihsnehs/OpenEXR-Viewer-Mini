@@ -29,6 +29,28 @@ Viewing controls
 - The minimal footer shows the raw pixel coordinates and values under the pointer,
   prioritizing pixel information when the window is narrow. Hover over the footer
   to read the full text.
+- All individual channels (R/G/B/A/Y/RY/BY and custom names such as V) use the same
+  Colormap, Range, and Auto controls, defaulting to grayscale over 0 to 1. The range
+  uses the source channel value directly, without exposure or an sRGB transform.
+  Pixel readouts and active-layer EXR exports retain source channel names.
+- Combined RGB/RGBA/YA/YC/YCA layers retain the color preview modes. Changing the
+  color preview mode does not change individual-channel previews.
+- RGB false-color and scalar ranges accept scientific notation, including tiny
+  values and the full finite FLOAT range. Auto range is unavailable without finite
+  samples. A constant range maps finite values to the bottom of the color scale.
+- Each preview has a small, checkable locator button (**Mark NaN/Inf** on hover).
+  Isolated anomalies have 12-pixel screen circles; connected areas have outlines.
+  Overlapping markers merge when zoomed out. The legend is NaN magenta, +Inf cyan,
+  and -Inf yellow, in that priority order. Outlines can enclose normal pixels;
+  use the pixel readout for exact values.
+- Markers have opaque strokes, independent of exposure, tone mapping, and alpha.
+  The button supports keyboard focus and Space; its selected state survives
+  refresh and minimal view, and right-click reset preserves it.
+- Preview copies and preview exports draw enabled markers after resizing so they
+  remain visible. Raw exports do not include markers. Source statistics count
+  channel samples, excluding synthesized components.
+  See the [Unusual Pixel Images manual checklist](docs/unusual-pixel-images.md)
+  for per-image checks and verification limits.
 
 Disclaimer
 ==========

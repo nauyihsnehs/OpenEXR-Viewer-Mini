@@ -35,12 +35,12 @@
 #include <algorithm>
 #include <cmath>
 
-float ColorTransform::to_sRGB(float rgb_color)
+double ColorTransform::to_sRGB(double rgb_color)
 {
-    const float a = 0.055f;
-    if (rgb_color < 0.0031308f) return 12.92f * rgb_color;
+    const double a = 0.055;
+    if (rgb_color < 0.0031308) return 12.92 * rgb_color;
 
-    return (1.f + a) * std::pow(rgb_color, 1.f / 2.4f) - a;
+    return (1. + a) * std::pow(rgb_color, 1. / 2.4) - a;
 }
 
 unsigned char ColorTransform::to_sRGB_255(float rgb_color)
