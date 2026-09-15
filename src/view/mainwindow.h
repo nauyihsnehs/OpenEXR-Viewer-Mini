@@ -119,16 +119,8 @@ class MainWindow: public QMainWindow
 
     void on_action_About_triggered();
 
-    void on_action_Tabbed_triggered();
-
-    void on_action_Cascade_triggered();
-
-    void on_action_Tiled_triggered();
-
     void on_action_Refresh_triggered();
 
-    void on_action_ShowDataWindow_toggled(bool checked);
-    void on_action_ShowDisplayWindow_toggled(bool checked);
     void on_action_ShowAttributes_toggled(bool checked);
     void on_action_ShowLayers_toggled(bool checked);
     void on_action_ModeExposure_triggered();

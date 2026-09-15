@@ -687,25 +687,11 @@ void MainWindow::updateShowActions()
     ImageFileWidget*        widget = currentFileWidget();
     const FramebufferModel* model
       = widget ? widget->activeFramebufferModel() : nullptr;
-    const bool enabled     = widget && widget->hasActiveFramebuffer();
     const bool copyEnabled = model && model->isPreviewReady();
 
-    ui->action_ShowDataWindow->blockSignals(true);
-    ui->action_ShowDisplayWindow->blockSignals(true);
-
-    ui->action_ShowDataWindow->setEnabled(enabled);
-    ui->action_ShowDisplayWindow->setEnabled(enabled);
     ui->action_Save->setEnabled(model && model->isImageLoaded());
     ui->action_CopyImage->setEnabled(copyEnabled);
     ui->action_CopyImageFullResolution->setEnabled(copyEnabled);
-
-    ui->action_ShowDataWindow->setChecked(
-      enabled && widget->isDataWindowVisible());
-    ui->action_ShowDisplayWindow->setChecked(
-      enabled && widget->isDisplayWindowVisible());
-
-    ui->action_ShowDataWindow->blockSignals(false);
-    ui->action_ShowDisplayWindow->blockSignals(false);
 }
 
 
@@ -1475,59 +1461,6 @@ void MainWindow::onTabCloseRequested(int idx)
     m_openFileTabs->removeTab(idx);
     delete widget;
     updateFileTabPresentation();
-    updateShowActions();
-}
-
-
-void MainWindow::on_action_Tabbed_triggered()
-{
-    leaveMinimalView();
-    ImageFileWidget* widget = (ImageFileWidget*)m_openFileTabs->currentWidget();
-
-    if (widget) {
-        widget->setTabbed();
-    }
-}
-
-
-void MainWindow::on_action_Cascade_triggered()
-{
-    leaveMinimalView();
-    ImageFileWidget* widget = (ImageFileWidget*)m_openFileTabs->currentWidget();
-
-    if (widget) {
-        widget->setCascade();
-    }
-}
-
-
-void MainWindow::on_action_Tiled_triggered()
-{
-    leaveMinimalView();
-    ImageFileWidget* widget = (ImageFileWidget*)m_openFileTabs->currentWidget();
-
-    if (widget) {
-        widget->setTiled();
-    }
-}
-
-
-void MainWindow::on_action_ShowDataWindow_toggled(bool checked)
-{
-    ImageFileWidget* widget = currentFileWidget();
-
-    if (widget) widget->setDataWindowVisible(checked);
-
-    updateShowActions();
-}
-
-
-void MainWindow::on_action_ShowDisplayWindow_toggled(bool checked)
-{
-    ImageFileWidget* widget = currentFileWidget();
-
-    if (widget) widget->setDisplayWindowVisible(checked);
-
     updateShowActions();
 }
 

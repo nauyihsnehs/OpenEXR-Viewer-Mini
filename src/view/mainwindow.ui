@@ -49,21 +49,10 @@
      <addaction name="action_ModeToneMapping"/>
      <addaction name="action_ModeFalseColor"/>
     </widget>
-    <widget class="QMenu" name="menu_LayerView">
-     <property name="title">
-      <string>Layer view</string>
-     </property>
-     <addaction name="action_Tabbed"/>
-     <addaction name="action_Cascade"/>
-     <addaction name="action_Tiled"/>
-    </widget>
     <widget class="QMenu" name="menu_Show">
      <property name="title">
       <string>&amp;Show</string>
      </property>
-     <addaction name="action_ShowDataWindow"/>
-     <addaction name="action_ShowDisplayWindow"/>
-     <addaction name="separator"/>
      <addaction name="action_ShowAttributes"/>
      <addaction name="action_ShowLayers"/>
     </widget>
@@ -75,7 +64,6 @@
      <addaction name="action_ThemeDark"/>
     </widget>
     <addaction name="menu_Mode"/>
-    <addaction name="menu_LayerView"/>
     <addaction name="menu_Show"/>
     <addaction name="menu_Theme"/>
    </widget>
@@ -158,30 +146,6 @@
     <string>False color</string>
    </property>
   </action>
-  <action name="action_Tabbed">
-   <property name="text">
-    <string>&amp;Tabbed</string>
-   </property>
-   <property name="shortcut">
-    <string>Ctrl+T</string>
-   </property>
-  </action>
-  <action name="action_Cascade">
-   <property name="text">
-    <string>&amp;Cascaded</string>
-   </property>
-   <property name="shortcut">
-    <string>Ctrl+Y</string>
-   </property>
-  </action>
-  <action name="action_Tiled">
-   <property name="text">
-    <string>T&amp;iled</string>
-   </property>
-   <property name="shortcut">
-    <string>Ctrl+U</string>
-   </property>
-  </action>
   <action name="action_Refresh">
    <property name="enabled">
     <bool>false</bool>
@@ -207,34 +171,6 @@
    </property>
    <property name="shortcut">
     <string>Ctrl+W</string>
-   </property>
-  </action>
-  <action name="action_ShowDataWindow">
-   <property name="enabled">
-    <bool>false</bool>
-   </property>
-   <property name="checkable">
-    <bool>true</bool>
-   </property>
-   <property name="checked">
-    <bool>true</bool>
-   </property>
-   <property name="text">
-    <string>Data Window</string>
-   </property>
-  </action>
-  <action name="action_ShowDisplayWindow">
-   <property name="enabled">
-    <bool>false</bool>
-   </property>
-   <property name="checkable">
-    <bool>true</bool>
-   </property>
-   <property name="checked">
-    <bool>true</bool>
-   </property>
-   <property name="text">
-    <string>Display Window</string>
    </property>
   </action>
   <action name="action_ShowAttributes">

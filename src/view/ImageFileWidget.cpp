@@ -229,13 +229,11 @@ struct ImageFileWidget::SavedPreview {
     QString                 key;
     PreviewState            preview;
     GraphicsView::ViewState view;
-    QByteArray              geometry;
 };
 
 struct ImageFileWidget::SavedDocument {
     std::vector<SavedPreview> previews;
     QString                   activeKey;
-    bool                      previewTabbed = true;
 };
 
 struct ImageFileWidget::RefreshTransaction {
@@ -294,7 +292,6 @@ ImageFileWidget::ImageFileWidget(const QString& filename, QWidget* parent)
   , m_img(nullptr)
   , m_openedFolder(QDir::homePath())
   , m_rgbPreviewMode(RGBFramebufferModel::Preview_Exposure)
-  , m_previewTabbed(true)
   , m_isStream(false)
 {
     setupLayout();
@@ -317,7 +314,6 @@ ImageFileWidget::ImageFileWidget(std::istream& stream, QWidget* parent)
   , m_img(nullptr)
   , m_openedFolder(QDir::homePath())
   , m_rgbPreviewMode(RGBFramebufferModel::Preview_Exposure)
-  , m_previewTabbed(true)
   , m_isStream(true)
 {
     setupLayout();
@@ -401,7 +397,6 @@ QString ImageFileWidget::layerKey(const LayerItem* item)
 ImageFileWidget::SavedDocument ImageFileWidget::captureDocumentState() const
 {
     SavedDocument state;
-    state.previewTabbed = m_previewTabbed;
     const QMdiSubWindow* active = m_mdiArea->activeSubWindow();
     state.activeKey
       = active ? active->property("layerKey").toString() : QString();
@@ -424,7 +419,6 @@ ImageFileWidget::SavedDocument ImageFileWidget::captureDocumentState() const
             preview.preview = scalar->previewState();
         if (auto* view = window->findChild<GraphicsView*>())
             preview.view = view->viewState();
-        preview.geometry = window->saveGeometry();
         state.previews.push_back(preview);
     }
     return state;
@@ -535,7 +529,6 @@ void ImageFileWidget::commitRefresh()
     clearImage();
     m_img = transaction->image.release();
     m_img->setParent(this);
-    m_previewTabbed = transaction->saved.previewTabbed;
     afterOpen(false);
 
     QPointer<QMdiSubWindow> restoredActive;
@@ -582,7 +575,6 @@ void ImageFileWidget::commitRefresh()
             }
         }
         if (!window) continue;
-        if (!m_previewTabbed) window->restoreGeometry(state.geometry);
         if (state.key == transaction->saved.activeKey)
             restoredActive = window;
     }
@@ -604,37 +596,6 @@ void ImageFileWidget::abortRefresh(const QString& message)
     m_refresh.reset();
     emit refreshInProgressChanged(false);
     showLoadError(message);
-}
-
-
-void ImageFileWidget::setTabbed()
-{
-    m_previewTabbed = true;
-    syncTabbedPreviewPresentation();
-}
-
-
-void ImageFileWidget::setCascade()
-{
-    m_previewTabbed = false;
-    m_mdiArea->setViewMode(QMdiArea::SubWindowView);
-    for (QMdiSubWindow* subWindow : m_mdiArea->subWindowList()) {
-        setSubWindowFrameVisible(subWindow, true);
-        subWindow->show();
-    }
-    m_mdiArea->cascadeSubWindows();
-}
-
-
-void ImageFileWidget::setTiled()
-{
-    m_previewTabbed = false;
-    m_mdiArea->setViewMode(QMdiArea::SubWindowView);
-    for (QMdiSubWindow* subWindow : m_mdiArea->subWindowList()) {
-        setSubWindowFrameVisible(subWindow, true);
-        subWindow->show();
-    }
-    m_mdiArea->tileSubWindows();
 }
 
 
@@ -767,8 +728,6 @@ void ImageFileWidget::configurePreviewTabBar()
 
 void ImageFileWidget::syncTabbedPreviewPresentation()
 {
-    if (!m_previewTabbed) return;
-
     QPointer<QMdiSubWindow> active     = m_mdiArea->activeSubWindow();
     QList<QMdiSubWindow*>   subWindows = m_mdiArea->subWindowList();
 
@@ -992,13 +951,7 @@ QMdiSubWindow* ImageFileWidget::installPreview(PreparedPreview& preview)
         m_previewOrder.removeAll(key);
         onSubWindowDestroyed();
     });
-    if (m_previewTabbed) {
-        subWindow->showMaximized();
-    } else {
-        setSubWindowFrameVisible(subWindow, true);
-        subWindow->resize(800, 600);
-        subWindow->show();
-    }
+    subWindow->showMaximized();
     m_mdiArea->setActiveSubWindow(subWindow);
     syncTabbedPreviewPresentation();
     syncActiveLayerSelection();
@@ -1076,12 +1029,6 @@ ImageFileWidget::framebufferModel(QMdiSubWindow* subWindow) const
 const FramebufferModel* ImageFileWidget::activeFramebufferModel() const
 {
     return framebufferModel(m_mdiArea->activeSubWindow());
-}
-
-
-bool ImageFileWidget::hasActiveFramebuffer() const
-{
-    return activeGraphicsView() != nullptr;
 }
 
 
@@ -1187,38 +1134,6 @@ QString ImageFileWidget::activeLayerTitleText() const
     if (title == "RGB") return QString();
 
     return title;
-}
-
-
-void ImageFileWidget::setDataWindowVisible(bool visible)
-{
-    GraphicsView* view = activeGraphicsView();
-
-    if (view) view->showDataWindow(visible);
-}
-
-
-void ImageFileWidget::setDisplayWindowVisible(bool visible)
-{
-    GraphicsView* view = activeGraphicsView();
-
-    if (view) view->showDisplayWindow(visible);
-}
-
-
-bool ImageFileWidget::isDataWindowVisible() const
-{
-    GraphicsView* view = activeGraphicsView();
-
-    return view && view->isDataWindowVisible();
-}
-
-
-bool ImageFileWidget::isDisplayWindowVisible() const
-{
-    GraphicsView* view = activeGraphicsView();
-
-    return view && view->isDisplayWindowVisible();
 }
 
 

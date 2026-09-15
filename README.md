@@ -13,6 +13,10 @@ Luminance-Chroma and Y layers.
 Viewing controls
 ================
 
+- Layer previews use tabs, with the tab bar hidden when only one preview is open.
+- View > Show toggles the Attributes and Layers panels. Data and display window
+  coordinates remain available in Attributes; previews have no window outlines
+  or outside-frame dimming.
 - Double-click an image to switch between the full workspace and a minimal
   image window. Double-click again to restore the workspace and its view position.
 - In the minimal view, drag the image to move the window. The wheel scales the

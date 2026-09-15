@@ -586,7 +586,6 @@ class ViewerTests: public QObject
         rgb->restorePreviewState(state);
         auto* view = rgb->findChild<GraphicsView*>();
         view->setZoomLevel(2.);
-        view->showDataWindow(false);
         QPointer<RGBFramebufferWidget> old = rgb;
         widget.refresh();
         QVERIFY(widget.isRefreshInProgress());
@@ -601,7 +600,6 @@ class ViewerTests: public QObject
         QCOMPARE(rgb->previewState().toneParameters[0], 10.);
         QCOMPARE(rgb->previewState().toneParameters[1], 20.);
         QCOMPARE(rgb->findChild<GraphicsView*>()->viewState().zoom, 2.);
-        QVERIFY(!rgb->findChild<GraphicsView*>()->isDataWindowVisible());
         const OpenEXRImage* previous = widget.sourceImage();
         QVERIFY(QFile::rename(path, path + ".old"));
         dismissNextError();
@@ -633,7 +631,9 @@ class ViewerTests: public QObject
         auto* scalar = widget.findChild<YFramebufferWidget*>();
         QVERIFY(scalar);
         QTRY_VERIFY(scalar->framebufferModel()->isPreviewReady());
-        widget.setTiled();
+        QCOMPARE(
+          widget.findChild<QMdiArea*>()->viewMode(),
+          QMdiArea::TabbedView);
         QPointer<YFramebufferWidget> previous = scalar;
         QVERIFY(QFile::rename(path, path + ".old"));
         writeFixture(path, 2, 2, {{"Y", {10.f, 11.f, 12.f, 13.f}}});
@@ -648,6 +648,7 @@ class ViewerTests: public QObject
         QVERIFY(rgb->previewState().automatic);
         QVERIFY(std::abs(rgb->previewState().minimum - 10.) < 0.001);
         QVERIFY(std::abs(rgb->previewState().maximum - 13.) < 0.001);
+        // A single remaining preview fills the workspace without a tab bar.
         QCOMPARE(
           widget.findChild<QMdiArea*>()->viewMode(),
           QMdiArea::SubWindowView);

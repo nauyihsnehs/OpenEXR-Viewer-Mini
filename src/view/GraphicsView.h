@@ -43,12 +43,8 @@ class GraphicsView: public QGraphicsView
         double  zoom = 1.;
         bool    fit  = true;
         QPointF center;
-        bool    dataWindow    = true;
-        bool    displayWindow = true;
     };
     explicit GraphicsView(QWidget* parent = nullptr);
-    bool      isDisplayWindowVisible() const { return _showDisplayWindow; }
-    bool      isDataWindowVisible() const { return _showDataWindow; }
     ViewState viewState() const;
     void      restoreViewState(const ViewState& state);
     void setImageWindowMode();
@@ -62,8 +58,6 @@ class GraphicsView: public QGraphicsView
     void zoomIn();
     void zoomOut();
     void autoscale();
-    void showDisplayWindow(bool show);
-    void showDataWindow(bool show);
     void refreshPixelInfo();
 
   signals:
@@ -91,7 +85,6 @@ class GraphicsView: public QGraphicsView
     void dragEnterEvent(QDragEnterEvent* event) override;
     void dragMoveEvent(QDragMoveEvent* event) override;
     void drawBackground(QPainter* painter, const QRectF& rect) override;
-    void drawForeground(QPainter* painter, const QRectF& rect) override;
     void scrollContentsBy(int dx, int dy) override;
 
   private:
@@ -110,8 +103,6 @@ class GraphicsView: public QGraphicsView
     bool                             _autoscale = true;
     QRectF                           _dataWindow;
     QRectF                           _displayWindow;
-    bool                             _showDataWindow    = true;
-    bool                             _showDisplayWindow = true;
     bool                             _restorePending    = false;
     ViewState                        _pendingState;
     QPixmap                          _checkerboard;

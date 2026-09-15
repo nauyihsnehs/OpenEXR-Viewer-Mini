@@ -175,7 +175,6 @@ void GraphicsView::setImageWindowMode()
 {
     _imageWindow = true;
     _autoscale = false;
-    _showDataWindow = _showDisplayWindow = false;
     setFrameShape(QFrame::NoFrame);
     setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
@@ -197,11 +196,9 @@ void GraphicsView::applyImageWindowZoom(double zoom)
 GraphicsView::ViewState GraphicsView::viewState() const
 {
     ViewState state;
-    state.zoom          = _zoomLevel;
-    state.fit           = _autoscale;
-    state.center        = mapToScene(viewport()->rect().center());
-    state.dataWindow    = _showDataWindow;
-    state.displayWindow = _showDisplayWindow;
+    state.zoom   = _zoomLevel;
+    state.fit    = _autoscale;
+    state.center = mapToScene(viewport()->rect().center());
     return state;
 }
 void GraphicsView::restoreViewState(const ViewState& state)
@@ -211,24 +208,12 @@ void GraphicsView::restoreViewState(const ViewState& state)
         _restorePending = true;
         return;
     }
-    showDataWindow(state.dataWindow);
-    showDisplayWindow(state.displayWindow);
     if (state.fit)
         autoscale();
     else {
         setZoomLevel(state.zoom);
         centerOn(state.center);
     }
-}
-void GraphicsView::showDisplayWindow(bool show)
-{
-    _showDisplayWindow = show;
-    viewport()->update();
-}
-void GraphicsView::showDataWindow(bool show)
-{
-    _showDataWindow = show;
-    viewport()->update();
 }
 
 void GraphicsView::wheelEvent(QWheelEvent* event)
@@ -448,31 +433,6 @@ void GraphicsView::drawBackground(QPainter* painter, const QRectF&)
     painter->save();
     painter->resetTransform();
     painter->drawTiledPixmap(viewport()->rect(), _checkerboard);
-    painter->restore();
-}
-void GraphicsView::drawForeground(QPainter* painter, const QRectF& rect)
-{
-    if (!_model || !_model->isImageLoaded()) return;
-    painter->save();
-    if (_showDisplayWindow) {
-        QPainterPath outside, inside;
-        outside.addRect(rect);
-        inside.addRect(_displayWindow);
-        painter->fillPath(outside.subtracted(inside), QColor(0, 0, 0, 150));
-    }
-    QPen pen;
-    pen.setCosmetic(true);
-    painter->setBrush(Qt::NoBrush);
-    if (_showDataWindow) {
-        pen.setColor(Qt::red);
-        painter->setPen(pen);
-        painter->drawRect(_dataWindow);
-    }
-    if (_showDisplayWindow) {
-        pen.setColor(Qt::black);
-        painter->setPen(pen);
-        painter->drawRect(_displayWindow);
-    }
     painter->restore();
 }
 void GraphicsView::scrollContentsBy(int dx, int dy)

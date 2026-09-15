@@ -81,9 +81,6 @@ class ImageFileWidget: public QWidget
 
     bool isStream() const { return m_isStream; }
 
-    bool                    hasActiveFramebuffer() const;
-    bool                    isDataWindowVisible() const;
-    bool                    isDisplayWindowVisible() const;
     const FramebufferModel* activeFramebufferModel() const;
     GraphicsView* activeGraphicsView() const;
     QWidget* activePreviewWidget() const;
@@ -108,12 +105,6 @@ class ImageFileWidget: public QWidget
   public slots:
     void refresh();
 
-    void setTabbed();
-    void setCascade();
-    void setTiled();
-
-    void setDataWindowVisible(bool visible);
-    void setDisplayWindowVisible(bool visible);
     void setAttributesVisible(bool visible);
     void setLayersVisible(bool visible);
 
@@ -200,7 +191,6 @@ class ImageFileWidget: public QWidget
     QString       m_openedFilename;
 
     RGBFramebufferModel::PreviewMode m_rgbPreviewMode;
-    bool                             m_previewTabbed;
     bool                             m_isStream;
     QStringList                      m_previewOrder;
     DocumentState                    m_documentState = DocumentPending;

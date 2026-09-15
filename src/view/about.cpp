@@ -14,8 +14,8 @@ About::About(QWidget* parent): QDialog(parent), ui(new Ui::About)
         "<li>Open .exr files from the menu, command line, or drag and drop.</li>"
         "<li>Browse OpenEXR headers, attributes, parts, and layer groups.</li>"
         "<li>View RGB, RGBA, Y, YA, YC, YCA, alpha, and generic channels.</li>"
-        "<li>Use tabbed, cascaded, or tiled layer previews.</li>"
-        "<li>Inspect pixel values, data/display windows, compression, size, "
+        "<li>Switch between layer previews using tabs.</li>"
+        "<li>Inspect pixel values, compression, size, "
         "pixel type, and dataset min/max information.</li>"
         "<li>Switch light/dark themes and copy the active image to the "
         "clipboard.</li>"
@@ -26,7 +26,8 @@ About::About(QWidget* parent): QDialog(parent), ui(new Ui::About)
         "<ol>"
         "<li>Choose File &gt; Open or drop an .exr file into the viewer.</li>"
         "<li>Double-click a layer or displayable attribute to open it.</li>"
-        "<li>Use the View menu to show panels, overlays, layout, and theme.</li>"
+        "<li>Use the View menu to choose the preview mode, show Attributes "
+        "and Layers panels, and change the theme.</li>"
         "<li>Use the info button on a preview to show file and framebuffer "
         "details.</li>"
         "</ol>"
@@ -43,7 +44,6 @@ About::About(QWidget* parent): QDialog(parent), ui(new Ui::About)
         "<ul>"
         "<li>Ctrl+O open, Ctrl+S save, Ctrl+W close, F5 refresh, Esc quit.</li>"
         "<li>Ctrl+C copy scaled image, Ctrl+Shift+C copy full resolution.</li>"
-        "<li>Ctrl+T tabbed, Ctrl+Y cascaded, Ctrl+U tiled.</li>"
         "</ul>"));
 }
 
