@@ -42,8 +42,12 @@ Viewing controls
 - Nonstandard RGB chromaticities are converted to linear Rec.709 for display using
   the existing matrix transform, without white-point adaptation or a full ACES/OCIO
   display pipeline. Raw readouts and EXR exports retain source values; Basic metadata
-  preserves their chromaticities, while None removes it. Existing YC/YCA active-layer
-  exports remain converted RGB. HDR and exposure-bracket exports use display-linear
+  preserves their chromaticities, while None removes it. YC/YCA readouts and raw EXR
+  exports retain Y/RY/BY and any source alpha, including channel prefixes and sampling
+  rates. Subsampled readouts include the source sample's file coordinates. Standard
+  2x2 chroma uses OpenEXR's reconstruction filters; 1x1 chroma converts directly.
+  Other YC sampling combinations remain available as individual channels, but their
+  combined preview is unsupported. HDR and exposure-bracket exports use display-linear
   colors. See the [ScanLines manual checklist](docs/scanline-images.md) for checks
   still requiring a running viewer.
 - Single-level tiled images use the same color and individual-channel previews as
@@ -51,6 +55,9 @@ Viewing controls
   Mipmap, Ripmap, and Deep images are not supported. Raw EXR exports use scanline
   storage and retain the existing channel, window, and metadata options; they do
   not preserve the source tile layout. See the [Tiles manual checklist](docs/tiled-images.md).
+- The export option **Color channels (RGB/YC)** includes both RGB and luminance/chroma
+  channels. See the [Chromaticities checklist](docs/chromaticities-images.md) and
+  [Luminance/Chroma checklist](docs/luminance-chroma-images.md) for pending visual checks.
 - RGB false-color and scalar ranges accept scientific notation, including tiny
   values and the full finite FLOAT range. Auto range is unavailable without finite
   samples. A constant range maps finite values to the bottom of the color scale.

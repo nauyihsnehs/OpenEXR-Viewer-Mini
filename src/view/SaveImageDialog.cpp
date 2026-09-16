@@ -188,7 +188,7 @@ void SaveImageDialog::setupOptions()
     ui->pixelTypeCombo->addItem(tr("Half"), ImageSave::PixelHalf);
 
     ui->channelScopeCombo->addItem(tr("All channels"), ImageSave::ChannelsAll);
-    ui->channelScopeCombo->addItem(tr("RGB(A) channels"), ImageSave::ChannelsRgb);
+    ui->channelScopeCombo->addItem(tr("Color channels (RGB/YC)"), ImageSave::ChannelsRgb);
 
     ui->metadataCombo->addItem(tr("Basic source-safe"), ImageSave::MetadataBasic);
     ui->metadataCombo->addItem(tr("None"), ImageSave::MetadataNone);

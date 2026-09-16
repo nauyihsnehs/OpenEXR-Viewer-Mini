@@ -37,6 +37,47 @@
 #include <QtConcurrent/QtConcurrentRun>
 #include <exception>
 #include <algorithm>
+#include <sstream>
+
+std::vector<QPoint> FramebufferModel::rawChannelSampling() const
+{
+    std::vector<QPoint> sampling;
+    for (int component : rawChannelComponents())
+        sampling.push_back(m_data->sourceSampling[component]);
+    return sampling;
+}
+
+std::string FramebufferModel::sampleLocationInfo(size_t channel, int x, int y) const
+{
+    const QPoint sampling = m_data->sourceSampling[rawChannelComponents()[channel]];
+    if (sampling == QPoint(1, 1)) return "";
+    const auto align = [](int64_t value, int minimum, int maximum, int step) {
+        const auto floorDivide = [](int64_t v, int s) {
+            return v / s - (v % s < 0 ? 1 : 0);
+        };
+        const int64_t first = -floorDivide(-int64_t(minimum), step);
+        const int64_t last = floorDivide(maximum, step);
+        return std::max(first, std::min(last, floorDivide(value, step))) * step;
+    };
+    const QRect window = getDataWindow();
+    std::stringstream text;
+    text << " @ (" << align(int64_t(window.x()) + x, window.left(), window.right(), sampling.x())
+         << ", " << align(int64_t(window.y()) + y, window.top(), window.bottom(), sampling.y()) << ")";
+    return text.str();
+}
+
+std::array<int, 3> FramebufferModel::displayRgbComponents() const
+{
+    const auto names = rawChannelNames();
+    if (names.size() == 1) {
+        const auto dot = names[0].find_last_of('.');
+        const auto leaf = names[0].substr(dot == std::string::npos ? 0 : dot + 1);
+        if (leaf == "R") return {{0, -1, -1}};
+        if (leaf == "G") return {{-1, 0, -1}};
+        if (leaf == "B") return {{-1, -1, 0}};
+    }
+    return {{0, 0, 0}};
+}
 
 namespace
 {

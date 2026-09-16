@@ -47,6 +47,7 @@
 #include <OpenEXR/ImfDeepScanLineOutputFile.h>
 #include <OpenEXR/ImfDeepTiledOutputFile.h>
 #include <OpenEXR/ImfPartType.h>
+#include <OpenEXR/ImfRgbaFile.h>
 #include <cmath>
 #include <limits>
 #include <map>
@@ -74,9 +75,12 @@ namespace
         header.compression() = Imf::ZIP_COMPRESSION;
         Imf::FrameBuffer framebuffer;
         for (const auto& channel : channels) {
+            const auto* metadata = header.channels().findChannel(channel.first);
+            const int xs = metadata ? metadata->xSampling : sampling;
+            const int ys = metadata ? metadata->ySampling : sampling;
             header.channels().insert(
               channel.first,
-              Imf::Channel(Imf::FLOAT, sampling, sampling));
+              Imf::Channel(Imf::FLOAT, xs, ys));
             framebuffer.insert(
               channel.first,
               Imf::Slice::Make(
@@ -84,9 +88,9 @@ namespace
                 channel.second.data(),
                 window,
                 sizeof(float),
-                size_t(width / sampling) * sizeof(float),
-                sampling,
-                sampling));
+                size_t(width / xs) * sizeof(float),
+                xs,
+                ys));
         }
         if (header.hasTileDescription()) {
             Imf::TiledOutputFile file(path.toLocal8Bit().constData(), header);
@@ -456,6 +460,211 @@ class ViewerTests: public QObject
         QCOMPARE(rgb.getLoadedImage().pixelColor(0, 0).alpha(), 255);
         QCOMPARE(alpha.getRawPixels()[1], 0.75f);
         QCOMPARE(luminance.getRawPixels()[1], 0.5f);
+        QVERIFY(rgb.rawChannelNames() == std::vector<std::string>({"light.Y", "light.RY", "light.BY", "light.A"}));
+        QCOMPARE(rgb.getRawPixels()[1], 0.f); // RY, not reconstructed green.
+        QCOMPARE(rgb.getRawPixels()[2], 0.f);
+    }
+
+    void ycReconstructionMatchesOfficialReader()
+    {
+        for (int size : {2, 8, 32}) {
+            const int origin = -2;
+            const int offset = -origin * (size + 1);
+            std::vector<Imf::Rgba> pixels(size * size + offset);
+            for (int y = 0; y < size; ++y)
+                for (int x = 0; x < size; ++x) {
+                    auto& p = pixels[y * size + x];
+                    p.r = x < size / 2 ? 0.8f : 0.1f;
+                    p.g = y < size / 2 ? 0.2f : 0.7f;
+                    p.b = (x + y) % 3 ? 0.05f : 0.6f;
+                    p.a = 0.5f;
+                }
+            const QString path = fixture(QString("official-yca-%1").arg(size));
+            const Imath::Box2i window(Imath::V2i(origin), Imath::V2i(origin + size - 1));
+            {
+                Imf::Header header(window, window);
+                Imf::RgbaOutputFile file(path.toLocal8Bit().constData(), header, Imf::WRITE_YCA);
+                file.setFrameBuffer(pixels.data() + offset, 1, size);
+                file.writePixels(size);
+            }
+            std::vector<Imf::Rgba> reference(size * size + offset);
+            {
+                Imf::RgbaInputFile file(path.toLocal8Bit().constData());
+                file.setFrameBuffer(reference.data() + offset, 1, size);
+                file.readPixels(origin, origin + size - 1);
+            }
+            OpenEXRImage source(path, nullptr);
+            RGBFramebufferModel model("", RGBFramebufferModel::Layer_YC);
+            model.load(source.sharedEXR(), 0, {{"Y", "RY", "BY", "A"}});
+            QTRY_VERIFY(model.isPreviewReady());
+            for (int i = 0; i < size * size; ++i) {
+                const auto& display = model.getDisplayPixels();
+                QVERIFY(std::abs(display[4 * i] - float(reference[i].r)) < 0.002f);
+                QVERIFY(std::abs(display[4 * i + 1] - float(reference[i].g)) < 0.002f);
+                QVERIFY(std::abs(display[4 * i + 2] - float(reference[i].b)) < 0.002f);
+                QCOMPARE(model.getRawPixels()[4 * i + 3], 0.5f);
+            }
+        }
+    }
+
+    void ycSourceSamplingReadoutsAndExports()
+    {
+        Imf::Header header(4, 4);
+        header.channels().insert("beauty.RY", Imf::Channel(Imf::FLOAT, 2, 2));
+        header.channels().insert("beauty.BY", Imf::Channel(Imf::FLOAT, 2, 2));
+        const Imf::Chromaticities xyz(Imath::V2f(1, 0), Imath::V2f(0, 1),
+                                      Imath::V2f(0, 0), Imath::V2f(1.f / 3.f));
+        header.insert("chromaticities", Imf::ChromaticitiesAttribute(xyz));
+        const QString path = fixture("yc-source");
+        writeFixture(path, 4, 4,
+          {{"beauty.Y", std::vector<float>(16, 0.5f)},
+           {"beauty.RY", {0.125f, -0.25f, 0.5f, 1.f}},
+           {"beauty.BY", {-0.5f, 0.f, 0.25f, 0.5f}},
+           {"beauty.A", std::vector<float>(16, 0.f)}}, -2, -2, 1.f, 1, &header);
+        OpenEXRImage source(path, nullptr);
+        RGBFramebufferModel model("beauty.", RGBFramebufferModel::Layer_YC);
+        YFramebufferModel ry("beauty.RY");
+        model.load(source.sharedEXR(), 0, {{"beauty.Y", "beauty.RY", "beauty.BY", "beauty.A"}});
+        ry.load(source.sharedEXR(), 0);
+        QTRY_VERIFY(model.isPreviewReady() && ry.isPreviewReady());
+        QCOMPARE(model.rawChannelSampling()[1], QPoint(2, 2));
+        for (int i = 0; i < 16; ++i)
+            QCOMPARE(model.getRawPixels()[4 * i + 1], ry.getRawPixels()[i]);
+        QVERIFY(model.getColorInfo(1, 1).find("beauty.RY: 0.125 @ (-2, -2)") != std::string::npos);
+        QVERIFY(ry.getColorInfo(1, 1).find("beauty.RY: 0.125 @ (-2, -2)") != std::string::npos);
+        QVERIFY(model.rawChromaticities() && *model.rawChromaticities() == xyz);
+        for (int kind = 0; kind < 3; ++kind) {
+            ImageSave::Source input;
+            input.activeModel = kind == 1 ? static_cast<FramebufferModel*>(&ry) : &model;
+            input.sourceImage = &source;
+            ImageSave::Options options;
+            options.target = kind == 2 ? ImageSave::TargetLayeredOriginal : ImageSave::TargetActiveOriginal;
+            options.format = ImageSave::FormatExr;
+            options.pixelType = ImageSave::PixelFloat;
+            options.channelScope = ImageSave::ChannelsRgb;
+            options.path = fixture(QString("yc-roundtrip-%1").arg(kind));
+            QCOMPARE(ImageSave::save(input, options).status, ImageSave::StatusSaved);
+            OpenEXRImage exported(options.path, nullptr);
+            const auto& h = exported.getEXR().header(0);
+            const auto* channel = h.channels().findChannel("beauty.RY");
+            QVERIFY(channel);
+            QCOMPARE(channel->xSampling, 2);
+            QCOMPARE(channel->ySampling, 2);
+            QVERIFY(!h.channels().findChannel("R"));
+            if (kind != 1) QVERIFY(h.channels().findChannel("beauty.Y"));
+            const auto* chroma = h.findTypedAttribute<Imf::ChromaticitiesAttribute>("chromaticities");
+            QVERIFY(chroma && chroma->value() == xyz);
+            YFramebufferModel result("beauty.RY");
+            result.load(exported.sharedEXR(), 0);
+            QTRY_VERIFY(result.isPreviewReady());
+            QVERIFY(result.getRawPixels() == ry.getRawPixels());
+            if (kind != 1) {
+                RGBFramebufferModel colors("beauty.", RGBFramebufferModel::Layer_YC);
+                colors.load(exported.sharedEXR(), 0, {{"beauty.Y", "beauty.RY", "beauty.BY", "beauty.A"}});
+                QTRY_VERIFY(colors.isPreviewReady());
+                QVERIFY(colors.getRawPixels() == model.getRawPixels());
+            }
+        }
+    }
+
+    void ycDiagnosticsCountStoredSamples()
+    {
+        Imf::Header header(4, 4);
+        header.channels().insert("RY", Imf::Channel(Imf::FLOAT, 2, 2));
+        header.channels().insert("BY", Imf::Channel(Imf::FLOAT, 2, 2));
+        const QString path = fixture("yc-source-anomalies");
+        writeFixture(path, 4, 4, {{"Y", std::vector<float>(16, 0.5f)},
+          {"RY", {std::numeric_limits<float>::infinity(), 0.f, 0.f, 0.f}},
+          {"BY", {0.f, 0.f, 0.f, std::numeric_limits<float>::quiet_NaN()}}},
+          0, 0, 1.f, 1, &header);
+        OpenEXRImage source(path, nullptr);
+        RGBFramebufferModel model("", RGBFramebufferModel::Layer_YC);
+        model.load(source.sharedEXR(), 0, {{"Y", "RY", "BY", ""}});
+        QTRY_VERIFY(model.isPreviewReady());
+        QCOMPARE(model.getDatasetNaNCount(), uint64_t(1));
+        QCOMPARE(model.getDatasetPositiveInfCount(), uint64_t(1));
+        QCOMPARE(model.getDatasetMax(), 0.5);
+        QCOMPARE(model.anomalyRegions().size(), size_t(1));
+        QCOMPARE(model.anomalyRegions()[0].pixelCount, uint64_t(8));
+        QVERIFY(std::isinf(model.getRawPixels()[1]));
+        QVERIFY(std::isnan(model.getRawPixels()[4 * 15 + 2]));
+    }
+
+    void xyzDisplayRetainsSourceEncoding()
+    {
+        const Imf::Chromaticities xyz(Imath::V2f(1, 0), Imath::V2f(0, 1),
+                                      Imath::V2f(0, 0), Imath::V2f(1.f / 3.f));
+        const Imath::V3f rgb(0.25f, 0.5f, 0.125f);
+        const Imath::V3f value = rgb * Imf::RGBtoXYZ(Imf::Chromaticities(), 1.f);
+        Imf::Header header(1, 1);
+        header.insert("chromaticities", Imf::ChromaticitiesAttribute(xyz));
+        const QString path = fixture("xyz-display");
+        writeFixture(path, 1, 1, {{"R", {value.x}}, {"G", {value.y}}, {"B", {value.z}}},
+                     0, 0, 1.f, 1, &header);
+        OpenEXRImage source(path, nullptr);
+        RGBFramebufferModel model("");
+        model.load(source.sharedEXR(), 0, {{"R", "G", "B", ""}});
+        QTRY_VERIFY(model.isPreviewReady());
+        QCOMPARE(model.getRedInfo(0, 0), value.x);
+        for (int c = 0; c < 3; ++c)
+            QVERIFY(std::abs(model.getDisplayPixels()[c] - rgb[c]) < 0.00001f);
+    }
+
+    void ycDisplayExportsAndUnsupportedSampling()
+    {
+        const QString path = fixture("yc-display-exports");
+        writeFixture(path, 1, 1, {{"Y", {0.25f}}, {"RY", {1.f}}, {"BY", {-0.5f}}});
+        OpenEXRImage source(path, nullptr);
+        RGBFramebufferModel model("", RGBFramebufferModel::Layer_YC);
+        model.load(source.sharedEXR(), 0, {{"Y", "RY", "BY", ""}});
+        QTRY_VERIFY(model.isPreviewReady());
+        QCOMPARE(model.rawChannelNames().size(), size_t(3));
+        QCOMPARE(model.getRedInfo(0, 0), 0.5f);
+        ImageSave::Source input;
+        input.activeModel = &model;
+        ImageSave::Options options;
+        options.target = ImageSave::TargetHdrBracketedImages;
+        options.path = m_directory.filePath("yc-bracket.png");
+        const auto bracket = ImageSave::save(input, options);
+        QCOMPARE(bracket.status, ImageSave::StatusSaved);
+        QCOMPARE(QImage(bracket.paths[1]).pixelColor(0, 0), model.getLoadedImage().pixelColor(0, 0));
+        options.target = ImageSave::TargetActiveOriginal;
+        options.format = ImageSave::FormatHdr;
+        options.path = m_directory.filePath("yc-display.hdr");
+        QCOMPARE(ImageSave::save(input, options).status, ImageSave::StatusSaved);
+        QFile hdr(options.path);
+        QVERIFY(hdr.open(QIODevice::ReadOnly));
+        const QByteArray encoded = hdr.readAll().right(4);
+        QCOMPARE(encoded.size(), 4);
+        const double scale = std::ldexp(1., int(static_cast<unsigned char>(encoded[3])) - 136);
+        for (int c = 0; c < 3; ++c)
+            QVERIFY(std::abs(static_cast<unsigned char>(encoded[c]) * scale - model.getDisplayPixels()[c]) <= scale);
+
+        Imf::Header header(4, 2);
+        header.channels().insert("RY", Imf::Channel(Imf::FLOAT, 2, 1));
+        header.channels().insert("BY", Imf::Channel(Imf::FLOAT, 2, 1));
+        const QString invalid = fixture("yc-unsupported-sampling");
+        writeFixture(invalid, 4, 2, {{"Y", std::vector<float>(8, 0.5f)},
+                     {"RY", std::vector<float>(4, 0.f)}, {"BY", std::vector<float>(4, 0.f)}},
+                     0, 0, 1.f, 1, &header);
+        OpenEXRImage unsupported(invalid, nullptr);
+        QCOMPARE(unsupported.getLayerModel()->defaultDisplayLayer()->getType(), LayerItem::Y);
+        FileWidget widget(invalid);
+        widget.show();
+        QTRY_VERIFY(widget.activeFramebufferModel() && widget.activeFramebufferModel()->isPreviewReady());
+        QCOMPARE(widget.activeFramebufferModel()->rawChannelNames().front(), std::string("Y"));
+        RGBFramebufferModel combined("", RGBFramebufferModel::Layer_YC);
+        YFramebufferModel scalar("RY");
+        QSignalSpy failed(&combined, &FramebufferModel::loadFailed);
+        combined.load(unsupported.sharedEXR(), 0, {{"Y", "RY", "BY", ""}});
+        scalar.load(unsupported.sharedEXR(), 0);
+        QTRY_COMPARE(failed.count(), 1);
+        QVERIFY(combined.errorString().contains("Unsupported YC sampling"));
+        QVERIFY(!combined.isImageLoaded());
+        QTRY_VERIFY(scalar.isPreviewReady());
+        const auto cancel = std::make_shared<std::atomic_bool>(true);
+        QVERIFY(!FramebufferLoader::decode(source.sharedEXR(), 0, FramebufferLoader::Chroma,
+                                          {{"Y", "RY", "BY", ""}}, cancel).data);
     }
 
     void premultipliedColorsUseOpaqueBlackPreview()

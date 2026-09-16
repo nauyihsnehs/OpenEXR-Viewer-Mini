@@ -85,6 +85,7 @@ class RGBFramebufferModel: public FramebufferModel
     virtual std::vector<std::string> rawChannelNames() const;
     std::vector<int> rawChannelComponents() const override;
     int rawPixelStride() const override { return 4; }
+    std::array<int, 3> displayRgbComponents() const override { return {{0, 1, 2}}; }
     double getLuminanceMin() const { return m_data->luminanceMin; }
     double getLuminanceMax() const { return m_data->luminanceMax; }
     bool   hasFiniteLuminanceSamples() const

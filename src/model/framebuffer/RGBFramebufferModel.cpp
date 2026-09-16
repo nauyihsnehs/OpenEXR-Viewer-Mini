@@ -85,7 +85,8 @@ std::string RGBFramebufferModel::getColorInfo(int x, int y) const
     const auto components = rawChannelComponents();
     for (size_t c = 0; c < names.size(); ++c)
         text << " " << names[c] << ": "
-             << PixelDiagnostics::sampleText(pixel[components[c]]);
+             << PixelDiagnostics::sampleText(pixel[components[c]])
+             << sampleLocationInfo(c, x, y);
     if (m_layerType == Layer_RGB || m_layerType == Layer_YC) {
         const float* display = &getDisplayPixels()[4 * (size_t(y) * width() + x)];
         text << " | Luminance: " << std::setprecision(9)
@@ -98,7 +99,9 @@ float RGBFramebufferModel::component(int x, int y, int channel) const
 {
     if (!isImageLoaded() || x < 0 || x >= width() || y < 0 || y >= height())
         return 0.f;
-    return getRawPixels()[4 * (size_t(y) * width() + x) + channel];
+    const auto& pixels = m_layerType == Layer_YC && channel < 3
+                           ? getDisplayPixels() : getRawPixels();
+    return pixels[4 * (size_t(y) * width() + x) + channel];
 }
 float RGBFramebufferModel::getRedInfo(int x, int y) const
 {
@@ -118,8 +121,6 @@ float RGBFramebufferModel::getAlphaInfo(int x, int y) const
 }
 std::vector<std::string> RGBFramebufferModel::rawChannelNames() const
 {
-    // YCA is converted to RGB by the loader; preserve that export contract.
-    if (m_layerType == Layer_YC) return {"R", "G", "B", "A"};
     std::vector<std::string> names;
     for (const auto& channel : m_channels)
         if (!channel.empty()) names.push_back(channel);
@@ -128,7 +129,6 @@ std::vector<std::string> RGBFramebufferModel::rawChannelNames() const
 
 std::vector<int> RGBFramebufferModel::rawChannelComponents() const
 {
-    if (m_layerType == Layer_YC) return {0, 1, 2, 3};
     std::vector<int> components;
     for (size_t i = 0; i < m_channels.size(); ++i)
         if (!m_channels[i].empty()) components.push_back(int(i));

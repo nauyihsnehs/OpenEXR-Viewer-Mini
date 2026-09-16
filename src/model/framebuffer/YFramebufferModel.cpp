@@ -71,7 +71,8 @@ std::string YFramebufferModel::getColorInfo(int x, int y) const
     text << "x: " << x + getDataWindow().x()
          << " y: " << y + getDataWindow().y()
          << " | " << m_layer << ": "
-         << PixelDiagnostics::sampleText(getRawPixels()[size_t(y) * width() + x]);
+         << PixelDiagnostics::sampleText(getRawPixels()[size_t(y) * width() + x])
+         << sampleLocationInfo(0, x, y);
     return text.str();
 }
 std::vector<std::string> YFramebufferModel::rawChannelNames() const

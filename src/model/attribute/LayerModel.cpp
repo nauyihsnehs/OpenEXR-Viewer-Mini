@@ -163,6 +163,21 @@ LayerModel::~LayerModel() = default;
 const LayerItem* LayerModel::defaultDisplayLayer() const
 {
     const LayerItem* preferred = findPreferredLayer(m_rootItem.get());
+    if (preferred && (preferred->getType() == LayerItem::YC
+                      || preferred->getType() == LayerItem::YCA)) {
+        const auto& channels = m_fileHandle.header(preferred->getPart()).channels();
+        const auto sampling = [&](LayerItem::LayerType type) {
+            const auto* child = preferred->child(type);
+            const auto* channel = child ? channels.findChannel(child->getOriginalFullName()) : nullptr;
+            return channel ? Imath::V2i(channel->xSampling, channel->ySampling) : Imath::V2i(1);
+        };
+        const auto ry = sampling(LayerItem::RY);
+        if (sampling(LayerItem::Y) != Imath::V2i(1)
+            || sampling(LayerItem::A) != Imath::V2i(1)
+            || sampling(LayerItem::BY) != ry
+            || (ry != Imath::V2i(1) && ry != Imath::V2i(2)))
+            return preferred->child(LayerItem::Y);
+    }
     if (preferred) return preferred;
 
     // Search all standard layers before falling back to a single channel.

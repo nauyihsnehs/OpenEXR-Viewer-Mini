@@ -136,6 +136,23 @@ DecodeResult FramebufferLoader::decode(
                                         : header.hasTileDescription();
     if (tiled && header.tileDescription().mode != Imf::ONE_LEVEL)
         throw std::runtime_error("Mipmap and Ripmap tiled images are not supported yet.");
+    bool subsampledChroma = false;
+    if (layout == Chroma) {
+        const auto* y = header.channels().findChannel(names[0]);
+        const auto* ry = header.channels().findChannel(names[1]);
+        const auto* by = header.channels().findChannel(names[2]);
+        const auto* a = names[3].empty() ? nullptr : header.channels().findChannel(names[3]);
+        if (!y || !ry || !by || (!names[3].empty() && !a))
+            throw std::runtime_error("Missing YC channels.");
+        const bool full = ry->xSampling == 1 && ry->ySampling == 1
+                          && by->xSampling == 1 && by->ySampling == 1;
+        subsampledChroma = ry->xSampling == 2 && ry->ySampling == 2
+                           && by->xSampling == 2 && by->ySampling == 2;
+        if (y->xSampling != 1 || y->ySampling != 1
+            || (a && (a->xSampling != 1 || a->ySampling != 1))
+            || (!full && !subsampledChroma))
+            throw std::runtime_error("Unsupported YC sampling: use full-resolution Y/A and matching 1x1 or 2x2 RY/BY.");
+    }
     const Imath::Box2i window  = header.dataWindow();
     const Imath::Box2i display = header.displayWindow();
     auto               data    = std::make_shared<FramebufferData>();
@@ -159,8 +176,10 @@ DecodeResult FramebufferLoader::decode(
     std::array<Channel, 4> channels;
     Imf::FrameBuffer       buffer;
     for (size_t i = 0; i < names.size(); ++i) {
-        if (!names[i].empty())
+        if (!names[i].empty()) {
             channels[i] = allocateChannel(header, names[i], window, buffer);
+            data->sourceSampling[i] = QPoint(channels[i].samplingX, channels[i].samplingY);
+        }
         if (cancel->load()) return DecodeResult();
     }
     if (tiled) {
@@ -254,43 +273,71 @@ DecodeResult FramebufferLoader::decode(
     if (attribute) {
         chromaticities = attribute->value();
         data->hasRawChromaticities = true;
-        // YC exports retain the existing converted Rec.709 RGB representation.
-        data->rawChromaticities = layout == Chroma
-                                    ? Imf::Chromaticities() : chromaticities;
+        data->rawChromaticities = chromaticities;
     }
     if (layout == Chroma) {
+        data->sourcePixels = data->pixels;
         const Imath::V3f weights = Imf::RgbaYca::computeYw(chromaticities);
         std::vector<Imf::Rgba> rgba(count);
         for (size_t i = 0; i < count; ++i) {
+            if (i % size_t(data->width) == 0 && cancel->load()) return DecodeResult();
             rgba[i].r = data->pixels[4 * i + 1];   // RY
             rgba[i].g = data->pixels[4 * i];       // Y
             rgba[i].b = data->pixels[4 * i + 2];   // BY
             rgba[i].a = data->pixels[4 * i + 3];
         }
-        for (int y = 0; y < data->height; ++y) {
+        // Match RgbaInputFile's separable reconstruction and edge extension.
+        const int padding = Imf::RgbaYca::N2;
+        std::vector<Imf::Rgba> lineBuffer(data->width + 2 * padding);
+        if (subsampledChroma) {
+            const int lastSampleX = int((channels[1].firstX + channels[1].width - 1) * 2 - window.min.x);
+            for (int y = 0; y < data->height; ++y) {
+                if (cancel->load()) return DecodeResult();
+                if ((int64_t(window.min.y) + y) % 2 != 0) continue;
+                Imf::Rgba* line = rgba.data() + size_t(y) * data->width;
+                std::copy(line, line + data->width, lineBuffer.begin() + padding);
+                std::fill(lineBuffer.begin(), lineBuffer.begin() + padding, line[0]);
+                std::fill(lineBuffer.begin() + padding + data->width, lineBuffer.end(), line[lastSampleX]);
+                Imf::RgbaYca::reconstructChromaHoriz(data->width, lineBuffer.data(), line);
+            }
+        }
+        // Saturation correction also needs reconstructed RGB just outside the image.
+        std::vector<Imf::Rgba> converted(count + 2 * size_t(data->width));
+        const int lastSampleY = int((channels[1].firstY + channels[1].height - 1)
+                                   * channels[1].samplingY - window.min.y);
+        for (int y = subsampledChroma ? -1 : 0;
+             y < data->height + (subsampledChroma ? 1 : 0); ++y) {
             if (cancel->load()) return DecodeResult();
-            Imf::Rgba* line = rgba.data() + size_t(y) * data->width;
-            Imf::RgbaYca::YCAtoRGBA(weights, data->width, line, line);
+            const int sourceY = y < 0 ? 0 : y >= data->height ? lastSampleY : y;
+            const Imf::Rgba* line = rgba.data() + size_t(sourceY) * data->width;
+            if (subsampledChroma && (int64_t(window.min.y) + y) % 2 != 0) {
+                const Imf::Rgba* lines[Imf::RgbaYca::N];
+                for (int i = 0; i < Imf::RgbaYca::N; ++i) {
+                    const int row = y + i - padding;
+                    const int clamped = row < 0 ? 0 : row >= data->height ? lastSampleY : row;
+                    lines[i] = rgba.data() + size_t(clamped) * data->width;
+                }
+                Imf::RgbaYca::reconstructChromaVert(data->width, lines, lineBuffer.data());
+                line = lineBuffer.data();
+            }
+            Imf::RgbaYca::YCAtoRGBA(weights, data->width, line,
+                                   converted.data() + size_t(y + 1) * data->width);
         }
         std::vector<Imf::Rgba> corrected(data->width);
         for (int y = 0; y < data->height; ++y) {
             if (cancel->load()) return DecodeResult();
-            const int previous = y == 0 ? std::min(1, data->height - 1) : y - 1;
-            const int next = y == data->height - 1 ? std::max(0, y - 1) : y + 1;
             const Imf::Rgba* lines[] = {
-              rgba.data() + size_t(previous) * data->width,
-              rgba.data() + size_t(y) * data->width,
-              rgba.data() + size_t(next) * data->width};
-            Imf::RgbaYca::fixSaturation(
-              weights,
-              data->width,
-              lines,
-              corrected.data());
+              converted.data() + size_t(y) * data->width,
+              converted.data() + size_t(y + 1) * data->width,
+              converted.data() + size_t(y + 2) * data->width};
+            if (subsampledChroma)
+                Imf::RgbaYca::fixSaturation(weights, data->width, lines, corrected.data());
+            const Imf::Rgba* output = subsampledChroma ? corrected.data() : lines[1];
             for (int x = 0; x < data->width; ++x) {
                 float* pixel = &data->pixels[4 * (size_t(y) * data->width + x)];
-                pixel[0]     = corrected[x].r;
-                pixel[1]     = corrected[x].g;
-                pixel[2]     = corrected[x].b;
+                pixel[0]     = output[x].r;
+                pixel[1]     = output[x].g;
+                pixel[2]     = output[x].b;
             }
         }
     }

@@ -111,13 +111,14 @@ namespace
         return Imf::PixelType::FLOAT;
     }
 
-    bool rgbChannelName(const std::string& name)
+    bool colorChannelName(const std::string& name)
     {
         std::string  leaf = name;
         const size_t dot  = leaf.find_last_of('.');
         if (dot != std::string::npos) leaf = leaf.substr(dot + 1);
 
-        return leaf == "R" || leaf == "G" || leaf == "B" || leaf == "A";
+        return leaf == "R" || leaf == "G" || leaf == "B" || leaf == "A"
+               || leaf == "Y" || leaf == "RY" || leaf == "BY";
     }
 
     std::vector<int> selectedChannelIndexes(
@@ -126,7 +127,7 @@ namespace
         std::vector<int> indexes;
 
         for (int i = 0; i < static_cast<int>(names.size()); i++) {
-            if (scope == ImageSave::ChannelsAll || rgbChannelName(names[i])) {
+            if (scope == ImageSave::ChannelsAll || colorChannelName(names[i])) {
                 indexes.push_back(i);
             }
         }
@@ -193,6 +194,7 @@ namespace
         const std::vector<std::string> names = model->rawChannelNames();
         const std::vector<int> indexes = selectedChannelIndexes(names, scope);
         const std::vector<int> components = model->rawChannelComponents();
+        const auto sampling = model->rawChannelSampling();
         const std::vector<float>& raw  = model->getRawPixels();
         const int rawCount = model->rawPixelStride();
 
@@ -202,15 +204,23 @@ namespace
             ChannelData channel;
             channel.name       = names[srcIndex];
             channel.sourceName = channel.name;
-            channel.xSampling  = 1;
-            channel.ySampling  = 1;
-            channel.width      = part.width;
-            channel.height     = part.height;
-            channel.pixels.resize(part.width * part.height);
-
-            for (int i = 0; i < part.width * part.height; i++) {
-                channel.pixels[i] = raw[size_t(i) * rawCount + components[srcIndex]];
-            }
+            channel.xSampling = sampling[srcIndex].x();
+            channel.ySampling = sampling[srcIndex].y();
+            const auto firstSample = [](int minimum, int step) {
+                return (int64_t(minimum) / step + (minimum % step > 0 ? 1 : 0)) * step;
+            };
+            const int64_t firstX = firstSample(part.dataWindow.min.x, channel.xSampling);
+            const int64_t firstY = firstSample(part.dataWindow.min.y, channel.ySampling);
+            channel.width = int((int64_t(part.dataWindow.max.x) - firstX) / channel.xSampling + 1);
+            channel.height = int((int64_t(part.dataWindow.max.y) - firstY) / channel.ySampling + 1);
+            channel.pixels.resize(size_t(channel.width) * channel.height);
+            for (int y = 0; y < channel.height; ++y)
+                for (int x = 0; x < channel.width; ++x) {
+                    const size_t localX = size_t(firstX + int64_t(x) * channel.xSampling - part.dataWindow.min.x);
+                    const size_t localY = size_t(firstY + int64_t(y) * channel.ySampling - part.dataWindow.min.y);
+                    channel.pixels[size_t(y) * channel.width + x]
+                      = raw[(localY * part.width + localX) * rawCount + components[srcIndex]];
+                }
 
             part.channels.push_back(channel);
         }
@@ -260,7 +270,7 @@ namespace
         for (Imf::ChannelList::ConstIterator it = channels.begin();
              it != channels.end();
              it++) {
-            if (scope == ImageSave::ChannelsAll || rgbChannelName(it.name())) {
+            if (scope == ImageSave::ChannelsAll || colorChannelName(it.name())) {
                 channelCount++;
             }
         }
@@ -270,7 +280,7 @@ namespace
         for (Imf::ChannelList::ConstIterator it = channels.begin();
              it != channels.end();
              it++) {
-            if (scope == ImageSave::ChannelsRgb && !rgbChannelName(it.name())) {
+            if (scope == ImageSave::ChannelsRgb && !colorChannelName(it.name())) {
                 continue;
             }
 
@@ -519,38 +529,6 @@ namespace
         bytes[3] = static_cast<char>(exponent + 128);
     }
 
-    int
-    findChannel(const std::vector<std::string>& names, const std::string& leaf)
-    {
-        for (int i = 0; i < static_cast<int>(names.size()); i++) {
-            std::string  name = names[i];
-            const size_t dot  = name.find_last_of('.');
-            if (dot != std::string::npos) name = name.substr(dot + 1);
-            if (name == leaf) return i;
-        }
-
-        return -1;
-    }
-
-    std::array<int, 3> rgbComponents(const FramebufferModel* model)
-    {
-        const auto names = model->rawChannelNames();
-        const auto components = model->rawChannelComponents();
-        std::array<int, 3> rgb = {{-1, -1, -1}};
-        const char* colorNames[] = {"R", "G", "B"};
-        for (int c = 0; c < 3; ++c) {
-            const int index = findChannel(names, colorNames[c]);
-            if (index >= 0) rgb[c] = components[index];
-        }
-        // Preserve single R/G/B colors, rather than treating them as luminance.
-        if (rgb[0] >= 0 || rgb[1] >= 0 || rgb[2] >= 0) return rgb;
-        const int y = findChannel(names, "Y");
-        if (y >= 0) return {{components[y], components[y], components[y]}};
-        for (int c = 0; c < 3; ++c)
-            rgb[c] = components[c < int(components.size()) ? c : 0];
-        return rgb;
-    }
-
     float rgbSample(const std::vector<float>& pixels, size_t offset, int component)
     {
         return component < 0 ? 0.f : pixels[offset + component];
@@ -579,7 +557,7 @@ namespace
               QObject::tr("The raw framebuffer data is incomplete."));
         }
 
-        const auto rgb = rgbComponents(model);
+        const auto rgb = model->displayRgbComponents();
 
         QFile file(options.path);
         if (!file.open(QFile::WriteOnly)) {
@@ -695,7 +673,7 @@ namespace
               QObject::tr("The raw framebuffer data is incomplete."));
         }
 
-        const auto rgb = rgbComponents(model);
+        const auto rgb = model->displayRgbComponents();
 
         const QStringList         paths = ImageSavePlan::outputPaths(options);
         const std::vector<double> values

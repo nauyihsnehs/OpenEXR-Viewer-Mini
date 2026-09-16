@@ -3,6 +3,7 @@
 #include <QRect>
 #include <QString>
 #include <OpenEXR/ImfChromaticities.h>
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <memory>
@@ -16,8 +17,10 @@ struct FramebufferData {
     QRect              dataWindow;
     QRect              displayWindow;
     std::vector<float> pixels;
-    // Only populated when RGB gamut conversion changes the display buffer.
+    // Populated when YC reconstruction or RGB gamut conversion changes values.
     std::vector<float> sourcePixels;
+    std::array<QPoint, 4> sourceSampling = {{QPoint(1, 1), QPoint(1, 1),
+                                           QPoint(1, 1), QPoint(1, 1)}};
     bool               hasRawChromaticities = false;
     Imf::Chromaticities rawChromaticities;
     // Source-channel flags, before color conversion or display mapping.

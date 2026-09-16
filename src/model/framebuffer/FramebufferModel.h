@@ -96,6 +96,8 @@ class FramebufferModel: public QObject
         for (size_t i = 0; i < components.size(); ++i) components[i] = int(i);
         return components;
     }
+    std::vector<QPoint> rawChannelSampling() const;
+    virtual std::array<int, 3> displayRgbComponents() const;
 
   signals:
     void anomalyMarkersChanged();
@@ -105,6 +107,7 @@ class FramebufferModel: public QObject
     void readinessChanged();
 
   protected:
+    std::string sampleLocationInfo(size_t channel, int x, int y) const;
     using Decoder  = std::function<DecodeResult(const Cancellation&)>;
     using Renderer = std::function<QImage(const Cancellation&)>;
     void                                   startLoading(Decoder decoder);
