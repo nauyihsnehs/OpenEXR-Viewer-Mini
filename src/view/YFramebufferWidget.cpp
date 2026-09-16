@@ -31,6 +31,7 @@
  */
 
 #include "YFramebufferWidget.h"
+#include "CropIndicator.h"
 #include "ScientificDoubleSpinBox.h"
 #include <QToolButton>
 #include <QSignalBlocker>
@@ -53,6 +54,8 @@ YFramebufferWidget::YFramebufferWidget(QWidget* parent)
   , m_zoomLevel(1.)
 {
     ui->setupUi(this);
+    m_cropIndicator = new CropIndicator(this);
+    ui->horizontalLayout_3->insertWidget(1, m_cropIndicator, 0, Qt::AlignVCenter);
     setRange(0., 1.);
     connect(ui->anomalyMarkerButton, &QToolButton::toggled, this, [this](bool enabled) {
         if (m_model) m_model->setHighlightNonFinite(enabled);
@@ -207,6 +210,7 @@ void YFramebufferWidget::updateZoomLevelText(double zoom)
 
 void YFramebufferWidget::updateFramebufferSummary()
 {
+    m_cropIndicator->setModel(m_model);
     ui->framebufferSummaryLabel->setText(framebufferSummaryText(m_model));
     const bool loaded = m_model && m_model->isImageLoaded();
     ui->anomalyMarkerButton->setEnabled(loaded);

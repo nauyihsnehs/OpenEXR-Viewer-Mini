@@ -1,4 +1,5 @@
 #include "AnomalyMarkers.h"
+#include "PreviewImage.h"
 
 #include <model/framebuffer/FramebufferModel.h>
 #include <QImage>
@@ -48,8 +49,11 @@ namespace
         // Bound the grid to at most 33 x 33 cells, including boundary cells.
         // All marker sizes use the same path, even for full-resolution exports.
         const double cellSize = std::max({32., clip.width() / 32., clip.height() / 32.});
+        const QRectF visible = PreviewImage::Geometry(model).visiblePixels;
         for (const auto& region : model.anomalyRegions()) {
-            const QRectF mapped = transform.mapRect(QRectF(region.bounds));
+            const QRectF bounds = QRectF(region.bounds).intersected(visible);
+            if (bounds.isEmpty()) continue;
+            const QRectF mapped = transform.mapRect(bounds);
             const bool circle = region.pixelCount == 1;
             const QSizeF size = circle ? QSizeF(markerSize, markerSize)
               : QSizeF(std::max(markerSize, mapped.width() + 4.),
@@ -133,10 +137,12 @@ void AnomalyMarkers::composite(QImage& image, const FramebufferModel& model)
     image.setDevicePixelRatio(1.);
     {
         QPainter painter(&image);
-        draw(painter, model,
-             QTransform::fromScale(double(image.width()) / model.width(),
-                                   double(image.height()) / model.height()),
-             QRectF(image.rect()));
+        const PreviewImage::Geometry geometry(model);
+        if (!geometry.displayPixels.isEmpty()) {
+            const QTransform transform = geometry.imageToOutput(image.size());
+            draw(painter, model, transform,
+                 transform.mapRect(geometry.visiblePixels).intersected(QRectF(image.rect())));
+        }
     }
     image.setDevicePixelRatio(ratio);
 }

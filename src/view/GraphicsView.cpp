@@ -33,11 +33,13 @@
 #include "GraphicsView.h"
 #include "FileDrop.h"
 #include <util/AnomalyMarkers.h>
+#include <util/PreviewImage.h>
 #include <QDragEnterEvent>
 #include <QApplication>
 #include <QContextMenuEvent>
 #include <QCursor>
 #include <QGraphicsPixmapItem>
+#include <QGraphicsRectItem>
 #include <QEvent>
 #include <QPalette>
 #include <QKeyEvent>
@@ -49,7 +51,9 @@
 GraphicsView::GraphicsView(QWidget* parent): QGraphicsView(parent)
 {
     setScene(new QGraphicsScene(this));
-    _imageItem = scene()->addPixmap(QPixmap());
+    _displayClip = scene()->addRect(QRectF(), QPen(Qt::NoPen), QBrush(Qt::NoBrush));
+    _displayClip->setFlag(QGraphicsItem::ItemClipsChildrenToShape);
+    _imageItem = new QGraphicsPixmapItem(_displayClip);
     setMouseTracking(true);
     setAcceptDrops(true);
     setFocusPolicy(Qt::StrongFocus);
@@ -86,7 +90,8 @@ void GraphicsView::setModel(const FramebufferModel* model)
     _dragging = _rightClick = false;
     unsetCursor();
     _imageItem->setPixmap(QPixmap());
-    _dataWindow = _displayWindow = QRectF();
+    _displayWindow = QRectF();
+    _displayClip->setRect(_displayWindow);
     viewport()->update();
     emit queryPixelInfo(-1, -1);
     if (!model) return;
@@ -111,20 +116,14 @@ void GraphicsView::setModel(const FramebufferModel* model)
 void GraphicsView::onImageLoaded()
 {
     if (!_model || !_model->isImageLoaded()) return;
-    const QRect dataWindow = _model->getDataWindow();
-    const QRect display    = _model->getDisplayWindow();
+    const PreviewImage::Geometry geometry(*_model);
     const qreal aspect     = _model->pixelAspectRatio();
-    _imageItem->setTransform(QTransform::fromScale(aspect, 1.));
+    _imageItem->setTransform(geometry.imageToScene);
     _imageItem->setTransformationMode(
       aspect == 1. ? Qt::FastTransformation : Qt::SmoothTransformation);
-    _dataWindow
-      = QRectF(0., 0., dataWindow.width() * aspect, dataWindow.height());
-    _displayWindow = QRectF(
-      (qreal(display.x()) - dataWindow.x()) * aspect,
-      qreal(display.y()) - dataWindow.y(),
-      display.width() * aspect,
-      display.height());
-    scene()->setSceneRect(_imageWindow ? _dataWindow : _dataWindow.united(_displayWindow));
+    _displayWindow = geometry.sceneWindow();
+    _displayClip->setRect(_displayWindow);
+    scene()->setSceneRect(_displayWindow);
     if (_imageWindow) {
         applyImageWindowZoom(_zoomLevel);
         return;
@@ -194,7 +193,7 @@ void GraphicsView::applyImageWindowZoom(double zoom)
     if (!_imageWindow || !std::isfinite(zoom) || zoom <= 0.) return;
     _zoomLevel = zoom;
     setTransform(QTransform::fromScale(zoom, zoom));
-    centerOn(_dataWindow.center());
+    centerOn(_displayWindow.center());
     emit zoomLevelChanged(zoom);
     refreshPixelInfo();
 }
@@ -315,7 +314,7 @@ void GraphicsView::mousePressEvent(QMouseEvent* event)
 bool GraphicsView::imageContains(const QPoint& position) const
 {
     return _model && _model->isImageLoaded()
-           && _dataWindow.contains(mapToScene(position));
+           && _displayWindow.contains(mapToScene(position));
 }
 
 void GraphicsView::mouseDoubleClickEvent(QMouseEvent* event)
@@ -370,9 +369,10 @@ void GraphicsView::queryPixelAt(const QPoint& position)
         return;
     }
     const QPointF pixel = _imageItem->mapFromScene(mapToScene(position));
+    const QRectF visible = PreviewImage::Geometry(*_model).visiblePixels;
     if (!std::isfinite(pixel.x()) || !std::isfinite(pixel.y())
-        || pixel.x() < 0 || pixel.y() < 0
-        || pixel.x() >= _model->width() || pixel.y() >= _model->height()) {
+        || visible.isEmpty() || pixel.x() < visible.left() || pixel.y() < visible.top()
+        || pixel.x() >= visible.right() || pixel.y() >= visible.bottom()) {
         emit queryPixelInfo(-1, -1);
         return;
     }
@@ -445,8 +445,7 @@ void GraphicsView::drawForeground(QPainter* painter, const QRectF&)
 {
     if (!_model || !_model->isImageLoaded()) return;
     const QTransform imageToViewport = _imageItem->deviceTransform(viewportTransform());
-    const QRectF clip = imageToViewport.mapRect(
-      QRectF(0., 0., _model->width(), _model->height()))
+    const QRectF clip = imageToViewport.mapRect(PreviewImage::Geometry(*_model).visiblePixels)
         .intersected(QRectF(viewport()->rect()));
     painter->save();
     painter->resetTransform();

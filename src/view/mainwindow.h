@@ -163,7 +163,7 @@ class MainWindow: public QMainWindow
     void             updateTitleBarButtons();
     void             updateWindowFrame();
     void             updateFileTabPresentation();
-    void             copyActiveImage(bool fullResolution) const;
+    void             copyActiveImage(bool fullResolution);
     void leaveMinimalView();
     void resizeMinimalView(double zoom);
     void moveMinimalView(const QPoint& position);

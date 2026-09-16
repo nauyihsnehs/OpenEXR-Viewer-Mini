@@ -1,5 +1,5 @@
 #include "ImageSave.h"
-#include <util/AnomalyMarkers.h>
+#include <util/PreviewImage.h>
 
 #include <io/ImageSavePlan.h>
 #include <model/OpenEXRImage.h>
@@ -604,19 +604,15 @@ namespace
             return result(
               ImageSave::StatusFailed,
               "The current preview is still rendering.");
-        QImage image = model->getLoadedImage();
+        const QColor background = options.format != ImageSave::FormatJpeg ? Qt::transparent
+          : options.jpegBackground == ImageSave::BackgroundWhite ? Qt::white : Qt::black;
+        QImage image = PreviewImage::render(*model, options.maxWidth, background);
         if (image.isNull()) {
             return result(
               ImageSave::StatusFailed,
-              QObject::tr("The active image is empty."));
+              QObject::tr("Unable to create the preview image. Try a smaller output size."));
         }
 
-        if (options.maxWidth > 0 && image.width() > options.maxWidth) {
-            image
-              = image.scaledToWidth(options.maxWidth, Qt::SmoothTransformation);
-        }
-
-        AnomalyMarkers::composite(image, *model);
         if (
           options.format == ImageSave::FormatJpeg && image.hasAlphaChannel()) {
             image = image.convertToFormat(QImage::Format_RGB888);

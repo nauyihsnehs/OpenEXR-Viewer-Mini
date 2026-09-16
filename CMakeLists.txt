@@ -92,6 +92,8 @@ set(PROJECT_SOURCES
     src/view/WorkspaceWidgets.h
     src/view/MinimalImageWidget.cpp
     src/view/MinimalImageWidget.h
+    src/view/CropIndicator.h
+    src/view/CropIndicator.cpp
 
     src/view/about.cpp
     src/view/about.h
@@ -188,6 +190,8 @@ set(PROJECT_SOURCES
     src/util/ColorTransform.cpp
     src/util/AnomalyMarkers.h
     src/util/AnomalyMarkers.cpp
+    src/util/PreviewImage.h
+    src/util/PreviewImage.cpp
 
     openexr-viewer.rc
     assets/themes/dark_flat.qrc

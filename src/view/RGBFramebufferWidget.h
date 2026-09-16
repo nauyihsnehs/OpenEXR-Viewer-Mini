@@ -47,6 +47,8 @@ namespace Ui
     class RGBFramebufferWidget;
 }
 
+class CropIndicator;
+
 class RGBFramebufferWidget: public QWidget
 {
     Q_OBJECT
@@ -145,6 +147,7 @@ class RGBFramebufferWidget: public QWidget
 
     Ui::RGBFramebufferWidget*        ui;
     RGBFramebufferModel*             m_model;
+    CropIndicator*                   m_cropIndicator;
     RGBFramebufferModel::PreviewMode m_previewMode;
     ToneParamControls                m_toneParamControls[4];
     double                           m_toneParamDefaults[4];

@@ -17,6 +17,23 @@ Viewing controls
 - View > Show toggles the Attributes and Layers panels. Data and display window
   coordinates remain available in Attributes; previews have no window outlines
   or outside-frame dimming.
+- All previews use the display window as their canvas, cropping data outside it.
+  Missing data shows the existing checkerboard and has no pixel readout. Copies
+  and PNG previews keep missing areas transparent. JPEG previews offer a
+  **Transparency background** choice of **Black (0)** (default) or **White (1)**,
+  remembered with the other save options for the current application session.
+  A small crop icon in the information bar (also in minimal view) indicates source
+  data outside the display window. Hover for the affected directions; padding alone
+  does not trigger it. This interface indicator is not included in copied or exported images.
+  Pixel aspect ratio is applied horizontally in both views and preview outputs.
+  Full-size output height is the display-window height, and width is its width
+  times pixel aspect ratio, rounded to the nearest pixel (minimum 1).
+  The minimal footer labels display dimensions; source data dimensions remain in
+  Attributes. Raw EXR exports retain the full data window, including cropped pixels;
+  Basic metadata preserves pixel aspect ratio. HDR and exposure-bracket exports
+  retain their existing behavior. See the [Display Window checklist](docs/display-window-images.md).
+  Its t07/t15/t16 reference JPGs are identical and do not demonstrate the different
+  EXR pixel aspect ratios; t15 and t16 correctly export at 722x371 and 321x371.
 - Double-click an image to switch between the full workspace and a minimal
   image window. Double-click again to restore the workspace and its view position.
 - In the minimal view, drag the image to move the window. The wheel scales the
@@ -36,7 +53,7 @@ Viewing controls
   Pixel readouts and active-layer EXR exports retain source channel names.
 - Combined RGB/RGBA/YA/YC/YCA layers retain the color preview modes. Changing the
   color preview mode does not change individual-channel previews. Combined color
-  previews and their PNG/JPEG exports and copies are opaque over black: premultiplied
+  previews and their PNG/JPEG exports and copies keep actual data opaque over black: premultiplied
   RGB is neither multiplied nor divided by alpha, preserving zero-alpha emission.
   Source alpha remains available in raw data, statistics, and the A channel.
 - Nonstandard RGB chromaticities are converted to linear Rec.709 for display using

@@ -1,5 +1,6 @@
 #include "MinimalImageWidget.h"
 #include "GraphicsView.h"
+#include "CropIndicator.h"
 
 #include <QLabel>
 #include <QFontMetrics>
@@ -19,6 +20,7 @@ MinimalImageWidget::MinimalImageWidget(QWidget* parent) : QWidget(parent)
     m_footer->setObjectName("minimalImageFooter");
     m_footer->setFixedHeight(fontMetrics().height() + 12);
     m_footer->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+    m_cropIndicator = new CropIndicator(m_footer);
     m_summaryLabel = new QLabel(m_footer);
     m_summaryLabel->setObjectName("minimalImageInfo");
     m_summaryLabel->setTextFormat(Qt::PlainText);
@@ -34,8 +36,9 @@ int MinimalImageWidget::footerHeight() const
     return m_footer->height();
 }
 
-void MinimalImageWidget::setSummary(const QString& text)
+void MinimalImageWidget::setSummary(const QString& text, const FramebufferModel* model)
 {
+    m_cropIndicator->setModel(model);
     m_summary = text;
     m_summaryLabel->setToolTip(text);
     updateSummary();
@@ -56,13 +59,15 @@ void MinimalImageWidget::resizeEvent(QResizeEvent* event)
 
 void MinimalImageWidget::updateSummary()
 {
-    const int available = qMax(0, width() - 16);
+    const int left = m_cropIndicator->isHidden() ? 8 : 32;
+    m_cropIndicator->move(8, (footerHeight() - m_cropIndicator->height()) / 2);
+    const int available = qMax(0, width() - left - 8);
     const int pixels = m_pixelInfo.isEmpty() ? 0 : qMin(
       available, m_pixelLabel->fontMetrics().boundingRect(m_pixelInfo).width() + 2);
     const int gap = pixels > 0 && pixels < available ? qMin(8, available - pixels) : 0;
     const int summary = available - pixels - gap;
-    m_summaryLabel->setGeometry(8, 0, summary, footerHeight());
-    m_pixelLabel->setGeometry(8 + summary + gap, 0, pixels, footerHeight());
+    m_summaryLabel->setGeometry(left, 0, summary, footerHeight());
+    m_pixelLabel->setGeometry(left + summary + gap, 0, pixels, footerHeight());
     m_summaryLabel->setVisible(summary > 0);
     m_pixelLabel->setVisible(pixels > 0);
     m_summaryLabel->setText(m_summaryLabel->fontMetrics().elidedText(

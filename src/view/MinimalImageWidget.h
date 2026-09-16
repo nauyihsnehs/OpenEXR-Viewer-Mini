@@ -4,6 +4,8 @@
 
 class GraphicsView;
 class QLabel;
+class CropIndicator;
+class FramebufferModel;
 
 class MinimalImageWidget : public QWidget
 {
@@ -11,7 +13,7 @@ class MinimalImageWidget : public QWidget
     explicit MinimalImageWidget(QWidget* parent = nullptr);
     GraphicsView* view() const { return m_view; }
     int footerHeight() const;
-    void setSummary(const QString& text);
+    void setSummary(const QString& text, const FramebufferModel* model);
     void setPixelInfo(const QString& text);
 
   protected:
@@ -21,6 +23,7 @@ class MinimalImageWidget : public QWidget
     void updateSummary();
     GraphicsView* m_view;
     QWidget* m_footer;
+    CropIndicator* m_cropIndicator;
     QLabel* m_summaryLabel;
     QLabel* m_pixelLabel;
     QString m_summary;

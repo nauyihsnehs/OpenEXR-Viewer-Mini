@@ -74,6 +74,8 @@ namespace ImageSave
         StatusCancelled,
     };
 
+    enum JpegBackground { BackgroundBlack, BackgroundWhite };
+
     struct Options {
         Target  target = TargetPreview;
         Format  format = FormatPng;
@@ -81,6 +83,7 @@ namespace ImageSave
 
         int maxWidth = 0;
         int quality  = 90;
+        JpegBackground jpegBackground = BackgroundBlack;
 
         ExrCompression  compression  = CompressionZip;
         ExrPixelType    pixelType    = PixelHalf;

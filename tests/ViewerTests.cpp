@@ -1,6 +1,7 @@
 #include <QtTest>
 #include <QAction>
 #include <QApplication>
+#include <QClipboard>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDoubleSpinBox>
@@ -10,6 +11,8 @@
 #include <QFont>
 #include <QGraphicsPixmapItem>
 #include <QMessageBox>
+#include <QMap>
+#include <QPainter>
 #include <QPointer>
 #include <QPushButton>
 #include <QSemaphore>
@@ -26,10 +29,13 @@
 #include <model/framebuffer/PixelDiagnostics.h>
 #include <model/framebuffer/RGBFramebufferModel.h>
 #include <util/AnomalyMarkers.h>
+#include <util/PreviewImage.h>
 #include <util/YColormap.h>
 #include <util/ColormapModule.h>
 #include <view/FileDrop.h>
 #include <view/GraphicsView.h>
+#include <view/CropIndicator.h>
+#include <view/SaveImageDialog.h>
 #include <view/ImageFileWidget.h>
 #include <view/RGBFramebufferWidget.h>
 #include <view/YFramebufferWidget.h>
@@ -265,6 +271,7 @@ class ViewerTests: public QObject
         model.startLoading([](const Cancellation&) {
             auto data = std::make_shared<FramebufferData>();
             data->width = data->height = 64;
+            data->dataWindow = data->displayWindow = QRect(0, 0, 64, 64);
             FramebufferData::AnomalyRegion first, second;
             first.bounds = QRect(20, 20, 1, 1);
             first.pixelCount = 1;
@@ -1170,7 +1177,7 @@ class ViewerTests: public QObject
         QCOMPARE(pixels.last()[1].toInt(), 50);
         model.setExposure(1.);
         QTRY_VERIFY(model.isPreviewReady());
-        QCOMPARE(view.scene()->items().size(), 1);
+        QCOMPARE(view.scene()->items().size(), 2); // Pixmap and display-window clip.
         QCOMPARE(view.scene()->items().first(), item);
         const QPointF before = view.mapToScene(point);
         QWheelEvent   wheel(
@@ -1198,6 +1205,389 @@ class ViewerTests: public QObject
         QVERIFY(view.viewState().fit);
         QTest::keyClick(&view, Qt::Key_1);
         QCOMPARE(view.viewState().zoom, 1.);
+    }
+
+    void displayWindowGeometry_data()
+    {
+        QTest::addColumn<QRect>("data");
+        QTest::addColumn<QRect>("display");
+        QTest::addColumn<double>("aspect");
+        QTest::addColumn<QRectF>("visible");
+        QTest::addColumn<QSize>("output");
+        const QRect data(0, 0, 400, 300);
+        QTest::newRow("t01") << data << data << 1. << QRectF(data) << QSize(400, 300);
+        QTest::newRow("t02") << data << QRect(1, 1, 400, 300) << 1.
+                            << QRectF(1, 1, 399, 299) << QSize(400, 300);
+        QTest::newRow("t03") << data << QRect(30, 20, 370, 280) << 1.
+                            << QRectF(30, 20, 370, 280) << QSize(370, 280);
+        QTest::newRow("t04") << data << QRect(0, 0, 370, 280) << 1.
+                            << QRectF(0, 0, 370, 280) << QSize(370, 280);
+        QTest::newRow("t05") << data << QRect(30, 20, 340, 260) << 1.
+                            << QRectF(30, 20, 340, 260) << QSize(340, 260);
+        QTest::newRow("t06") << data << QRect(-1, -1, 402, 302) << 1.
+                            << QRectF(data) << QSize(402, 302);
+        QTest::newRow("t07") << data << QRect(-40, -40, 481, 371) << 1.
+                            << QRectF(data) << QSize(481, 371);
+        QTest::newRow("t08") << QRect(30, 40, 400, 300) << QRect(0, 0, 501, 401) << 1.
+                            << QRectF(data) << QSize(501, 401);
+        QTest::newRow("t09") << data << QRect(400, 0, 200, 300) << 1.
+                            << QRectF() << QSize(200, 300);
+        QTest::newRow("t10") << data << QRect(-100, 0, 100, 300) << 1.
+                            << QRectF() << QSize(100, 300);
+        QTest::newRow("t11") << data << QRect(0, 300, 400, 200) << 1.
+                            << QRectF() << QSize(400, 200);
+        QTest::newRow("t12") << data << QRect(0, -100, 400, 100) << 1.
+                            << QRectF() << QSize(400, 100);
+        QTest::newRow("t13") << data << QRect(399, 299, 101, 101) << 1.
+                            << QRectF(399, 299, 1, 1) << QSize(101, 101);
+        QTest::newRow("t14") << data << QRect(-100, -100, 101, 101) << 1.
+                            << QRectF(0, 0, 1, 1) << QSize(101, 101);
+        QTest::newRow("t15") << data << QRect(-40, -40, 481, 371) << 1.5
+                            << QRectF(data) << QSize(722, 371);
+        QTest::newRow("t16") << data << QRect(-40, -40, 481, 371) << double(2.f / 3.f)
+                            << QRectF(data) << QSize(321, 371);
+    }
+
+    void displayWindowGeometry()
+    {
+        QFETCH(QRect, data);
+        QFETCH(QRect, display);
+        QFETCH(double, aspect);
+        QFETCH(QRectF, visible);
+        QFETCH(QSize, output);
+        const PreviewImage::Geometry geometry(data, display, aspect);
+        QCOMPARE(geometry.visiblePixels, visible);
+        QCOMPARE(geometry.outputSize(), output);
+        QCOMPARE(geometry.sceneWindow().size(), QSizeF(display.width() * aspect, display.height()));
+        const QTransform transform = geometry.imageToOutput(output);
+        QVERIFY(QLineF(transform.map(geometry.displayPixels.topLeft()), QPointF()).length() < 1e-6);
+        QVERIFY(QLineF(transform.map(geometry.displayPixels.bottomRight()),
+                       QPointF(output.width(), output.height())).length() < 1e-6);
+    }
+
+    void displayWindowOutputLimits()
+    {
+        const PreviewImage::Geometry geometry(QRect(0, 0, 1, 1),
+                                             QRect(0, 0, 1000000, 1000000), 2.);
+        QVERIFY(geometry.outputSize().isEmpty());
+        QCOMPARE(geometry.outputSize(100), QSize(100, 50));
+        const PreviewImage::Geometry extreme(QRect(0, 0, 1, 1), QRect(0, 0, 4, 4),
+                                             std::numeric_limits<float>::max());
+        QVERIFY(extreme.outputSize().isEmpty());
+        QCOMPARE(extreme.outputSize(100), QSize(100, 1));
+    }
+
+    void cropIndicator_data() { displayWindowGeometry_data(); }
+
+    void cropIndicator()
+    {
+        QFETCH(QRect, data);
+        QFETCH(QRect, display);
+        SyntheticModel model;
+        model.startLoading([data, display](const Cancellation&) {
+            auto buffer = std::make_shared<FramebufferData>();
+            buffer->width = data.width();
+            buffer->height = data.height();
+            buffer->dataWindow = data;
+            buffer->displayWindow = display;
+            DecodeResult result;
+            result.data = buffer;
+            return result;
+        });
+        QTRY_VERIFY(model.isImageLoaded());
+        const QMap<QString, QString> expected = {
+          {"t02", "Left, Top"}, {"t03", "Left, Top"}, {"t04", "Right, Bottom"},
+          {"t05", "Left, Right, Top, Bottom"}, {"t09", "Left"}, {"t10", "Right"},
+          {"t11", "Top"}, {"t12", "Bottom"}, {"t13", "Left, Top"}, {"t14", "Right, Bottom"}};
+        const QString directions = expected.value(QString::fromLatin1(QTest::currentDataTag()));
+        QWidget parent;
+        CropIndicator indicator(&parent);
+        indicator.setModel(&model);
+        QCOMPARE(indicator.isHidden(), directions.isEmpty());
+        QCOMPARE(indicator.size(), QSize(16, 16));
+        if (!directions.isEmpty()) {
+            QVERIFY(indicator.toolTip().contains("Directions: " + directions + "\n"));
+            QCOMPARE(indicator.toolTip().contains("All source data"), !data.intersects(display));
+            QCOMPARE(indicator.accessibleDescription(), indicator.toolTip());
+        }
+        indicator.setModel(nullptr);
+        QVERIFY(indicator.isHidden());
+        QVERIFY(indicator.toolTip().isEmpty());
+        QVERIFY(indicator.accessibleDescription().isEmpty());
+    }
+
+    void jpegBackgroundCompositesAlpha()
+    {
+        // Include partial alpha to catch dropping alpha without compositing it.
+        SyntheticModel model;
+        model.load();
+        QTRY_VERIFY(model.isImageLoaded());
+        for (int alpha : {0, 128, 255}) {
+            model.requestRender([alpha](const Cancellation&) {
+                QImage image(1, 1, QImage::Format_RGBA8888);
+                image.fill(QColor(255, 0, 0, alpha));
+                return image;
+            });
+            QTRY_VERIFY(model.isPreviewReady());
+            for (auto background : {ImageSave::BackgroundBlack, ImageSave::BackgroundWhite}) {
+                const bool white = background == ImageSave::BackgroundWhite;
+                const QColor expected(white ? 255 : alpha, white ? 255 - alpha : 0,
+                                      white ? 255 - alpha : 0);
+                QCOMPARE(PreviewImage::render(model, 0, white ? Qt::white : Qt::black)
+                           .pixelColor(0, 0), expected);
+                ImageSave::Source source;
+                source.activeModel = &model;
+                ImageSave::Options options;
+                options.format = ImageSave::FormatJpeg;
+                options.jpegBackground = background;
+                options.quality = 100;
+                options.path = m_directory.filePath(QString("alpha-%1-%2.jpg").arg(alpha).arg(int(background)));
+                QCOMPARE(ImageSave::save(source, options).status, ImageSave::StatusSaved);
+                const QImage jpeg(options.path);
+                QVERIFY(!jpeg.isNull());
+                const QColor actual = jpeg.pixelColor(0, 0);
+                QVERIFY(std::abs(actual.red() - expected.red()) <= 3);
+                QVERIFY(std::abs(actual.green() - expected.green()) <= 3);
+                QVERIFY(std::abs(actual.blue() - expected.blue()) <= 3);
+                QCOMPARE(actual.alpha(), 255);
+                options.format = ImageSave::FormatPng;
+                options.path += ".png";
+                QCOMPARE(ImageSave::save(source, options).status, ImageSave::StatusSaved);
+                QCOMPARE(QImage(options.path).pixelColor(0, 0).alpha(), alpha);
+            }
+            QCOMPARE(PreviewImage::render(model).pixelColor(0, 0).alpha(), alpha);
+        }
+    }
+
+    void jpegBackgroundDialogVisibilityAndMemory()
+    {
+        QCOMPARE(ImageSave::Options().jpegBackground, ImageSave::BackgroundBlack);
+        SaveImageDialog dialog(m_directory.filePath("background.png"));
+        auto* target = dialog.findChild<QComboBox*>("targetCombo");
+        auto* format = dialog.findChild<QComboBox*>("formatCombo");
+        auto* background = dialog.findChild<QComboBox*>("jpegBackgroundCombo");
+        QVERIFY(target && format && background);
+        target->setCurrentIndex(target->findData(ImageSave::TargetPreview));
+        format->setCurrentIndex(format->findData(ImageSave::FormatJpeg));
+        QVERIFY(!background->isHidden());
+        background->setCurrentIndex(background->findData(ImageSave::BackgroundWhite));
+        format->setCurrentIndex(format->findData(ImageSave::FormatPng));
+        QVERIFY(background->isHidden());
+        QCOMPARE(dialog.options().jpegBackground, ImageSave::BackgroundWhite);
+        target->setCurrentIndex(target->findData(ImageSave::TargetHdrBracketedImages));
+        format->setCurrentIndex(format->findData(ImageSave::FormatJpeg));
+        QVERIFY(background->isHidden());
+        target->setCurrentIndex(target->findData(ImageSave::TargetPreview));
+        QVERIFY(!background->isHidden());
+        dialog.reject(); // Uses the existing session-local save-option memory.
+        SaveImageDialog restored(m_directory.filePath("restored.png"));
+        QCOMPARE(restored.options().jpegBackground, ImageSave::BackgroundWhite);
+        QVERIFY(!restored.findChild<QComboBox*>("jpegBackgroundCombo")->isHidden());
+    }
+
+    void displayWindowPreviewAndRawExport_data()
+    {
+        QTest::addColumn<QRect>("display");
+        QTest::newRow("crop-and-pad") << QRect(-1, 0, 4, 3);
+        QTest::newRow("outside") << QRect(2, -1, 4, 3);
+        QTest::newRow("lower-right-pixel") << QRect(1, 1, 3, 3);
+        QTest::newRow("upper-left-pixel") << QRect(-4, -3, 3, 3);
+    }
+
+    void displayWindowPreviewAndRawExport()
+    {
+        QFETCH(QRect, display);
+        const QRect data(-2, -1, 4, 3);
+        Imf::Header header(4, 3);
+        header.displayWindow() = Imath::Box2i(Imath::V2i(display.left(), display.top()),
+                                              Imath::V2i(display.right(), display.bottom()));
+        const QString path = fixture("display-export");
+        const std::vector<float> red = {0.f, .1f, .2f, .3f, .4f, .5f, .6f, .7f, .8f, .9f, 1.f, .25f};
+        writeFixture(path, 4, 3, {{"R", red}, {"G", std::vector<float>(12, .25f)},
+                                 {"B", std::vector<float>(12, .5f)}, {"A", std::vector<float>(12, 0.f)}},
+                     -2, -1, 1.f, 1, &header);
+        OpenEXRImage source(path, nullptr);
+        RGBFramebufferWidget rgbPage;
+        YFramebufferWidget scalarPage;
+        RGBFramebufferModel rgb("");
+        YFramebufferModel scalar("R");
+        rgbPage.setModel(&rgb);
+        scalarPage.setModel(&scalar);
+        rgb.load(source.sharedEXR(), 0, {{"R", "G", "B", "A"}});
+        scalar.load(source.sharedEXR(), 0);
+        QTRY_VERIFY(rgb.isPreviewReady() && scalar.isPreviewReady());
+        const auto* rgbCrop = rgbPage.findChild<CropIndicator*>();
+        const auto* scalarCrop = scalarPage.findChild<CropIndicator*>();
+        QVERIFY(rgbCrop && scalarCrop);
+        QVERIFY(!rgbCrop->isHidden() && !scalarCrop->isHidden());
+        QCOMPARE(rgbCrop->toolTip(), scalarCrop->toolTip());
+        for (const FramebufferModel* model : {static_cast<FramebufferModel*>(&rgb),
+                                              static_cast<FramebufferModel*>(&scalar)}) {
+            const QImage preview = PreviewImage::render(*model);
+            QCOMPARE(preview.size(), display.size());
+            for (int y = 0; y < preview.height(); ++y)
+                for (int x = 0; x < preview.width(); ++x) {
+                    const QPoint file = display.topLeft() + QPoint(x, y);
+                    const QColor expected = data.contains(file)
+                      ? model->getLoadedImage().pixelColor(file - data.topLeft()) : QColor(Qt::transparent);
+                    QCOMPARE(preview.pixelColor(x, y), expected);
+                }
+            ImageSave::Source input;
+            input.activeModel = model;
+            input.sourceImage = &source;
+            ImageSave::Options options;
+            options.path = m_directory.filePath(model == &rgb ? "display-rgb.png" : "display-r.png");
+            QCOMPARE(ImageSave::save(input, options).status, ImageSave::StatusSaved);
+            QCOMPARE(QImage(options.path).convertToFormat(preview.format()), preview);
+            if (!data.intersects(display)) {
+                options.format = ImageSave::FormatJpeg;
+                options.path += ".jpg";
+                QCOMPARE(ImageSave::save(input, options).status, ImageSave::StatusSaved);
+                const QImage jpeg(options.path);
+                QCOMPARE(jpeg.size(), display.size());
+                for (int y = 0; y < jpeg.height(); ++y)
+                    for (int x = 0; x < jpeg.width(); ++x)
+                        QCOMPARE(jpeg.pixelColor(x, y), QColor(Qt::black));
+                GraphicsView emptyView;
+                emptyView.resize(300, 200);
+                emptyView.setModel(model);
+                emptyView.show();
+                QSignalSpy reset(&emptyView, &GraphicsView::resetParametersRequested);
+                QSignalSpy minimal(&emptyView, &GraphicsView::minimalViewRequested);
+                const QPoint center = emptyView.mapFromScene(emptyView.sceneRect().center());
+                QTest::mouseClick(emptyView.viewport(), Qt::RightButton, Qt::NoModifier, center);
+                QCOMPARE(reset.count(), 1);
+                QTest::mouseDClick(emptyView.viewport(), Qt::LeftButton, Qt::NoModifier, center);
+                QCOMPARE(minimal.count(), 1);
+            }
+        }
+        QVERIFY(scalar.getRawPixels() == red);
+        QVERIFY(scalar.getColorInfo(0, 0).find("x: -2 y: -1") == 0);
+        for (auto target : {ImageSave::TargetActiveOriginal, ImageSave::TargetLayeredOriginal}) {
+            ImageSave::Source input;
+            input.activeModel = &rgb;
+            input.sourceImage = &source;
+            ImageSave::Options options;
+            options.target = target;
+            options.format = ImageSave::FormatExr;
+            options.pixelType = ImageSave::PixelFloat;
+            options.path = fixture(QString("display-raw-%1").arg(int(target)));
+            QCOMPARE(ImageSave::save(input, options).status, ImageSave::StatusSaved);
+            OpenEXRImage exported(options.path, nullptr);
+            RGBFramebufferModel roundTrip("");
+            roundTrip.load(exported.sharedEXR(), 0, {{"R", "G", "B", "A"}});
+            QTRY_VERIFY(roundTrip.isPreviewReady());
+            QCOMPARE(roundTrip.getDataWindow(), data);
+            QCOMPARE(roundTrip.getDisplayWindow(), display);
+            QVERIFY(roundTrip.getRawPixels() == rgb.getRawPixels());
+        }
+    }
+
+    void displayWindowClipsMarkersBeforeLayout()
+    {
+        Imf::Header header(64, 64);
+        header.displayWindow() = Imath::Box2i(Imath::V2i(32, 0), Imath::V2i(95, 63));
+        std::vector<float> samples(64 * 64, .25f);
+        samples[32 * 64 + 30] = std::numeric_limits<float>::quiet_NaN(); // Just outside crop.
+        samples[32 * 64 + 48] = std::numeric_limits<float>::infinity();
+        const QString path = fixture("display-markers");
+        writeFixture(path, 64, 64, {{"V", samples}}, 0, 0, 2.f, 1, &header);
+        OpenEXRImage source(path, nullptr);
+        YFramebufferModel model("V");
+        model.load(source.sharedEXR(), 0);
+        QTRY_VERIFY(model.isPreviewReady());
+        const QImage base = model.getLoadedImage();
+        model.setHighlightNonFinite(true);
+        for (int maxWidth : {0, 64}) {
+            const QImage output = PreviewImage::render(model, maxWidth);
+            QCOMPARE(output.size(), maxWidth ? QSize(64, 32) : QSize(128, 64));
+            bool cyan = false;
+            for (int y = 0; y < output.height(); ++y)
+                for (int x = 0; x < output.width(); ++x) {
+                    const QColor pixel = output.pixelColor(x, y);
+                    if (x >= output.width() / 2) QCOMPARE(pixel.alpha(), 0);
+                    QVERIFY(!(pixel.red() > pixel.green() && pixel.blue() > pixel.green()));
+                    cyan |= pixel.green() > 200 && pixel.blue() > 200 && pixel.red() < 50;
+                }
+            QVERIFY(cyan);
+        }
+        QCOMPARE(model.getLoadedImage(), base);
+        QCOMPARE(model.getDatasetNaNCount(), uint64_t(1));
+        QVERIFY(std::isnan(model.getRawPixels()[32 * 64 + 30]));
+    }
+
+    void displayWindowViewCoordinatesCopyAndRestore()
+    {
+        Imf::Header header(4, 3);
+        header.displayWindow() = Imath::Box2i(Imath::V2i(-1, 0), Imath::V2i(2, 2));
+        const QString path = fixture("display-view");
+        writeFixture(path, 4, 3, {{"Y", std::vector<float>(12, .5f)}}, -2, -1, 2.f, 1, &header);
+        MainWindow window;
+        window.resize(800, 600);
+        window.show();
+        window.open(path);
+        QTRY_VERIFY(window.findChild<ImageFileWidget*>());
+        auto* document = window.findChild<ImageFileWidget*>();
+        QTRY_VERIFY(document->activeFramebufferModel() && document->activeFramebufferModel()->isPreviewReady());
+        auto* view = document->activeGraphicsView();
+        auto* model = document->activeFramebufferModel();
+        QVERIFY(!document->findChild<CropIndicator*>()->isHidden());
+        QCOMPARE(view->sceneRect(), QRectF(2., 1., 8., 3.));
+        view->setZoomLevel(20.);
+        QSignalSpy pixels(view, &GraphicsView::queryPixelInfo);
+        for (const QPointF scenePoint : {QPointF(1., .5), QPointF(9., 2.5), QPointF(5., 2.5)}) {
+            pixels.clear();
+            QTest::mouseMove(view->viewport(), view->mapFromScene(scenePoint));
+            view->refreshPixelInfo();
+            QVERIFY(!pixels.isEmpty());
+            QCOMPARE(pixels.last()[0].toInt(), scenePoint.x() == 5. ? 2 : -1);
+            QCOMPARE(pixels.last()[1].toInt(), scenePoint.x() == 5. ? 2 : -1);
+        }
+        // Rendering a larger scene area must not reveal the cropped source pixels.
+        QImage sceneImage(8, 3, QImage::Format_ARGB32_Premultiplied);
+        sceneImage.fill(Qt::transparent);
+        {
+            QPainter painter(&sceneImage);
+            view->scene()->render(&painter, QRectF(0, 0, 8, 3), QRectF(0, 0, 8, 3));
+        }
+        QCOMPARE(sceneImage.pixelColor(0, 0).alpha(), 0);
+        QCOMPARE(sceneImage.pixelColor(2, 1).alpha(), 255);
+        auto* scalarPage = document->findChild<YFramebufferWidget*>();
+        QVERIFY(scalarPage);
+        auto previewState = scalarPage->previewState();
+        previewState.highlightNonFinite = true;
+        scalarPage->restorePreviewState(previewState);
+        QTRY_VERIFY(model->isPreviewReady());
+        auto* copy = window.findChild<QAction*>("action_CopyImage");
+        QVERIFY(copy && copy->isEnabled());
+        copy->trigger();
+        const QImage copied = QApplication::clipboard()->image();
+        QCOMPARE(copied.size(), QSize(8, 3));
+        QCOMPARE(copied.pixelColor(7, 2).alpha(), 0);
+        const auto state = view->viewState();
+        QVERIFY(QMetaObject::invokeMethod(&window, "toggleMinimalView"));
+        auto* minimal = window.centralWidget()->findChild<GraphicsView*>();
+        QVERIFY(minimal);
+        const auto* minimalCrop = window.centralWidget()->findChild<CropIndicator*>();
+        QVERIFY(minimalCrop && !minimalCrop->isHidden());
+        QCOMPARE(minimalCrop->toolTip(), document->findChild<CropIndicator*>()->toolTip());
+        QCOMPARE(minimal->sceneRect(), QRectF(2., 1., 8., 3.));
+        // Padding is an interactive part of the canvas, despite having no source values.
+        QSignalSpy reset(minimal, &GraphicsView::resetParametersRequested);
+        QTest::mouseClick(minimal->viewport(), Qt::RightButton, Qt::NoModifier,
+                          minimal->mapFromScene(QPointF(9., 2.5)));
+        QCOMPARE(reset.count(), 1);
+        QVERIFY(model->highlightNonFinite());
+        QVERIFY(QMetaObject::invokeMethod(&window, "toggleMinimalView"));
+        QCOMPARE(view->viewState().zoom, state.zoom);
+        QVERIFY(QLineF(view->viewState().center, state.center).length() < 1.5);
+        document->refresh();
+        QTRY_VERIFY(!document->isRefreshInProgress());
+        QTRY_VERIFY(document->activeFramebufferModel()->isPreviewReady());
+        QCOMPARE(document->activeGraphicsView()->sceneRect(), QRectF(2., 1., 8., 3.));
+        QCOMPARE(document->activeGraphicsView()->viewState().zoom, state.zoom);
+        QVERIFY(document->activeFramebufferModel()->highlightNonFinite());
+        QVERIFY(!document->findChild<CropIndicator*>()->isHidden());
     }
 
     void refreshPreservesPreviewAndFailedRefreshKeepsSource()

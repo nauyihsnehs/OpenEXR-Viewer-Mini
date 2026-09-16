@@ -87,33 +87,43 @@
         <widget class="QSpinBox" name="qualitySpinBox"/>
        </item>
        <item row="2" column="0">
+        <widget class="QLabel" name="jpegBackgroundLabel">
+         <property name="text">
+          <string>Transparency background:</string>
+         </property>
+        </widget>
+       </item>
+       <item row="2" column="1">
+        <widget class="QComboBox" name="jpegBackgroundCombo"/>
+       </item>
+       <item row="3" column="0">
         <widget class="QLabel" name="bracketCountLabel">
          <property name="text">
           <string>Count:</string>
          </property>
         </widget>
        </item>
-       <item row="2" column="1">
+       <item row="3" column="1">
         <widget class="QComboBox" name="bracketCountCombo"/>
        </item>
-       <item row="3" column="0">
+       <item row="4" column="0">
         <widget class="QLabel" name="bracketStepLabel">
          <property name="text">
           <string>Step EV:</string>
          </property>
         </widget>
        </item>
-       <item row="3" column="1">
+       <item row="4" column="1">
         <widget class="QDoubleSpinBox" name="bracketStepSpinBox"/>
        </item>
-       <item row="4" column="0">
+       <item row="5" column="0">
         <widget class="QLabel" name="bracketCenterLabel">
          <property name="text">
           <string>Center EV:</string>
          </property>
         </widget>
        </item>
-       <item row="4" column="1">
+       <item row="5" column="1">
         <widget class="QDoubleSpinBox" name="bracketCenterSpinBox"/>
        </item>
       </layout>

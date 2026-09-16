@@ -78,6 +78,8 @@ ImageSave::Options SaveImageDialog::options() const
     options.path = ui->pathEdit->text().trimmed();
     options.maxWidth = ui->sizeCombo->currentData().toInt();
     options.quality = ui->qualitySpinBox->value();
+    options.jpegBackground = static_cast<ImageSave::JpegBackground>(
+      ui->jpegBackgroundCombo->currentData().toInt());
     options.compression =
       static_cast<ImageSave::ExrCompression>(ui->compressionCombo->currentData().toInt());
     options.pixelType =
@@ -158,6 +160,8 @@ void SaveImageDialog::setupOptions()
 
     ui->qualitySpinBox->setRange(1, 100);
     ui->qualitySpinBox->setValue(90);
+    ui->jpegBackgroundCombo->addItem(tr("Black (0)"), ImageSave::BackgroundBlack);
+    ui->jpegBackgroundCombo->addItem(tr("White (1)"), ImageSave::BackgroundWhite);
 
     ui->bracketCountCombo->addItem(tr("3"), 3);
     ui->bracketCountCombo->addItem(tr("5"), 5);
@@ -211,6 +215,7 @@ void SaveImageDialog::restoreLastOptions()
 
     setComboData(ui->sizeCombo, s_lastOptions.maxWidth);
     ui->qualitySpinBox->setValue(s_lastOptions.quality);
+    setComboData(ui->jpegBackgroundCombo, s_lastOptions.jpegBackground);
 
     setComboData(ui->compressionCombo, s_lastOptions.compression);
     setComboData(ui->pixelTypeCombo, s_lastOptions.pixelType);
@@ -272,6 +277,8 @@ void SaveImageDialog::updateOptions()
       preview || bracket ? ui->previewPage : exr ? ui->exrPage : ui->hdrPage);
     ui->qualityLabel->setEnabled(jpeg);
     ui->qualitySpinBox->setEnabled(jpeg);
+    ui->jpegBackgroundLabel->setVisible(preview && jpeg);
+    ui->jpegBackgroundCombo->setVisible(preview && jpeg);
     ui->bracketCountLabel->setVisible(bracket);
     ui->bracketCountCombo->setVisible(bracket);
     ui->bracketStepLabel->setVisible(bracket);

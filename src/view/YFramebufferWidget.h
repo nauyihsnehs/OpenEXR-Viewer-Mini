@@ -44,6 +44,8 @@ namespace Ui
     class YFramebufferWidget;
 }
 
+class CropIndicator;
+
 class YFramebufferWidget: public QWidget
 {
     Q_OBJECT
@@ -93,5 +95,6 @@ class YFramebufferWidget: public QWidget
     bool                    m_autoRange = false;
     Ui::YFramebufferWidget* ui;
     YFramebufferModel*      m_model;
+    CropIndicator*          m_cropIndicator;
     double                  m_zoomLevel;
 };

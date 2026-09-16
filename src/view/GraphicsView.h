@@ -35,6 +35,8 @@
 #include <QPointer>
 #include <model/framebuffer/FramebufferModel.h>
 
+class QGraphicsRectItem;
+
 class GraphicsView: public QGraphicsView
 {
     Q_OBJECT
@@ -94,6 +96,7 @@ class GraphicsView: public QGraphicsView
     void queryPixelAt(const QPoint& position);
     QPointer<const FramebufferModel> _model;
     QGraphicsPixmapItem*             _imageItem;
+    QGraphicsRectItem*               _displayClip;
     QPoint                           _startDrag;
     bool                             _dragging  = false;
     bool                             _imageWindow = false;
@@ -102,7 +105,6 @@ class GraphicsView: public QGraphicsView
     QPoint                           _windowDragOffset;
     double                           _zoomLevel = 1.;
     bool                             _autoscale = true;
-    QRectF                           _dataWindow;
     QRectF                           _displayWindow;
     bool                             _restorePending    = false;
     ViewState                        _pendingState;

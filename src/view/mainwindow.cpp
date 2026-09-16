@@ -35,7 +35,7 @@
 #include "WorkspaceWidgets.h"
 #include "MinimalImageWidget.h"
 #include "RGBFramebufferWidget.h"
-#include <util/AnomalyMarkers.h>
+#include <util/PreviewImage.h>
 #include "YFramebufferWidget.h"
 #include <QShortcut>
 #include <QSignalBlocker>
@@ -635,7 +635,7 @@ ImageFileWidget* MainWindow::currentFileWidget() const
 }
 
 
-void MainWindow::copyActiveImage(bool fullResolution) const
+void MainWindow::copyActiveImage(bool fullResolution)
 {
     ImageFileWidget*        widget = currentFileWidget();
     const FramebufferModel* model
@@ -643,15 +643,12 @@ void MainWindow::copyActiveImage(bool fullResolution) const
 
     if (!model || !model->isPreviewReady()) return;
 
-    QImage image = model->getLoadedImage();
-    if (image.isNull()) return;
-
-    if (!fullResolution && image.width() > s_clipboardMaxWidth) {
-        image
-          = image.scaledToWidth(s_clipboardMaxWidth, Qt::SmoothTransformation);
+    const QImage image = PreviewImage::render(*model, fullResolution ? 0 : s_clipboardMaxWidth);
+    if (image.isNull()) {
+        QMessageBox::warning(this, tr("Copy Preview"),
+                            tr("Unable to allocate the preview image. Try a smaller output size."));
+        return;
     }
-
-    AnomalyMarkers::composite(image, *model);
     QApplication::clipboard()->setImage(image);
 }
 
@@ -966,8 +963,9 @@ void MainWindow::resizeMinimalView(double zoom)
     const QPoint center = frameGeometry().center();
     const QRect available = minimalScreenGeometry(center);
     const int footer = m_minimalPage->footerHeight();
-    const double imageWidth = m_minimalModel->width() * double(m_minimalModel->pixelAspectRatio());
-    const double imageHeight = m_minimalModel->height();
+    const QRectF canvas = PreviewImage::Geometry(*m_minimalModel).sceneWindow();
+    const double imageWidth = canvas.width();
+    const double imageHeight = canvas.height();
     if (imageWidth <= 0. || imageHeight <= 0. || !std::isfinite(imageWidth)) return;
     const double maximum = qMin(available.width() / imageWidth,
                                 qMax(1, available.height() - footer) / imageHeight);
@@ -1003,9 +1001,11 @@ void MainWindow::updateMinimalSummary()
     else if (auto* scalar = qobject_cast<YFramebufferWidget*>(m_minimalPreview.data()))
         parameter = scalar->currentParameterText();
     const QString file = m_openFileTabs->tabText(m_openFileTabs->currentIndex());
-    m_minimalPage->setSummary(tr("%1 | %2 x %3 | %4% | %5")
-      .arg(file).arg(m_minimalModel->width()).arg(m_minimalModel->height())
-      .arg(m_minimalPage->view()->viewState().zoom * 100., 0, 'f', 1).arg(parameter));
+    const QSize displaySize = m_minimalModel->getDisplayWindow().size();
+    m_minimalPage->setSummary(tr("%1 | Display %2 x %3 | %4% | %5")
+      .arg(file).arg(displaySize.width()).arg(displaySize.height())
+      .arg(m_minimalPage->view()->viewState().zoom * 100., 0, 'f', 1).arg(parameter),
+      m_minimalModel);
 }
 
 void MainWindow::resetMinimalParameters()
