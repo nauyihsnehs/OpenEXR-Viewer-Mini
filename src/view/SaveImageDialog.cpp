@@ -8,6 +8,7 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QPushButton>
+#include <QStandardItemModel>
 
 namespace
 {
@@ -108,11 +109,21 @@ void SaveImageDialog::setStatus(const QString& message, bool error)
 }
 
 
-void SaveImageDialog::setSourceState(bool available, bool previewReady, const QString& error)
+void SaveImageDialog::setSourceState(bool available, bool previewReady, const QString& error, bool derived)
 {
     m_sourceAvailable = available;
     m_previewReady = previewReady;
     m_previewError = error;
+    m_derived = derived;
+    auto* items = qobject_cast<QStandardItemModel*>(ui->targetCombo->model());
+    for (int i = 0; i < ui->targetCombo->count(); ++i) {
+        const int value = ui->targetCombo->itemData(i).toInt();
+        const bool enabled = !derived || value == ImageSave::TargetPreview || value == ImageSave::TargetLayeredOriginal;
+        if (items) items->item(i)->setEnabled(enabled);
+        ui->targetCombo->setItemData(i, enabled ? QString() : tr("Anaglyph is a derived preview. Select an eye layer for source/HDR export."), Qt::ToolTipRole);
+    }
+    if (derived && target() != ImageSave::TargetPreview && target() != ImageSave::TargetLayeredOriginal)
+        setComboData(ui->targetCombo, ImageSave::TargetPreview);
     updateSaveAvailability();
 }
 
@@ -120,7 +131,8 @@ void SaveImageDialog::setSourceState(bool available, bool previewReady, const QS
 void SaveImageDialog::updateSaveAvailability()
 {
     const bool waiting = target() == ImageSave::TargetPreview && !m_previewReady;
-    ui->buttonBox->button(QDialogButtonBox::Save)->setEnabled(m_sourceAvailable && !waiting);
+    const bool unsupported = m_derived && target() != ImageSave::TargetPreview && target() != ImageSave::TargetLayeredOriginal;
+    ui->buttonBox->button(QDialogButtonBox::Save)->setEnabled(m_sourceAvailable && !waiting && !unsupported);
     if (!m_sourceAvailable || waiting) {
         const QString message = !m_sourceAvailable ? tr("Image is no longer available.")
                                   : !m_previewError.isEmpty() ? m_previewError
@@ -315,6 +327,7 @@ void SaveImageDialog::requestSave()
     updateSaveAvailability();
     if (!m_sourceAvailable || (target() == ImageSave::TargetPreview && !m_previewReady))
         return;
+    if (m_derived && target() != ImageSave::TargetPreview && target() != ImageSave::TargetLayeredOriginal) return;
     updatePathExtension();
 
     if (ui->pathEdit->text().trimmed().isEmpty()) {

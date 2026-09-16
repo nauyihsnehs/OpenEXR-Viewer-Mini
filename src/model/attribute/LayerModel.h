@@ -35,9 +35,11 @@
 #include <QAbstractItemModel>
 
 #include <memory>
+#include <array>
 
 
 #include <model/attribute/LayerItem.h>
+#include <util/ViewMetadata.h>
 
 #include <OpenEXR/ImfMultiPartInputFile.h>
 
@@ -59,6 +61,14 @@ class LayerModel: public QAbstractItemModel
 
     LayerItem*       getRoot() const { return m_rootItem.get(); }
     const LayerItem* defaultDisplayLayer() const;
+    bool hasViews() const { return m_hasViews; }
+    QString viewLabel(const LayerItem* item) const;
+    struct StereoLayers {
+        std::array<const LayerItem*, 2> eyes = {{nullptr, nullptr}};
+        std::array<QString, 2> eyeErrors;
+        QString anaglyphError;
+    };
+    StereoLayers stereoLayers() const;
     const LayerItem*
     findChannel(int part, const std::string& channelName) const;
 
@@ -86,6 +96,10 @@ class LayerModel: public QAbstractItemModel
     int columnCount(const QModelIndex& parent = QModelIndex()) const override;
 
   private:
+    bool layerView(const LayerItem* item, std::string& view) const;
+    std::vector<ViewMetadata> m_views;
+    bool m_hasViews = false;
+    std::string m_defaultView;
     std::unique_ptr<LayerItem> m_rootItem;
 
     Imf::MultiPartInputFile& m_fileHandle;

@@ -33,6 +33,7 @@ inline QString framebufferSummaryText(const FramebufferModel* model)
         if (model->isImageLoaded() && !model->isPreviewReady())
             return "Rendering...";
     }
-    return "Size " + framebufferSizeText(model) + "   Max "
+    return "Size " + framebufferSizeText(model)
+           + (model && model->isDerivedPreview() ? "   Two-eye source max " : "   Max ")
            + framebufferDatasetValueText(model, false);
 }

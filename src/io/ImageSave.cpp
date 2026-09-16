@@ -37,6 +37,7 @@
 #include <exception>
 #include <stdexcept>
 #include <vector>
+#include <utility>
 
 namespace
 {
@@ -59,6 +60,7 @@ namespace
         Imath::Box2i             displayWindow;
         bool                     hasChromaticities = false;
         Imf::Chromaticities       chromaticities;
+        ViewMetadata             views;
         std::vector<ChannelData> channels;
     };
 
@@ -132,12 +134,6 @@ namespace
             }
         }
 
-        if (indexes.empty()) {
-            for (int i = 0; i < static_cast<int>(names.size()); i++) {
-                indexes.push_back(i);
-            }
-        }
-
         return indexes;
     }
 
@@ -179,6 +175,7 @@ namespace
     {
         PartData part;
         part.name        = "active";
+        part.views       = model->rawViews();
         part.width       = model->width();
         part.height      = model->height();
         part.pixelAspect = model->pixelAspectRatio();
@@ -248,6 +245,7 @@ namespace
 
         PartData part;
         part.width         = dataWindow.max.x - dataWindow.min.x + 1;
+        part.views         = ViewMetadata::read(header);
         part.height        = dataWindow.max.y - dataWindow.min.y + 1;
         part.pixelAspect   = header.pixelAspectRatio();
         part.dataWindow    = dataWindow;
@@ -304,13 +302,7 @@ namespace
             part.channels.push_back(channel);
         }
 
-        if (part.channels.empty() && scope == ImageSave::ChannelsRgb) {
-            return readSourcePart(
-              image,
-              partIndex,
-              ImageSave::ChannelsAll,
-              prefixNames);
-        }
+        if (part.channels.empty()) return part;
 
         Imf::FrameBuffer framebuffer;
 
@@ -356,7 +348,9 @@ namespace
                                     ? part.pixelAspect
                                     : 1.f;
         Imf::Header header(part.displayWindow, part.dataWindow, pixelAspect);
+        if (!part.name.empty()) header.setName(part.name);
         header.compression() = exrCompression(options.compression);
+        if (options.metadata == ImageSave::MetadataBasic) part.views.write(header);
         if (options.metadata == ImageSave::MetadataBasic && part.hasChromaticities)
             header.insert("chromaticities", Imf::ChromaticitiesAttribute(part.chromaticities));
 
@@ -394,6 +388,9 @@ namespace
     ImageSave::Result
     writeSinglePartExr(const PartData& part, const ImageSave::Options& options)
     {
+        if (part.channels.empty())
+            return result(ImageSave::StatusFailed,
+                          QObject::tr("No channels match the selected channel filter."));
         try {
             const QByteArray filename = nativePath(options.path);
             Imf::Header      header   = exrHeader(part, options);
@@ -419,7 +416,7 @@ namespace
         if (parts.empty()) {
             return result(
               ImageSave::StatusFailed,
-              QObject::tr("No source layers to save."));
+              QObject::tr("No channels match the selected channel filter."));
         }
 
         if (parts.size() == 1) return writeSinglePartExr(parts[0], options);
@@ -430,7 +427,7 @@ namespace
 
             for (const PartData& part : parts) {
                 headers.push_back(exrHeader(part, options));
-                headers.back().setName(part.name);
+                headers.back().setType(Imf::SCANLINEIMAGE);
             }
 
             const QByteArray         filename = nativePath(options.path);
@@ -463,7 +460,7 @@ namespace
         if (parts.empty()) {
             return result(
               ImageSave::StatusFailed,
-              QObject::tr("No source layers to save."));
+              QObject::tr("No channels match the selected channel filter."));
         }
 
         PartData flattened;
@@ -485,13 +482,13 @@ namespace
                   QObject::tr("Cannot flatten parts with different chromaticities. Preserve parts instead."));
             }
             flattened.hasChromaticities |= part.hasChromaticities;
-            if (
-              part.width != flattened.width
-              || part.height != flattened.height) {
+            if (part.dataWindow != flattened.dataWindow
+                || part.displayWindow != flattened.displayWindow
+                || part.pixelAspect != flattened.pixelAspect) {
                 return result(
                   ImageSave::StatusFailed,
                   QObject::tr(
-                    "Cannot flatten parts with different dimensions."));
+                    "Cannot flatten parts with different windows or pixel aspect ratios. Preserve parts instead."));
             }
 
             for (const ChannelData& channel : part.channels) {
@@ -760,11 +757,18 @@ namespace
         Imf::MultiPartInputFile& file      = image->getEXR();
         const int                partCount = file.parts();
         parts.reserve(partCount);
-        const bool prefix = options.multipart == ImageSave::MultipartFlatten;
+        const bool prefix = partCount > 1 && options.multipart == ImageSave::MultipartFlatten;
+        if (prefix) {
+            for (int i = 0; i < partCount; ++i) {
+                if (ViewMetadata::read(file.header(i)).present())
+                    throw std::runtime_error(
+                      "Flattening multiview parts is not supported. Use Preserve multipart instead.");
+            }
+        }
 
         for (int i = 0; i < partCount; i++) {
-            parts.push_back(
-              readSourcePart(image, i, options.channelScope, prefix));
+            PartData part = readSourcePart(image, i, options.channelScope, prefix);
+            if (!part.channels.empty()) parts.push_back(std::move(part));
         }
 
         return parts;
@@ -789,7 +793,7 @@ namespace
               QString::fromLocal8Bit(e.what()));
         }
 
-        if (options.multipart == ImageSave::MultipartFlatten) {
+        if (options.multipart == ImageSave::MultipartFlatten && image->getEXR().parts() > 1) {
             return writeFlattenedExr(parts, options);
         }
 
@@ -875,6 +879,11 @@ namespace ImageSave
 
     Result save(const Source& source, const Options& options)
     {
+        if (source.activeModel && source.activeModel->isDerivedPreview()
+            && (options.format == FormatHdr
+                || (options.target != TargetPreview && options.target != TargetLayeredOriginal)))
+            return result(StatusFailed, QObject::tr(
+              "Anaglyph is a derived preview. Select a left/right source layer for active original, HDR or bracketed export."));
         if (options.conflict == ConflictCancel) {
             return result(StatusCancelled, QObject::tr("Save cancelled."));
         }

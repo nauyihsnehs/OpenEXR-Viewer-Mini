@@ -156,6 +156,7 @@ DecodeResult FramebufferLoader::decode(
     const Imath::Box2i window  = header.dataWindow();
     const Imath::Box2i display = header.displayWindow();
     auto               data    = std::make_shared<FramebufferData>();
+    data->rawViews             = ViewMetadata::read(header);
     data->width                = dimension(window.min.x, window.max.x);
     data->height               = dimension(window.min.y, window.max.y);
     data->pixelAspect          = header.pixelAspectRatio();

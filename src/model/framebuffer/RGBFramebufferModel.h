@@ -71,6 +71,16 @@ class RGBFramebufferModel: public FramebufferModel
 
     virtual ~RGBFramebufferModel();
 
+    struct Input {
+        Input() = default;
+        Input(int partId, LayerType type, const std::array<std::string, 4>& names)
+          : part(partId), layout(type), channels(names) {}
+        int part = 0;
+        LayerType layout = Layer_RGB;
+        std::array<std::string, 4> channels;
+    };
+    void loadStereo(const std::shared_ptr<ExrInput>& file, const std::array<Input, 2>& eyes);
+
     virtual void load(
       const std::shared_ptr<ExrInput>& file,
       int                                             partId,

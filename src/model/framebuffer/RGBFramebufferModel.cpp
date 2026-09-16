@@ -36,6 +36,8 @@
 #include <util/ColorTransform.h>
 #include <cmath>
 #include <sstream>
+#include <limits>
+#include <stdexcept>
 
 RGBFramebufferModel::RGBFramebufferModel(
   const std::string& parentLayerName, LayerType layerType, QObject* parent)
@@ -53,16 +55,82 @@ RGBFramebufferModel::RGBFramebufferModel(
 
 RGBFramebufferModel::~RGBFramebufferModel() = default;
 
+namespace {
+    FramebufferLoader::Layout decodeLayout(RGBFramebufferModel::LayerType type)
+    {
+        return type == RGBFramebufferModel::Layer_RGB ? FramebufferLoader::RGB
+             : type == RGBFramebufferModel::Layer_YC ? FramebufferLoader::Chroma
+                                                     : FramebufferLoader::Luminance;
+    }
+}
+
+void RGBFramebufferModel::loadStereo(const std::shared_ptr<ExrInput>& file,
+                                     const std::array<Input, 2>& eyes)
+{
+    m_channels = {};
+    startLoading([file, eyes](const Cancellation& cancel) -> DecodeResult {
+        if (!file || !file->file) throw std::runtime_error("No source image.");
+        if (!ViewMetadata::stereoGeometryMatches(file->file->header(eyes[0].part), file->file->header(eyes[1].part)))
+            throw std::runtime_error("Stereo views require identical display windows and pixel aspect ratios.");
+        auto data = std::make_shared<FramebufferData>();
+        for (size_t i = 0; i < eyes.size(); ++i) {
+            if (cancel->load()) return DecodeResult();
+            auto decoded = FramebufferLoader::decode(file, eyes[i].part,
+              decodeLayout(eyes[i].layout), eyes[i].channels, cancel);
+            if (!decoded.data) return decoded;
+            data->stereo[i] = decoded.data;
+            data->stereoChannels[i] = eyes[i].channels;
+        }
+        const auto& left = *data->stereo[0];
+        const auto& right = *data->stereo[1];
+        const int x = std::min(left.dataWindow.left(), right.dataWindow.left());
+        const int y = std::min(left.dataWindow.top(), right.dataWindow.top());
+        const int64_t width = int64_t(std::max(left.dataWindow.right(), right.dataWindow.right())) - x + 1;
+        const int64_t height = int64_t(std::max(left.dataWindow.bottom(), right.dataWindow.bottom())) - y + 1;
+        const int64_t limit = std::numeric_limits<int>::max() / 4;
+        if (width <= 0 || height <= 0 || width > limit || height > limit || width * height > limit)
+            throw std::runtime_error("The stereo image is too large to display safely.");
+        data->width = int(width);
+        data->height = int(height);
+        data->dataWindow = QRect(x, y, data->width, data->height);
+        data->displayWindow = left.displayWindow;
+        data->pixelAspect = left.pixelAspect;
+        for (const auto& eye : data->stereo) {
+            data->nanCount += eye->nanCount;
+            data->infCount += eye->infCount;
+            data->positiveInfCount += eye->positiveInfCount;
+            data->negativeInfCount += eye->negativeInfCount;
+            if (eye->hasFiniteSamples) {
+                data->minimum = data->hasFiniteSamples ? std::min(data->minimum, eye->minimum) : eye->minimum;
+                data->maximum = data->hasFiniteSamples ? std::max(data->maximum, eye->maximum) : eye->maximum;
+                data->hasFiniteSamples = true;
+            }
+            if (eye->hasFiniteLuminance) {
+                data->luminanceMin = data->hasFiniteLuminance ? std::min(data->luminanceMin, eye->luminanceMin) : eye->luminanceMin;
+                data->luminanceMax = data->hasFiniteLuminance ? std::max(data->luminanceMax, eye->luminanceMax) : eye->luminanceMax;
+                data->hasFiniteLuminance = true;
+            }
+            const QPoint offset = eye->dataWindow.topLeft() - data->dataWindow.topLeft();
+            for (auto region : eye->anomalyRegions) {
+                if (cancel->load()) return DecodeResult();
+                region.bounds.translate(offset);
+                data->anomalyRegions.push_back(region);
+            }
+        }
+        if (cancel->load()) return DecodeResult();
+        DecodeResult result;
+        result.data = data;
+        return result;
+    });
+}
+
 void RGBFramebufferModel::load(
   const std::shared_ptr<ExrInput>& file,
   int                                             partId,
   const std::array<std::string, 4>&               channels)
 {
     m_channels = channels;
-    const auto layout = m_layerType == Layer_RGB ? FramebufferLoader::RGB
-                        : m_layerType == Layer_YC
-                          ? FramebufferLoader::Chroma
-                          : FramebufferLoader::Luminance;
+    const auto layout = decodeLayout(m_layerType);
     startLoading([file, partId, channels, layout](const Cancellation& cancel) {
         return FramebufferLoader::decode(
           file,
@@ -77,6 +145,30 @@ std::string RGBFramebufferModel::getColorInfo(int x, int y) const
 {
     if (!isImageLoaded() || x < 0 || x >= width() || y < 0 || y >= height())
         return "";
+    if (isDerivedPreview()) {
+        const QPoint position = getDataWindow().topLeft() + QPoint(x, y);
+        if (!pixelCoverage().contains(QPoint(x, y))) return "";
+        std::stringstream text;
+        text << "x: " << position.x() << " y: " << position.y();
+        for (size_t i = 0; i < 2; ++i) {
+            const auto& eye = *m_data->stereo[i];
+            text << (i == 0 ? " | Left:" : " | Right:");
+            if (!eye.dataWindow.contains(position)) {
+                text << " no data";
+                continue;
+            }
+            const QPoint local = position - eye.dataWindow.topLeft();
+            const auto& raw = eye.sourcePixels.empty() ? eye.pixels : eye.sourcePixels;
+            const float* pixel = &raw[4 * (size_t(local.y()) * eye.width + local.x())];
+            for (int c = 0; c < 4; ++c) {
+                const auto& name = m_data->stereoChannels[i][c];
+                if (!name.empty())
+                    text << " " << name << ": " << PixelDiagnostics::sampleText(pixel[c])
+                         << sampleLocationInfo(eye, c, local.x(), local.y());
+            }
+        }
+        return text.str();
+    }
     const float*      pixel = &getRawPixels()[4 * (size_t(y) * width() + x)];
     std::stringstream text;
     text << "x: " << x + getDataWindow().x()
@@ -97,7 +189,7 @@ std::string RGBFramebufferModel::getColorInfo(int x, int y) const
 
 float RGBFramebufferModel::component(int x, int y, int channel) const
 {
-    if (!isImageLoaded() || x < 0 || x >= width() || y < 0 || y >= height())
+    if (!isImageLoaded() || isDerivedPreview() || x < 0 || x >= width() || y < 0 || y >= height())
         return 0.f;
     const auto& pixels = m_layerType == Layer_YC && channel < 3
                            ? getDisplayPixels() : getRawPixels();
@@ -201,40 +293,48 @@ void RGBFramebufferModel::updateImage()
           const auto stride  = image.bytesPerLine();
           const int  threads = renderThreadCount();
           Q_UNUSED(threads);
+          const auto mapColor = [&](const float* pixel, uchar* output) {
+              if (mode == Preview_FalseColor) {
+                  float rgb[3];
+                  colormap->getRGBValue(ToneMapping::luminance(pixel[0], pixel[1], pixel[2]),
+                                       minimum, maximum, rgb);
+                  for (int c = 0; c < 3; ++c) output[c] = ToneMapping::toByte(rgb[c]);
+              } else {
+                  for (int c = 0; c < 3; ++c) {
+                      const double value = mode == Preview_ToneMapping
+                        ? ToneMapping::toSrgb(pixel[c], method, params[0], params[1], params[2], params[3])
+                        : ColorTransform::to_sRGB(exposure * pixel[c]);
+                      output[c] = ToneMapping::toByte(value);
+                  }
+              }
+          };
 #pragma omp parallel for num_threads(                                          \
-    threads) if (data->pixels.size() >= 1048576)
+    threads) if (size_t(data->width) * data->height >= 262144)
           for (int y = 0; y < data->height; ++y) {
               if (cancel->load()) continue;
               uchar*       line = bits + size_t(y) * stride;
-              const float* pixels
-                = data->pixels.data() + size_t(y) * data->width * 4;
               for (int x = 0; x < data->width; ++x) {
-                  const float* pixel = pixels + 4 * x;
-                  if (mode == Preview_FalseColor) {
-                      float rgb[3];
-                      colormap->getRGBValue(
-                        ToneMapping::luminance(pixel[0], pixel[1], pixel[2]),
-                        minimum,
-                        maximum,
-                        rgb);
-                      for (int c = 0; c < 3; ++c)
-                          line[4 * x + c] = ToneMapping::toByte(rgb[c]);
-                  } else {
-                      for (int c = 0; c < 3; ++c) {
-                          const double value = mode == Preview_ToneMapping
-                                ? ToneMapping::toSrgb(
-                                    pixel[c],
-                                    method,
-                                    params[0],
-                                    params[1],
-                                    params[2],
-                                    params[3])
-                                : ColorTransform::to_sRGB(exposure * pixel[c]);
-                          line[4 * x + c] = ToneMapping::toByte(value);
+                  uchar* output = line + 4 * x;
+                  if (data->stereo[0]) {
+                      const QPoint position = data->dataWindow.topLeft() + QPoint(x, y);
+                      uchar eyes[2][3] = {};
+                      bool covered = false;
+                      for (size_t i = 0; i < 2; ++i) {
+                          const auto& eye = *data->stereo[i];
+                          if (!eye.dataWindow.contains(position)) continue;
+                          const QPoint local = position - eye.dataWindow.topLeft();
+                          mapColor(&eye.pixels[4 * (size_t(local.y()) * eye.width + local.x())], eyes[i]);
+                          covered = true;
                       }
+                      output[0] = eyes[0][0];
+                      output[1] = eyes[1][1];
+                      output[2] = eyes[1][2];
+                      output[3] = covered ? 255 : 0;
+                  } else {
+                      mapColor(&data->pixels[4 * (size_t(y) * data->width + x)], output);
+                      // Premultiplied color over black is already RGB.
+                      output[3] = 255;
                   }
-                  // Premultiplied EXR color composited over black is already RGB.
-                  line[4 * x + 3] = 255;
               }
           }
           return cancel->load() ? QImage() : image;

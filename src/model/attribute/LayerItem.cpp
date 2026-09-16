@@ -31,6 +31,7 @@
  */
 
 #include "LayerItem.h"
+#include <util/ViewMetadata.h>
 
 #include <cassert>
 #include <utility>
@@ -158,6 +159,17 @@ void LayerItem::groupLayers()
         if (!matches) continue;
 
         LayerItem*  firstChannel = child(rule.channels[0]);
+        const auto views = ViewMetadata::read(m_fileHandle.header(firstChannel->getPart()));
+        for (int i = 1; i < rule.channelCount; ++i) {
+            const auto* channel = child(rule.channels[i]);
+            if (channel->getPart() != firstChannel->getPart()
+                || views.channelView(channel->m_channelName)
+                     != views.channelView(firstChannel->m_channelName)) {
+                matches = false;
+                break;
+            }
+        }
+        if (!matches) continue;
         std::string layerName    = firstChannel->m_channelName;
         if (!layerName.empty()) layerName.erase(layerName.size() - 1);
 

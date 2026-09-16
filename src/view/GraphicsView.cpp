@@ -376,7 +376,12 @@ void GraphicsView::queryPixelAt(const QPoint& position)
         emit queryPixelInfo(-1, -1);
         return;
     }
-    emit queryPixelInfo(int(std::floor(pixel.x())), int(std::floor(pixel.y())));
+    const QPoint local(int(std::floor(pixel.x())), int(std::floor(pixel.y())));
+    if (!_model->pixelCoverage().contains(local)) {
+        emit queryPixelInfo(-1, -1);
+        return;
+    }
+    emit queryPixelInfo(local.x(), local.y());
 }
 
 void GraphicsView::refreshPixelInfo()

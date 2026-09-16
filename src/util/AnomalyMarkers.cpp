@@ -4,6 +4,7 @@
 #include <model/framebuffer/FramebufferModel.h>
 #include <QImage>
 #include <QPainter>
+#include <QPainterPath>
 #include <algorithm>
 #include <cmath>
 #include <unordered_map>
@@ -106,6 +107,11 @@ void AnomalyMarkers::draw(QPainter& painter, const FramebufferModel& model,
     const auto markers = layout(model, imageToTarget, clip);
     painter.save();
     painter.setClipRect(clip, Qt::IntersectClip);
+    if (model.isDerivedPreview()) {
+        QPainterPath coverage;
+        coverage.addRegion(model.pixelCoverage());
+        painter.setClipPath(imageToTarget.map(coverage), Qt::IntersectClip);
+    }
     painter.setRenderHint(QPainter::Antialiasing);
     painter.setOpacity(1.);
     painter.setCompositionMode(QPainter::CompositionMode_SourceOver);

@@ -92,6 +92,10 @@ class ImageFileWidget: public QWidget
     QString                 activeFramebufferStatusToolTip() const;
     QString                 activeLayerTitleText() const;
     void setRgbPreviewMode(RGBFramebufferModel::PreviewMode mode);
+    enum StereoMode { StereoDefault, StereoLeft, StereoRight, StereoAnaglyph };
+    StereoMode stereoMode() const { return m_stereoMode; }
+    QString stereoUnavailableReason(StereoMode mode) const;
+    void setStereoMode(StereoMode mode);
 
   signals:
     void minimalViewRequested();
@@ -154,6 +158,8 @@ class ImageFileWidget: public QWidget
     static QString layerKey(const LayerItem* item);
     PreparedPreview createPreview(
       const LayerItem* item, OpenEXRImage* source);
+    PreparedPreview createStereoPreview(OpenEXRImage* source);
+    void cancelStereoPreview();
     QMdiSubWindow* installPreview(PreparedPreview& preview);
     SavedDocument captureDocumentState() const;
     void          restorePreview(
@@ -195,6 +201,9 @@ class ImageFileWidget: public QWidget
     QStringList                      m_previewOrder;
     DocumentState                    m_documentState = DocumentPending;
     std::unique_ptr<PreparedPreview> m_initialPrepared;
+    std::unique_ptr<PreparedPreview> m_pendingStereo;
+    StereoMode m_stereoMode = StereoDefault;
+    bool m_selectingStereo = false;
     QPointer<FramebufferModel>       m_initialPreview;
     std::unique_ptr<RefreshTransaction> m_refresh;
 };

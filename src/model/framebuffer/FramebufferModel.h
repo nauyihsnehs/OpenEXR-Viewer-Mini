@@ -36,6 +36,7 @@
 #include <QFutureWatcher>
 #include <QImage>
 #include <QObject>
+#include <QRegion>
 #include <functional>
 #include <string>
 
@@ -52,6 +53,9 @@ class FramebufferModel: public QObject
         return m_data->sourcePixels.empty() ? m_data->pixels : m_data->sourcePixels;
     }
     const std::vector<float>& getDisplayPixels() const { return m_data->pixels; }
+    const ViewMetadata& rawViews() const { return m_data->rawViews; }
+    bool isDerivedPreview() const { return bool(m_data->stereo[0]); }
+    QRegion pixelCoverage() const;
     const Imf::Chromaticities* rawChromaticities() const
     {
         return m_data->hasRawChromaticities ? &m_data->rawChromaticities : nullptr;
@@ -108,6 +112,7 @@ class FramebufferModel: public QObject
 
   protected:
     std::string sampleLocationInfo(size_t channel, int x, int y) const;
+    static std::string sampleLocationInfo(const FramebufferData& data, int component, int x, int y);
     using Decoder  = std::function<DecodeResult(const Cancellation&)>;
     using Renderer = std::function<QImage(const Cancellation&)>;
     void                                   startLoading(Decoder decoder);

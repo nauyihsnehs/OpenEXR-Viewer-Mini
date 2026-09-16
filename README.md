@@ -75,6 +75,30 @@ Viewing controls
 - The export option **Color channels (RGB/YC)** includes both RGB and luminance/chroma
   channels. See the [Chromaticities checklist](docs/chromaticities-images.md) and
   [Luminance/Chroma checklist](docs/luminance-chroma-images.md) for pending visual checks.
+- Multiview files label parts, channels, and previews with their source view and
+  prefer the default view's color layer (right RGBA in Beachball). Mixed-view
+  containers have no single view label; unassigned channels show **No view**.
+  Multipart views come from `view`, not part names; singlepart `multiView` keeps
+  its original default-view order. Basic raw EXR exports retain these attributes;
+  None removes them. **Preserve multipart** keeps part order, names, windows, and
+  channels using scanline storage. Multiview multipart flattening is unsupported.
+  Color-only export skips noncolor parts and reports an error for an empty selection.
+  Beachball is viewed one file at a time, without sequence playback.
+  **View > Show > Stereo** offers **Default**, **Left eye only**, **Right eye only**,
+  and **Anaglyph 3D**, independently for each open file. Eye shortcuts open color
+  layers while leaving the full layer tree available. Anaglyph combines the left
+  red component with the right green/blue components after applying the same
+  display settings to both eyes. It requires a unique pair in the default color
+  layer family with matching display windows and pixel aspect ratios; unavailable
+  choices explain why in their tooltips. Different data windows align by file
+  coordinates, with transparent areas wherever both eyes lack data.
+  Anaglyph readouts show each eye's source samples and its statistics include both
+  eyes. Copies and PNG/JPEG exports include the derived preview. Active original,
+  HDR and bracketed exports require selecting a source eye layer; whole-file EXR
+  export remains available. Refresh and minimal view retain stereo state; opening
+  a source layer manually returns the menu to Default. See the
+  [Beachball checklist](docs/beachball-images.md), including
+  frame 6 cropping and the difference between stored zeros and missing data.
 - RGB false-color and scalar ranges accept scientific notation, including tiny
   values and the full finite FLOAT range. Auto range is unavailable without finite
   samples. A constant range maps finite values to the bottom of the color scale.

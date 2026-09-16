@@ -65,6 +65,7 @@ class QStackedWidget;
 class QToolBar;
 class QMoveEvent;
 class MinimalImageWidget;
+class QActionGroup;
 
 class MainWindow: public QMainWindow
 {
@@ -155,6 +156,7 @@ class MainWindow: public QMainWindow
     void             setupTitleBar();
     void             setupWorkspace();
     void             setupPreviewModeActions();
+    void             setupStereoActions();
     void             setupThemeActions();
     void             applyRgbPreviewMode(RGBFramebufferModel::PreviewMode mode);
     void             applyTheme(const QString& themeName);
@@ -177,6 +179,7 @@ class MainWindow: public QMainWindow
     bool isTitleBarDragArea(const QPoint& pos) const;
 
     Ui::MainWindow* ui;
+    QActionGroup* m_stereoActions = nullptr;
 
     QTabWidget* m_openFileTabs;
     QStackedWidget* m_workspace = nullptr;

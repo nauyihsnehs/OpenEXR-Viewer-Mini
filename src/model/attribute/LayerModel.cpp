@@ -37,10 +37,12 @@
 
 #include <QImage>
 #include <QIcon>
+#include <functional>
 
 namespace
 {
-    const LayerItem* findPreferredLayer(const LayerItem* root)
+    const LayerItem* findPreferredLayer(const LayerItem* root,
+      const std::function<bool(const LayerItem*)>& accept = {})
     {
         static const LayerItem::LayerType priorities[] = {
           LayerItem::RGBA,
@@ -53,11 +55,11 @@ namespace
 
         for (LayerItem::LayerType type : priorities) {
             const LayerItem* item = root->child(type);
-            if (item) return item;
+            if (item && (!accept || accept(item))) return item;
         }
 
         for (LayerItem* child : root->children()) {
-            const LayerItem* item = findPreferredLayer(child);
+            const LayerItem* item = findPreferredLayer(child, accept);
             if (item) return item;
         }
 
@@ -117,6 +119,11 @@ LayerModel::LayerModel(Imf::MultiPartInputFile& file, QObject* parent)
   , m_fileHandle(file)
 {
     const int nParts = file.parts();
+    for (int part = 0; part < nParts; ++part) {
+        m_views.push_back(ViewMetadata::read(file.header(part)));
+        m_hasViews |= m_views.back().present();
+    }
+    if (!m_views.empty()) m_defaultView = m_views.front().defaultView();
 
     // To avoid having an extra item, we only add a root part for multipart files
     if (nParts > 1) {
@@ -162,7 +169,15 @@ LayerModel::~LayerModel() = default;
 
 const LayerItem* LayerModel::defaultDisplayLayer() const
 {
-    const LayerItem* preferred = findPreferredLayer(m_rootItem.get());
+    const LayerItem* preferred = nullptr;
+    if (!m_defaultView.empty()) {
+        preferred = findPreferredLayer(m_rootItem.get(), [this](const LayerItem* item) {
+            std::string view;
+            return item->getType() != LayerItem::Y
+                   && layerView(item, view) && view == m_defaultView;
+        });
+    }
+    if (!preferred) preferred = findPreferredLayer(m_rootItem.get());
     if (preferred && (preferred->getType() == LayerItem::YC
                       || preferred->getType() == LayerItem::YCA)) {
         const auto& channels = m_fileHandle.header(preferred->getPart()).channels();
@@ -191,6 +206,91 @@ LayerModel::findChannel(int part, const std::string& channelName) const
     return ::findChannel(m_rootItem.get(), part, channelName);
 }
 
+
+bool LayerModel::layerView(const LayerItem* item, std::string& view) const
+{
+    if (item->getPixelType() != Imf::PixelType::NUM_PIXELTYPES) {
+        view = m_views[item->getPart()].channelView(item->getOriginalFullName());
+        return true;
+    }
+    bool found = false;
+    for (const auto* child : item->children()) {
+        std::string childView;
+        if (!layerView(child, childView) || (found && view != childView)) return false;
+        view = childView;
+        found = true;
+    }
+    return found;
+}
+
+QString LayerModel::viewLabel(const LayerItem* item) const
+{
+    if (!m_hasViews || !item) return {};
+    std::string view;
+    if (!layerView(item, view)) return {}; // Mixed-view containers have no single label.
+    if (view.empty()) return tr(" [No view]");
+    return view == m_defaultView ? tr(" [%1, default]").arg(QString::fromStdString(view))
+                                : QString(" [%1]").arg(QString::fromStdString(view));
+}
+
+LayerModel::StereoLayers LayerModel::stereoLayers() const
+{
+    StereoLayers result;
+    const auto isColor = [](const LayerItem* item) {
+        return item && (item->getType() == LayerItem::RGB || item->getType() == LayerItem::RGBA
+          || item->getType() == LayerItem::YA || item->getType() == LayerItem::YC
+          || item->getType() == LayerItem::YCA);
+    };
+    // The first real channel supplies the source layer path; part names are irrelevant.
+    const auto path = [this](const LayerItem* color) -> std::string {
+        const auto* channel = color->child(0);
+        const auto& views = m_views[channel->getPart()];
+        std::string name = channel->getOriginalFullName();
+        auto dot = name.find_last_of('.');
+        if (dot == std::string::npos) return std::string();
+        name.erase(dot);
+        if (!views.hasView && !views.channelView(channel->getOriginalFullName()).empty()) {
+            dot = name.find_last_of('.');
+            name = dot == std::string::npos ? std::string() : name.substr(0, dot);
+        }
+        return name;
+    };
+    const auto* preferred = defaultDisplayLayer();
+    std::array<int, 2> counts = {{0, 0}};
+    if (m_hasViews && isColor(preferred)) {
+        const auto family = path(preferred);
+        std::function<void(const LayerItem*)> visit = [&](const LayerItem* item) {
+            if (isColor(item)) {
+                std::string view;
+                if (path(item) == family && layerView(item, view)) {
+                    const int eye = view == "left" ? 0 : view == "right" ? 1 : -1;
+                    if (eye >= 0) {
+                        ++counts[eye];
+                        result.eyes[eye] = item;
+                    }
+                }
+                return;
+            }
+            for (const auto* child : item->children()) visit(child);
+        };
+        visit(m_rootItem.get());
+    }
+    for (size_t i = 0; i < counts.size(); ++i) {
+        if (counts[i] == 1) continue;
+        result.eyes[i] = nullptr;
+        const QString eye = i == 0 ? tr("left") : tr("right");
+        result.eyeErrors[i] = counts[i] ? tr("Multiple %1 color layers match; stereo pairing is ambiguous.").arg(eye)
+                                       : tr("No matching %1 color layer.").arg(eye);
+        if (result.anaglyphError.isEmpty()) result.anaglyphError = result.eyeErrors[i];
+    }
+    if (result.anaglyphError.isEmpty()) {
+        const auto& left = m_fileHandle.header(result.eyes[0]->getPart());
+        const auto& right = m_fileHandle.header(result.eyes[1]->getPart());
+        if (!ViewMetadata::stereoGeometryMatches(left, right))
+            result.anaglyphError = tr("Stereo views require identical display windows and pixel aspect ratios.");
+    }
+    return result;
+}
 
 QVariant LayerModel::data(const QModelIndex& index, int role) const
 {
@@ -240,7 +340,7 @@ QVariant LayerModel::data(const QModelIndex& index, int role) const
         case Qt::DisplayRole:
             switch(index.column()) {
                 case LAYER:
-                    return QString::fromStdString(item->getLeafName());
+                    return QString::fromStdString(item->getLeafName()) + viewLabel(item);
 
                 case TYPE:
                     switch(item->getType()) {
@@ -283,6 +383,7 @@ QVariant LayerModel::data(const QModelIndex& index, int role) const
                     tooltip += "<br/>";
                     tooltip += "<b>Layer name:</b> " + QString::fromStdString(item->getOriginalFullName());
                 }
+                tooltip += viewLabel(item).toHtmlEscaped();
                 return tooltip;
             }
         default:

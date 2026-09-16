@@ -3,6 +3,7 @@
 #include <QRect>
 #include <QString>
 #include <OpenEXR/ImfChromaticities.h>
+#include <util/ViewMetadata.h>
 #include <array>
 #include <atomic>
 #include <cstdint>
@@ -23,6 +24,10 @@ struct FramebufferData {
                                            QPoint(1, 1), QPoint(1, 1)}};
     bool               hasRawChromaticities = false;
     Imf::Chromaticities rawChromaticities;
+    ViewMetadata       rawViews;
+    // Only derived stereo previews carry these immutable, independently decoded sources.
+    std::array<std::shared_ptr<const FramebufferData>, 2> stereo;
+    std::array<std::array<std::string, 4>, 2> stereoChannels;
     // Source-channel flags, before color conversion or display mapping.
     enum NonFiniteFlag { NaN = 1, PositiveInf = 2, NegativeInf = 4 };
     struct AnomalyRegion {

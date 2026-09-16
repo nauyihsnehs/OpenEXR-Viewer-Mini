@@ -49,7 +49,21 @@ std::vector<QPoint> FramebufferModel::rawChannelSampling() const
 
 std::string FramebufferModel::sampleLocationInfo(size_t channel, int x, int y) const
 {
-    const QPoint sampling = m_data->sourceSampling[rawChannelComponents()[channel]];
+    return sampleLocationInfo(*m_data, rawChannelComponents()[channel], x, y);
+}
+
+QRegion FramebufferModel::pixelCoverage() const
+{
+    if (!isDerivedPreview()) return QRect(0, 0, width(), height());
+    QRegion coverage;
+    for (const auto& eye : m_data->stereo)
+        coverage += QRect(eye->dataWindow.topLeft() - m_data->dataWindow.topLeft(), eye->dataWindow.size());
+    return coverage;
+}
+
+std::string FramebufferModel::sampleLocationInfo(const FramebufferData& data, int component, int x, int y)
+{
+    const QPoint sampling = data.sourceSampling[component];
     if (sampling == QPoint(1, 1)) return "";
     const auto align = [](int64_t value, int minimum, int maximum, int step) {
         const auto floorDivide = [](int64_t v, int s) {
@@ -59,7 +73,7 @@ std::string FramebufferModel::sampleLocationInfo(size_t channel, int x, int y) c
         const int64_t last = floorDivide(maximum, step);
         return std::max(first, std::min(last, floorDivide(value, step))) * step;
     };
-    const QRect window = getDataWindow();
+    const QRect window = data.dataWindow;
     std::stringstream text;
     text << " @ (" << align(int64_t(window.x()) + x, window.left(), window.right(), sampling.x())
          << ", " << align(int64_t(window.y()) + y, window.top(), window.bottom(), sampling.y()) << ")";

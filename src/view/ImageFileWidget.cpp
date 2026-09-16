@@ -67,6 +67,7 @@
 #include <QKeyEvent>
 #include <QPointer>
 #include <QSignalBlocker>
+#include <QScopedValueRollback>
 #include "RGBFramebufferWidget.h"
 #include "YFramebufferWidget.h"
 
@@ -223,17 +224,20 @@ struct ImageFileWidget::PreparedPreview {
     QString           pixelType;
     QString           compressionShort;
     QString           compression;
+    QStringList       stereoKeys;
 };
 
 struct ImageFileWidget::SavedPreview {
     QString                 key;
     PreviewState            preview;
     GraphicsView::ViewState view;
+    QStringList             stereoKeys;
 };
 
 struct ImageFileWidget::SavedDocument {
     std::vector<SavedPreview> previews;
     QString                   activeKey;
+    StereoMode                stereoMode = StereoDefault;
 };
 
 struct ImageFileWidget::RefreshTransaction {
@@ -360,6 +364,7 @@ bool ImageFileWidget::isRefreshInProgress() const
 
 void ImageFileWidget::clearImage()
 {
+    cancelStereoPreview();
     if (m_initialPrepared) {
         delete m_initialPrepared->widget;
         m_initialPrepared->widget = nullptr;
@@ -397,6 +402,7 @@ QString ImageFileWidget::layerKey(const LayerItem* item)
 ImageFileWidget::SavedDocument ImageFileWidget::captureDocumentState() const
 {
     SavedDocument state;
+    state.stereoMode = m_stereoMode;
     const QMdiSubWindow* active = m_mdiArea->activeSubWindow();
     state.activeKey
       = active ? active->property("layerKey").toString() : QString();
@@ -411,6 +417,7 @@ ImageFileWidget::SavedDocument ImageFileWidget::captureDocumentState() const
     for (auto* window : windows) {
         SavedPreview preview;
         preview.key = window->property("layerKey").toString();
+        preview.stereoKeys = window->property("stereoKeys").toStringList();
         if (auto* rgb = qobject_cast<RGBFramebufferWidget*>(window->widget()))
             preview.preview = rgb->previewState();
         if (
@@ -440,6 +447,7 @@ void ImageFileWidget::restorePreview(
 void ImageFileWidget::refresh()
 {
     if (m_isStream || m_documentState != DocumentReady || m_refresh) return;
+    cancelStereoPreview();
     std::unique_ptr<RefreshTransaction> transaction(new RefreshTransaction);
     try {
         transaction->image.reset(new OpenEXRImage(m_openedFilename, nullptr));
@@ -468,8 +476,20 @@ void ImageFileWidget::refresh()
         return;
     }
     try {
-        transaction->gateKey  = layerKey(gateItem);
-        transaction->prepared = createPreview(gateItem, transaction->image.get());
+        const auto stereo = std::find_if(transaction->saved.previews.begin(), transaction->saved.previews.end(),
+          [](const SavedPreview& saved) { return !saved.stereoKeys.isEmpty(); });
+        if (stereo != transaction->saved.previews.end()) {
+            // Gate the transaction on both eyes, even if a source tab is currently active.
+            const auto pair = transaction->image->getLayerModel()->stereoLayers();
+            if (!pair.anaglyphError.isEmpty()) throw std::runtime_error(pair.anaglyphError.toStdString());
+            const QStringList keys = {layerKey(pair.eyes[0]), layerKey(pair.eyes[1])};
+            if (keys != stereo->stereoKeys)
+                throw std::runtime_error("The refreshed stereo pair has changed; the previous preview was retained.");
+            transaction->prepared = createStereoPreview(transaction->image.get());
+        } else {
+            transaction->prepared = createPreview(gateItem, transaction->image.get());
+        }
+        transaction->gateKey = transaction->prepared.key;
     } catch (const std::exception& error) {
         showLoadError(QString::fromUtf8(error.what()));
         return;
@@ -539,7 +559,7 @@ void ImageFileWidget::commitRefresh()
           m_layersTreeView->model(),
           QModelIndex(),
           state.key);
-        if (!index.isValid()) continue;
+        if (!index.isValid() && state.key != transaction->gateKey) continue;
 
         FramebufferModel* model  = nullptr;
         QMdiSubWindow*    window = nullptr;
@@ -584,6 +604,8 @@ void ImageFileWidget::commitRefresh()
         m_mdiArea->setActiveSubWindow(restoredActive);
     else if (gateWindow)
         m_mdiArea->setActiveSubWindow(gateWindow);
+    m_stereoMode = restoredActive ? transaction->saved.stereoMode
+                    : gatePreview.stereoKeys.isEmpty() ? StereoDefault : StereoAnaglyph;
     syncActiveLayerSelection();
     emit activeFramebufferChanged();
     emit refreshInProgressChanged(false);
@@ -853,6 +875,51 @@ void ImageFileWidget::openAttribute(const HeaderItem* item)
 }
 
 
+static RGBFramebufferModel::Input colorInput(const LayerItem* item)
+{
+    RGBFramebufferModel::Input input;
+    input.part = item->getPart();
+    const auto type = item->getType();
+    input.layout = type == LayerItem::RGB || type == LayerItem::RGBA
+                     ? RGBFramebufferModel::Layer_RGB
+                   : type == LayerItem::YC || type == LayerItem::YCA
+                     ? RGBFramebufferModel::Layer_YC : RGBFramebufferModel::Layer_Y;
+    const auto name = [item](LayerItem::LayerType channel) {
+        const auto* child = item->child(channel);
+        return child ? child->getOriginalFullName() : std::string();
+    };
+    if (input.layout == RGBFramebufferModel::Layer_RGB)
+        input.channels = {{name(LayerItem::R), name(LayerItem::G), name(LayerItem::B), name(LayerItem::A)}};
+    else if (input.layout == RGBFramebufferModel::Layer_YC)
+        input.channels = {{name(LayerItem::Y), name(LayerItem::RY), name(LayerItem::BY), name(LayerItem::A)}};
+    else
+        input.channels = {{name(LayerItem::Y), "", "", name(LayerItem::A)}};
+    return input;
+}
+
+ImageFileWidget::PreparedPreview ImageFileWidget::createStereoPreview(OpenEXRImage* source)
+{
+    const auto pair = source->getLayerModel()->stereoLayers();
+    if (!pair.anaglyphError.isEmpty()) throw std::runtime_error(pair.anaglyphError.toStdString());
+    PreparedPreview preview;
+    preview.stereoKeys = {layerKey(pair.eyes[0]), layerKey(pair.eyes[1])};
+    preview.key = QString("stereo:%1:%2%3").arg(preview.stereoKeys[0].size())
+                    .arg(preview.stereoKeys[0], preview.stereoKeys[1]);
+    preview.title = tr("Anaglyph 3D — Left red / Right cyan");
+    preview.pixelType = tr("Derived preview; two-eye source statistics");
+    preview.compression = tr("Left: %1; Right: %2")
+      .arg(compressionDescription(source->getEXR().header(pair.eyes[0]->getPart()).compression()),
+           compressionDescription(source->getEXR().header(pair.eyes[1]->getPart()).compression()));
+    std::unique_ptr<RGBFramebufferWidget> widget(new RGBFramebufferWidget(this));
+    auto* model = new RGBFramebufferModel("", RGBFramebufferModel::Layer_RGB, widget.get());
+    widget->setPreviewMode(m_rgbPreviewMode);
+    configureFramebuffer(widget.get(), model, this);
+    model->loadStereo(source->sharedEXR(), {{colorInput(pair.eyes[0]), colorInput(pair.eyes[1])}});
+    preview.widget = widget.release();
+    preview.model = model;
+    return preview;
+}
+
 ImageFileWidget::PreparedPreview ImageFileWidget::createPreview(
   const LayerItem* item, OpenEXRImage* source)
 {
@@ -864,7 +931,7 @@ ImageFileWidget::PreparedPreview ImageFileWidget::createPreview(
     }
 
     PreparedPreview preview;
-    preview.title     = getTitle(item);
+    preview.title     = getTitle(item) + source->getLayerModel()->viewLabel(item);
     preview.key       = layerKey(item);
     preview.pixelType = pixelTypeName(item);
     const int partId  = item->getPart();
@@ -890,43 +957,16 @@ ImageFileWidget::PreparedPreview ImageFileWidget::createPreview(
         return preview;
     }
 
-    const auto layout = type == LayerItem::RGB || type == LayerItem::RGBA
-                          ? RGBFramebufferModel::Layer_RGB
-                        : type == LayerItem::YC || type == LayerItem::YCA
-                          ? RGBFramebufferModel::Layer_YC
-                          : RGBFramebufferModel::Layer_Y;
-    std::array<std::string, 4> channels;
-    auto channelName = [item](LayerItem::LayerType channel) {
-        const LayerItem* child = item->child(channel);
-        return child ? child->getOriginalFullName() : std::string();
-    };
-    if (layout == RGBFramebufferModel::Layer_RGB)
-        channels = {
-          {channelName(LayerItem::R),
-           channelName(LayerItem::G),
-           channelName(LayerItem::B),
-           channelName(LayerItem::A)}};
-    else if (layout == RGBFramebufferModel::Layer_YC)
-        channels = {
-          {channelName(LayerItem::Y),
-           channelName(LayerItem::RY),
-           channelName(LayerItem::BY),
-           channelName(LayerItem::A)}};
-    else
-        channels = {
-          {channelName(LayerItem::Y),
-           "",
-           "",
-           channelName(LayerItem::A)}};
+    const auto input = colorInput(item);
     std::unique_ptr<RGBFramebufferWidget> widget(
       new RGBFramebufferWidget(this));
     auto* model = new RGBFramebufferModel(
       item->getOriginalFullName(),
-      layout,
+      input.layout,
       widget.get());
     widget->setPreviewMode(m_rgbPreviewMode);
     configureFramebuffer(widget.get(), model, this);
-    model->load(source->sharedEXR(), partId, channels);
+    model->load(source->sharedEXR(), partId, input.channels);
     preview.widget = widget.release();
     preview.model  = model;
     return preview;
@@ -944,6 +984,7 @@ QMdiSubWindow* ImageFileWidget::installPreview(PreparedPreview& preview)
     subWindow->setAttribute(Qt::WA_DeleteOnClose);
     subWindow->setWindowTitle(preview.title);
     subWindow->setProperty("layerKey", preview.key);
+    subWindow->setProperty("stereoKeys", preview.stereoKeys);
     subWindow->setProperty("pixelType", preview.pixelType);
     subWindow->setProperty("compressionShort", preview.compressionShort);
     subWindow->setProperty("compression", preview.compression);
@@ -956,6 +997,7 @@ QMdiSubWindow* ImageFileWidget::installPreview(PreparedPreview& preview)
     m_mdiArea->setActiveSubWindow(subWindow);
     syncTabbedPreviewPresentation();
     syncActiveLayerSelection();
+    if (!preview.stereoKeys.isEmpty()) m_stereoMode = StereoAnaglyph;
     emit activeFramebufferChanged();
     return subWindow;
 }
@@ -968,6 +1010,9 @@ FramebufferModel* ImageFileWidget::openLayer(const LayerItem* item)
       || item->getType() == LayerItem::PART
       || item->getType() == LayerItem::N_LAYERTYPES)
         return nullptr;
+
+    cancelStereoPreview();
+    if (!m_selectingStereo) m_stereoMode = StereoDefault;
 
     const QString key = layerKey(item);
 
@@ -1032,6 +1077,85 @@ const FramebufferModel* ImageFileWidget::activeFramebufferModel() const
     return framebufferModel(m_mdiArea->activeSubWindow());
 }
 
+void ImageFileWidget::cancelStereoPreview()
+{
+    if (!m_pendingStereo) return;
+    disconnect(m_pendingStereo->model, nullptr, this, nullptr);
+    delete m_pendingStereo->widget;
+    m_pendingStereo.reset();
+}
+
+QString ImageFileWidget::stereoUnavailableReason(StereoMode mode) const
+{
+    if (!m_img || !isDocumentReady() || m_refresh) return tr("No ready document.");
+    if (mode == StereoDefault) return {};
+    const auto pair = m_img->getLayerModel()->stereoLayers();
+    if (mode == StereoAnaglyph) return pair.anaglyphError;
+    return pair.eyeErrors[mode == StereoLeft ? 0 : 1];
+}
+
+void ImageFileWidget::setStereoMode(StereoMode mode)
+{
+    if (!stereoUnavailableReason(mode).isEmpty()) return;
+    cancelStereoPreview();
+    const QScopedValueRollback<bool> selecting(m_selectingStereo, true);
+    if (mode != StereoAnaglyph) {
+        const auto pair = m_img->getLayerModel()->stereoLayers();
+        const auto* layer = mode == StereoDefault ? m_img->getLayerModel()->defaultDisplayLayer()
+                                                 : pair.eyes[mode == StereoLeft ? 0 : 1];
+        openLayer(layer);
+        m_stereoMode = mode;
+        emit activeFramebufferChanged();
+        return;
+    }
+    for (auto* window : m_mdiArea->subWindowList()) {
+        if (window->property("stereoKeys").toStringList().isEmpty()) continue;
+        m_mdiArea->setActiveSubWindow(window);
+        m_stereoMode = StereoAnaglyph;
+        emit activeFramebufferChanged();
+        return;
+    }
+    try {
+        m_pendingStereo.reset(new PreparedPreview(createStereoPreview(m_img)));
+    } catch (const std::exception& error) {
+        showLoadError(QString::fromUtf8(error.what()));
+        return;
+    }
+    auto* model = m_pendingStereo->model;
+    auto* page = qobject_cast<RGBFramebufferWidget*>(m_pendingStereo->widget);
+    const auto* current = qobject_cast<RGBFramebufferWidget*>(activePreviewWidget());
+    const bool inheritParameters = current != nullptr;
+    const PreviewState parameters = current ? current->previewState() : PreviewState();
+    const auto* oldModel = activeFramebufferModel();
+    const QPoint oldOrigin = oldModel ? oldModel->getDataWindow().topLeft() : QPoint();
+    const auto viewState = activeGraphicsView() ? activeGraphicsView()->viewState() : GraphicsView::ViewState();
+    connect(model, &FramebufferModel::imageLoaded, this,
+      [this, page, model, parameters, inheritParameters, oldOrigin, viewState] {
+        if (inheritParameters) {
+            auto state = parameters;
+            state.mode = int(m_rgbPreviewMode);
+            page->restorePreviewState(state);
+        }
+        auto state = viewState;
+        const QPointF offset = QPointF(oldOrigin) - QPointF(model->getDataWindow().topLeft());
+        state.center += QPointF(offset.x() * model->pixelAspectRatio(), offset.y());
+        page->findChild<GraphicsView*>()->restoreViewState(state);
+    });
+    connect(model, &FramebufferModel::imageChanged, this, [this, model] {
+        if (!m_pendingStereo || m_pendingStereo->model != model || !model->isPreviewReady()) return;
+        auto prepared = std::move(m_pendingStereo);
+        m_stereoMode = StereoAnaglyph;
+        installPreview(*prepared);
+    });
+    connect(model, &FramebufferModel::loadFailed, this, [this, model] {
+        // Defer destruction until all failure observers have finished.
+        const QPointer<FramebufferModel> guarded(model);
+        QTimer::singleShot(0, this, [this, guarded] {
+            if (m_pendingStereo && m_pendingStereo->model == guarded.data()) cancelStereoPreview();
+        });
+    });
+}
+
 
 void ImageFileWidget::setRgbPreviewMode(RGBFramebufferModel::PreviewMode mode)
 {
@@ -1043,6 +1167,7 @@ void ImageFileWidget::setRgbPreviewMode(RGBFramebufferModel::PreviewMode mode)
     };
     if (m_initialPrepared) applyMode(m_initialPrepared->widget);
     if (m_refresh) applyMode(m_refresh->prepared.widget);
+    if (m_pendingStereo) applyMode(m_pendingStereo->widget);
 
     for (QMdiSubWindow* subWindow : m_mdiArea->subWindowList()) {
         applyMode(subWindow->widget());
@@ -1105,7 +1230,8 @@ ImageFileWidget::framebufferStatusToolTip(QMdiSubWindow* subWindow) const
     lines << "Source finite max: " + framebufferDatasetValueText(model, false);
 
     if (loaded) {
-        lines << "Source channel samples (not pixels):";
+        lines << (model->isDerivedPreview() ? "Two-eye source channel samples (not pixels):"
+                                           : "Source channel samples (not pixels):");
         lines << "NaN count: " + QString::number(model->getDatasetNaNCount());
         lines << "+Inf count: " + QString::number(model->getDatasetPositiveInfCount());
         lines << "-Inf count: " + QString::number(model->getDatasetNegativeInfCount());
@@ -1458,8 +1584,13 @@ void ImageFileWidget::onFileInfoHoverLeft()
 }
 
 
-void ImageFileWidget::onActiveSubWindowChanged(QMdiSubWindow*)
+void ImageFileWidget::onActiveSubWindowChanged(QMdiSubWindow* window)
 {
+    if (!m_selectingStereo) {
+        cancelStereoPreview();
+        m_stereoMode = window && !window->property("stereoKeys").toStringList().isEmpty()
+                         ? StereoAnaglyph : StereoDefault;
+    }
     syncActiveLayerSelection();
     emit activeFramebufferChanged();
 }

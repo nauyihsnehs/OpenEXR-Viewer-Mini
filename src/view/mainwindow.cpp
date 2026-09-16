@@ -60,6 +60,7 @@
 #include <QFileInfo>
 #include <QHBoxLayout>
 #include <QMenuBar>
+#include <QMenu>
 #include <QMimeData>
 #include <QMouseEvent>
 #include <QImage>
@@ -276,6 +277,7 @@ MainWindow::MainWindow(QWidget* parent)
     setAttribute(Qt::WA_StyledBackground, true);
     setupTitleBar();
     setupPreviewModeActions();
+    setupStereoActions();
     setupThemeActions();
     setAcceptDrops(true);
 
@@ -491,6 +493,31 @@ void MainWindow::applyRgbPreviewMode(RGBFramebufferModel::PreviewMode mode)
     }
 }
 
+void MainWindow::setupStereoActions()
+{
+    auto* menu = ui->menu_Show->addMenu(tr("Stereo"));
+    menu->setObjectName("menu_Stereo");
+    menu->setToolTipsVisible(true);
+    m_stereoActions = new QActionGroup(this);
+    m_stereoActions->setExclusive(true);
+    const QStringList labels = {tr("Default"), tr("Left eye only"), tr("Right eye only"), tr("Anaglyph 3D")};
+    const QStringList names = {"Default", "Left", "Right", "Anaglyph"};
+    for (int i = 0; i < labels.size(); ++i) {
+        auto* action = menu->addAction(labels[i]);
+        action->setObjectName("action_Stereo" + names[i]);
+        action->setCheckable(true);
+        action->setEnabled(false);
+        action->setData(i);
+        action->setChecked(i == 0);
+        m_stereoActions->addAction(action);
+    }
+    connect(m_stereoActions, &QActionGroup::triggered, this, [this](QAction* action) {
+        if (auto* document = currentFileWidget())
+            document->setStereoMode(static_cast<ImageFileWidget::StereoMode>(action->data().toInt()));
+        updateShowActions();
+    });
+}
+
 
 QString MainWindow::normalizedThemeName(const QString& themeName) const
 {
@@ -691,6 +718,15 @@ void MainWindow::updateShowActions()
     ui->action_Save->setEnabled(model && model->isImageLoaded());
     ui->action_CopyImage->setEnabled(copyEnabled);
     ui->action_CopyImageFullResolution->setEnabled(copyEnabled);
+    if (m_stereoActions) {
+        for (auto* action : m_stereoActions->actions()) {
+            const auto mode = static_cast<ImageFileWidget::StereoMode>(action->data().toInt());
+            const QString reason = widget ? widget->stereoUnavailableReason(mode) : tr("No ready document.");
+            action->setEnabled(reason.isEmpty());
+            action->setToolTip(reason.isEmpty() ? action->text() : reason);
+            action->setChecked(mode == (widget ? widget->stereoMode() : ImageFileWidget::StereoDefault));
+        }
+    }
 }
 
 
@@ -1001,9 +1037,14 @@ void MainWindow::updateMinimalSummary()
     else if (auto* scalar = qobject_cast<YFramebufferWidget*>(m_minimalPreview.data()))
         parameter = scalar->currentParameterText();
     const QString file = m_openFileTabs->tabText(m_openFileTabs->currentIndex());
+    const auto* document = currentFileWidget();
+    const QString layer = document && document->sourceImage()
+                            && document->sourceImage()->getLayerModel()->hasViews()
+                            ? document->activeLayerTitleText() : QString();
     const QSize displaySize = m_minimalModel->getDisplayWindow().size();
     m_minimalPage->setSummary(tr("%1 | Display %2 x %3 | %4% | %5")
-      .arg(file).arg(displaySize.width()).arg(displaySize.height())
+      .arg(layer.isEmpty() ? file : file + " | " + layer)
+      .arg(displaySize.width()).arg(displaySize.height())
       .arg(m_minimalPage->view()->viewState().zoom * 100., 0, 'f', 1).arg(parameter),
       m_minimalModel);
 }
@@ -1104,7 +1145,8 @@ void MainWindow::on_action_Save_triggered()
         dialog.setSourceState(
           guardedModel && guardedImage && guardedModel->isImageLoaded(),
           guardedModel && guardedModel->isPreviewReady(),
-          guardedModel ? guardedModel->errorString() : QString());
+          guardedModel ? guardedModel->errorString() : QString(),
+          guardedModel && guardedModel->isDerivedPreview());
     };
     updateSource();
     connect(model, &FramebufferModel::readinessChanged, &dialog, updateSource);

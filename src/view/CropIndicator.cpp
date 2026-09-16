@@ -27,7 +27,11 @@ void CropIndicator::setModel(const FramebufferModel* model)
         if (!directions.isEmpty()) {
             text = tr("Data outside display window") + "\n"
                  + tr("Directions: %1").arg(directions.join(", ")) + "\n";
-            if (!data.intersects(display))
+            bool visible = false;
+            const QRectF localDisplay = QRectF(display).translated(-QPointF(data.topLeft()));
+            for (const QRect& area : model->pixelCoverage())
+                visible |= QRectF(area).intersects(localDisplay);
+            if (!visible)
                 text += tr("All source data is outside the display window.") + "\n";
             text += tr("The preview is cropped. Original EXR exports retain this data.");
         }

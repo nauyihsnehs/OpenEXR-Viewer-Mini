@@ -11,6 +11,8 @@
 #include <QFont>
 #include <QGraphicsPixmapItem>
 #include <QMessageBox>
+#include <QMenu>
+#include <QStandardItemModel>
 #include <QMap>
 #include <QPainter>
 #include <QPointer>
@@ -30,6 +32,7 @@
 #include <model/framebuffer/RGBFramebufferModel.h>
 #include <util/AnomalyMarkers.h>
 #include <util/PreviewImage.h>
+#include <util/ViewMetadata.h>
 #include <util/YColormap.h>
 #include <util/ColormapModule.h>
 #include <view/FileDrop.h>
@@ -45,6 +48,9 @@
 #include <OpenEXR/ImfChannelList.h>
 #include <OpenEXR/ImfChromaticitiesAttribute.h>
 #include <OpenEXR/ImfOutputFile.h>
+#include <OpenEXR/ImfMultiPartOutputFile.h>
+#include <OpenEXR/ImfOutputPart.h>
+#include <OpenEXR/ImfStringVectorAttribute.h>
 #include <OpenEXR/ImfFrameBuffer.h>
 #include <OpenEXR/ImfHeader.h>
 #include <OpenEXR/ImfTiledOutputFile.h>
@@ -111,6 +117,90 @@ namespace
             file.setFrameBuffer(framebuffer);
             file.writePixels(height);
         }
+    }
+
+    struct MultipartFixture {
+        std::vector<Imf::Header> headers;
+        std::vector<std::map<std::string, std::vector<float>>> samples;
+    };
+
+    MultipartFixture beachballFixture()
+    {
+        MultipartFixture fixture;
+        const Imath::Box2i display(Imath::V2i(-3, -2), Imath::V2i(2, 3));
+        const Imath::Box2i right(Imath::V2i(-2, -1), Imath::V2i(0, 0));
+        const Imath::Box2i left(Imath::V2i(-1, 1), Imath::V2i(1, 2));
+        const Imath::Box2i both(Imath::V2i(-2, -1), Imath::V2i(1, 2));
+        const std::vector<std::vector<std::string>> channels = {
+          {"R", "G", "B", "A"}, {"Z"}, {"forward.u", "forward.v"}, {"whitebarmask.mask"},
+          {"R", "G", "B", "A"}, {"Z"}, {"forward.u", "forward.v"},
+          {"disparityL.x", "disparityL.y"}, {"disparityR.x", "disparityR.y"}, {"whitebarmask.mask"}};
+        const std::array<std::string, 10> views = {"right", "left", "left", "left", "left",
+                                                  "right", "right", "", "", "right"};
+        for (int part = 0; part < 10; ++part) {
+            Imath::Box2i window = views[part] == "left" ? left : views[part] == "right" ? right : both;
+            if (part == 3 || part == 9) window.max = window.min;
+            Imf::Header header(display, window);
+            // Intentionally misleading names: view attributes are the source of truth.
+            header.setName(part == 0 ? "left_named_part" : part == 4 ? "right_named_part"
+                                                                         : "part_" + std::to_string(part));
+            if (!views[part].empty()) header.setView(views[part]);
+            fixture.headers.push_back(header);
+            fixture.samples.emplace_back();
+            const int count = (window.max.x - window.min.x + 1) * (window.max.y - window.min.y + 1);
+            for (size_t c = 0; c < channels[part].size(); ++c) {
+                auto& values = fixture.samples.back()[channels[part][c]];
+                for (int i = 0; i < count; ++i) values.push_back(float(part * 10 + c) + i / 16.f);
+            }
+        }
+        return fixture;
+    }
+
+    void writeMultipartFixture(const QString& path, MultipartFixture fixture, int omittedPart = -1)
+    {
+        for (size_t i = 0; i < fixture.headers.size(); ++i) {
+            fixture.headers[i].setType(Imf::SCANLINEIMAGE);
+            fixture.headers[i].compression() = Imf::ZIP_COMPRESSION;
+            for (const auto& channel : fixture.samples[i])
+                fixture.headers[i].channels().insert(channel.first, Imf::Channel(Imf::FLOAT));
+        }
+        Imf::MultiPartOutputFile file(path.toLocal8Bit().constData(), fixture.headers.data(),
+                                     int(fixture.headers.size()));
+        for (size_t i = 0; i < fixture.headers.size(); ++i) {
+            if (int(i) == omittedPart) continue;
+            const auto window = fixture.headers[i].dataWindow();
+            const int width = window.max.x - window.min.x + 1;
+            Imf::FrameBuffer buffer;
+            for (const auto& channel : fixture.samples[i])
+                buffer.insert(channel.first, Imf::Slice::Make(Imf::FLOAT, channel.second.data(),
+                              window, sizeof(float), width * sizeof(float)));
+            Imf::OutputPart output(file, int(i));
+            output.setFrameBuffer(buffer);
+            output.writePixels(window.max.y - window.min.y + 1);
+        }
+    }
+
+    MultipartFixture stereoFixture()
+    {
+        auto fixture = beachballFixture();
+        fixture.headers = {fixture.headers[4], fixture.headers[0]};
+        fixture.samples.resize(2);
+        fixture.headers[0].dataWindow() = Imath::Box2i(Imath::V2i(-2, -1), Imath::V2i(0, 0));
+        fixture.headers[1].dataWindow() = Imath::Box2i(Imath::V2i(-1, 0), Imath::V2i(1, 1));
+        const float colors[2][4] = {{.25f, .5f, .75f, 0.f}, {.9f, .125f, .5f, .25f}};
+        const std::array<std::string, 4> channels = {{"R", "G", "B", "A"}};
+        for (size_t eye = 0; eye < 2; ++eye) {
+            fixture.samples[eye].clear();
+            for (size_t c = 0; c < 4; ++c)
+                fixture.samples[eye][channels[c]] = std::vector<float>(6, colors[eye][c]);
+        }
+        return fixture;
+    }
+
+    std::array<RGBFramebufferModel::Input, 2> stereoInputs()
+    {
+        return {{{0, RGBFramebufferModel::Layer_RGB, {{"R", "G", "B", "A"}}},
+                 {1, RGBFramebufferModel::Layer_RGB, {{"R", "G", "B", "A"}}}}};
     }
 
     const LayerItem* findLayer(
@@ -1205,6 +1295,572 @@ class ViewerTests: public QObject
         QVERIFY(view.viewState().fit);
         QTest::keyClick(&view, Qt::Key_1);
         QCOMPARE(view.viewState().zoom, 1.);
+    }
+
+    void viewMetadataRulesAndDefaultEye()
+    {
+        Imf::Header header(1, 1);
+        header.insert("multiView", Imf::StringVectorAttribute(std::vector<std::string>{"right", "left"}));
+        auto views = ViewMetadata::read(header);
+        QCOMPARE(views.defaultView(), std::string("right"));
+        for (const std::string channel : {"R", "G", "B", "A", "Z"})
+            QCOMPARE(views.channelView(channel), std::string("right"));
+        QCOMPARE(views.channelView("left.R"), std::string("left"));
+        QCOMPARE(views.channelView("nested.forward.left.u"), std::string("left"));
+        QVERIFY(views.channelView("disparityL.x").empty());
+        QVERIFY(views.channelView("disparityR.y").empty());
+        QVERIFY(views.channelView("left.nested.u").empty()); // View must precede the channel.
+        header.setView("right");
+        QCOMPARE(ViewMetadata::read(header).channelView("left.R"), std::string("right"));
+        Imf::Header empty(1, 1);
+        empty.insert("multiView", Imf::StringVectorAttribute(std::vector<std::string>()));
+        views = ViewMetadata::read(empty);
+        QVERIFY(views.hasMultiView && views.channelView("R").empty());
+        QVERIFY(!ViewMetadata::read(Imf::Header(1, 1)).present());
+
+        auto data = beachballFixture();
+        // The default part now contains only Z. Left RGBA precedes right RGBA.
+        std::swap(data.headers[0], data.headers[5]);
+        std::swap(data.samples[0], data.samples[5]);
+        const QString path = fixture("default-view");
+        writeMultipartFixture(path, data);
+        OpenEXRImage source(path, nullptr);
+        const auto* preferred = source.getLayerModel()->defaultDisplayLayer();
+        QVERIFY(preferred);
+        QCOMPARE(preferred->getPart(), 5);
+        QCOMPARE(preferred->getType(), LayerItem::RGBA);
+        QCOMPARE(source.getLayerModel()->viewLabel(preferred), QString(" [right, default]"));
+    }
+
+    void beachballSingleAndMultipartSourcesAgree()
+    {
+        const auto data = beachballFixture();
+        const QString multipartPath = fixture("beachball-multipart");
+        const QString singlePath = fixture("beachball-single");
+        writeMultipartFixture(multipartPath, data);
+        Imf::Header header(4, 4);
+        header.displayWindow() = data.headers[0].displayWindow();
+        header.insert("multiView", Imf::StringVectorAttribute(std::vector<std::string>{"right", "left"}));
+        const auto singleName = [](const Imf::Header& part, const std::string& channel) {
+            if (!part.hasView() || (part.view() == "right" && channel.find('.') == std::string::npos))
+                return channel;
+            const auto dot = channel.find_last_of('.');
+            const auto offset = dot == std::string::npos ? 0 : dot + 1;
+            return channel.substr(0, offset) + part.view() + "." + channel.substr(offset);
+        };
+        std::map<std::string, std::vector<float>> channels;
+        for (size_t part = 0; part < data.headers.size(); ++part) {
+            const auto window = data.headers[part].dataWindow();
+            for (const auto& channel : data.samples[part]) {
+                auto& pixels = channels[singleName(data.headers[part], channel.first)];
+                pixels.resize(16, 0.f);
+                size_t index = 0;
+                for (int y = window.min.y; y <= window.max.y; ++y)
+                    for (int x = window.min.x; x <= window.max.x; ++x)
+                        pixels[(y + 1) * 4 + x + 2] = channel.second[index++];
+            }
+        }
+        writeFixture(singlePath, 4, 4, channels, -2, -1, 1.f, 1, &header);
+        OpenEXRImage multipart(multipartPath, nullptr), single(singlePath, nullptr);
+        QCOMPARE(multipart.getEXR().parts(), 10);
+        QCOMPARE(multipart.getLayerModel()->defaultDisplayLayer()->getPart(), 0);
+        QCOMPARE(single.getLayerModel()->defaultDisplayLayer()->getOriginalFullName(), std::string());
+        auto* layers = single.getLayerModel();
+        const auto singlePair = layers->stereoLayers();
+        const auto multiPair = multipart.getLayerModel()->stereoLayers();
+        QVERIFY(singlePair.anaglyphError.isEmpty() && multiPair.anaglyphError.isEmpty());
+        QCOMPARE(singlePair.eyes[0]->getOriginalFullName(), std::string("left."));
+        QCOMPARE(singlePair.eyes[1]->getOriginalFullName(), std::string());
+        QCOMPARE(multiPair.eyes[0]->getPart(), 4);
+        QCOMPARE(multiPair.eyes[1]->getPart(), 0);
+        QCOMPARE(layers->viewLabel(layers->findChannel(0, "left.R")), QString(" [left]"));
+        QCOMPARE(layers->viewLabel(layers->findChannel(0, "disparityL.x")), QString(" [No view]"));
+        QVERIFY(layers->viewLabel(layers->getRoot()).isEmpty());
+        const auto cancel = std::make_shared<std::atomic_bool>(false);
+        for (size_t part = 0; part < data.headers.size(); ++part) {
+            const auto window = data.headers[part].dataWindow();
+            for (const auto& channel : data.samples[part]) {
+                const std::string name = singleName(data.headers[part], channel.first);
+                const auto multi = FramebufferLoader::decode(multipart.sharedEXR(), int(part),
+                  FramebufferLoader::Scalar, {{channel.first, "", "", ""}}, cancel);
+                const auto one = FramebufferLoader::decode(single.sharedEXR(), 0,
+                  FramebufferLoader::Scalar, {{name, "", "", ""}}, cancel);
+                QVERIFY(multi.data && one.data);
+                QVERIFY(multi.data->pixels == channel.second);
+                QCOMPARE(multi.data->dataWindow.topLeft(), QPoint(window.min.x, window.min.y));
+                QCOMPARE(multi.data->displayWindow, one.data->displayWindow);
+                QCOMPARE(multi.data->rawViews.channelView(channel.first), one.data->rawViews.channelView(name));
+                size_t index = 0;
+                for (int y = window.min.y; y <= window.max.y; ++y)
+                    for (int x = window.min.x; x <= window.max.x; ++x)
+                        QCOMPARE(multi.data->pixels[index++], one.data->pixels[(y + 1) * 4 + x + 2]);
+            }
+        }
+        RGBFramebufferModel right(""), left("");
+        right.load(multipart.sharedEXR(), 0, {{"R", "G", "B", "A"}});
+        left.load(multipart.sharedEXR(), 4, {{"R", "G", "B", "A"}});
+        QTRY_VERIFY(right.isPreviewReady() && left.isPreviewReady());
+        QCOMPARE(right.rawViews().view, std::string("right"));
+        QCOMPARE(left.rawViews().view, std::string("left"));
+        QVERIFY(right.getColorInfo(0, 0).find("x: -2 y: -1") == 0);
+        QVERIFY(right.getRawPixels() != left.getRawPixels());
+        RGBFramebufferModel singleStereo(""), multiStereo("");
+        singleStereo.loadStereo(single.sharedEXR(),
+          {{{0, RGBFramebufferModel::Layer_RGB, {{"left.R", "left.G", "left.B", "left.A"}}},
+            {0, RGBFramebufferModel::Layer_RGB, {{"R", "G", "B", "A"}}}}});
+        multiStereo.loadStereo(multipart.sharedEXR(),
+          {{{4, RGBFramebufferModel::Layer_RGB, {{"R", "G", "B", "A"}}},
+            {0, RGBFramebufferModel::Layer_RGB, {{"R", "G", "B", "A"}}}}});
+        QTRY_VERIFY(singleStereo.isPreviewReady() && multiStereo.isPreviewReady());
+        QCOMPARE(PreviewImage::render(singleStereo, 0, Qt::black), PreviewImage::render(multiStereo, 0, Qt::black));
+        cancel->store(true);
+        QVERIFY(!FramebufferLoader::decode(multipart.sharedEXR(), 4, FramebufferLoader::RGB,
+                                          {{"R", "G", "B", "A"}}, cancel).data);
+
+        // A singlepart export, including the Flatten option, must retain channel names and view order.
+        YFramebufferModel rawLeft("left.R");
+        rawLeft.load(single.sharedEXR(), 0);
+        QTRY_VERIFY(rawLeft.isPreviewReady());
+        ImageSave::Source input;
+        input.sourceImage = &single;
+        input.activeModel = &rawLeft;
+        for (auto target : {ImageSave::TargetActiveOriginal, ImageSave::TargetLayeredOriginal}) {
+            for (auto metadata : {ImageSave::MetadataBasic, ImageSave::MetadataNone}) {
+                ImageSave::Options options;
+                options.target = target;
+                options.format = ImageSave::FormatExr;
+                options.pixelType = ImageSave::PixelFloat;
+                options.metadata = metadata;
+                options.multipart = ImageSave::MultipartFlatten;
+                options.path = fixture(QString("single-views-%1-%2").arg(int(target)).arg(int(metadata)));
+                QCOMPARE(ImageSave::save(input, options).status, ImageSave::StatusSaved);
+                OpenEXRImage exported(options.path, nullptr);
+                const auto& outputHeader = exported.getEXR().header(0);
+                QVERIFY(outputHeader.channels().findChannel("left.R"));
+                const auto views = ViewMetadata::read(outputHeader);
+                QCOMPARE(views.hasMultiView, metadata == ImageSave::MetadataBasic);
+                if (views.hasMultiView) QVERIFY(views.multiView == std::vector<std::string>({"right", "left"}));
+                YFramebufferModel roundTrip("left.R");
+                roundTrip.load(exported.sharedEXR(), 0);
+                QTRY_VERIFY(roundTrip.isPreviewReady());
+                QVERIFY(roundTrip.getRawPixels() == rawLeft.getRawPixels());
+            }
+        }
+    }
+
+    void beachballMultipartExportsAndFilters()
+    {
+        const auto data = beachballFixture();
+        const QString path = fixture("multipart-exports");
+        writeMultipartFixture(path, data);
+        OpenEXRImage source(path, nullptr);
+        RGBFramebufferModel left("");
+        left.load(source.sharedEXR(), 4, {{"R", "G", "B", "A"}});
+        QTRY_VERIFY(left.isPreviewReady());
+        ImageSave::Source input;
+        input.sourceImage = &source;
+        input.activeModel = &left;
+        for (auto metadata : {ImageSave::MetadataBasic, ImageSave::MetadataNone}) {
+            for (auto target : {ImageSave::TargetActiveOriginal, ImageSave::TargetLayeredOriginal}) {
+                for (auto scope : {ImageSave::ChannelsAll, ImageSave::ChannelsRgb}) {
+                    ImageSave::Options options;
+                    options.target = target;
+                    options.format = ImageSave::FormatExr;
+                    options.pixelType = ImageSave::PixelFloat;
+                    options.metadata = metadata;
+                    options.channelScope = scope;
+                    options.path = fixture(QString("multipart-out-%1-%2-%3")
+                      .arg(int(metadata)).arg(int(target)).arg(int(scope)));
+                    QCOMPARE(ImageSave::save(input, options).status, ImageSave::StatusSaved);
+                    OpenEXRImage output(options.path, nullptr);
+                    std::vector<int> indexes = {4};
+                    if (target == ImageSave::TargetLayeredOriginal)
+                        indexes = scope == ImageSave::ChannelsRgb ? std::vector<int>{0, 4}
+                          : std::vector<int>{0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+                    QCOMPARE(output.getEXR().parts(), int(indexes.size()));
+                    for (int i = 0; i < int(indexes.size()); ++i) {
+                        const auto& original = data.headers[indexes[i]];
+                        const auto& header = output.getEXR().header(i);
+                        QVERIFY(header.dataWindow() == original.dataWindow());
+                        QVERIFY(header.displayWindow() == original.displayWindow());
+                        const auto views = ViewMetadata::read(header);
+                        QCOMPARE(views.hasView, metadata == ImageSave::MetadataBasic && original.hasView());
+                        if (views.hasView) QCOMPARE(views.view, original.view());
+                        if (indexes.size() > 1) {
+                            QCOMPARE(header.type(), Imf::SCANLINEIMAGE);
+                            QCOMPARE(header.name(), original.name());
+                        }
+                        for (const auto& channel : data.samples[indexes[i]]) {
+                            QVERIFY(header.channels().findChannel(channel.first));
+                            YFramebufferModel decoded(channel.first);
+                            decoded.load(output.sharedEXR(), i);
+                            QTRY_VERIFY(decoded.isPreviewReady());
+                            QVERIFY(decoded.getRawPixels() == channel.second);
+                        }
+                    }
+                }
+            }
+        }
+        ImageSave::Options options;
+        options.format = ImageSave::FormatExr;
+        options.target = ImageSave::TargetLayeredOriginal;
+        options.multipart = ImageSave::MultipartFlatten;
+        options.metadata = ImageSave::MetadataNone;
+        options.path = fixture("rejected-multiview-flatten");
+        const auto flattened = ImageSave::save(input, options);
+        QCOMPARE(flattened.status, ImageSave::StatusFailed);
+        QVERIFY(flattened.message.contains("Preserve multipart"));
+        QVERIFY(!QFile::exists(options.path));
+        YFramebufferModel depth("Z");
+        depth.load(source.sharedEXR(), 1);
+        QTRY_VERIFY(depth.isPreviewReady());
+        input.activeModel = &depth;
+        options.target = ImageSave::TargetActiveOriginal;
+        options.channelScope = ImageSave::ChannelsRgb;
+        options.path = fixture("rejected-noncolor-active");
+        const auto filtered = ImageSave::save(input, options);
+        QCOMPARE(filtered.status, ImageSave::StatusFailed);
+        QVERIFY(filtered.message.contains("No channels"));
+
+        auto onlyDepth = data;
+        onlyDepth.headers = {data.headers[1], data.headers[5]};
+        onlyDepth.samples = {data.samples[1], data.samples[5]};
+        const QString depthPath = fixture("only-depth-parts");
+        writeMultipartFixture(depthPath, onlyDepth);
+        OpenEXRImage depthSource(depthPath, nullptr);
+        input.sourceImage = &depthSource;
+        options.target = ImageSave::TargetLayeredOriginal;
+        options.multipart = ImageSave::MultipartPreserve;
+        options.path = fixture("rejected-noncolor-file");
+        const auto empty = ImageSave::save(input, options);
+        QCOMPARE(empty.status, ImageSave::StatusFailed);
+        QVERIFY(empty.message.contains("No channels"));
+        QVERIFY(!QFile::exists(options.path));
+    }
+
+    void beachballFailuresAndRefresh()
+    {
+        auto data = beachballFixture();
+        const QString brokenPath = fixture("missing-part-data");
+        writeMultipartFixture(brokenPath, data, 9);
+        OpenEXRImage broken(brokenPath, nullptr);
+        YFramebufferModel missing("whitebarmask.mask");
+        missing.load(broken.sharedEXR(), 9);
+        QTRY_VERIFY(!missing.isLoading());
+        QVERIFY(!missing.isImageLoaded() && !missing.isPreviewReady());
+        QVERIFY(!missing.errorString().isEmpty());
+
+        const QString path = fixture("view-refresh");
+        writeMultipartFixture(path, data);
+        FileWidget widget(path);
+        QTRY_VERIFY(widget.activeFramebufferModel() && widget.activeFramebufferModel()->isPreviewReady());
+        QVERIFY(widget.activeLayerTitleText().contains("[right, default]"));
+        const auto* left = widget.sourceImage()->getLayerModel()->findChannel(4, "R");
+        QVERIFY(left);
+        auto* model = widget.openLayer(left);
+        QTRY_VERIFY(model->isPreviewReady());
+        QVERIFY(widget.activeLayerTitleText().contains("[left]"));
+        widget.refresh();
+        QTRY_VERIFY(!widget.isRefreshInProgress());
+        QTRY_VERIFY(widget.activeFramebufferModel()->isPreviewReady());
+        QVERIFY(widget.activeLayerTitleText().contains("[left]"));
+        QCOMPARE(widget.activeFramebufferModel()->rawViews().view, std::string("left"));
+
+        MainWindow window;
+        window.resize(800, 600);
+        window.show();
+        window.open(path);
+        QTRY_VERIFY(window.findChild<ImageFileWidget*>());
+        auto* document = window.findChild<ImageFileWidget*>();
+        QTRY_VERIFY(document->activeFramebufferModel() && document->activeFramebufferModel()->isPreviewReady());
+        const auto* right = document->activeFramebufferModel();
+        const QImage expected = PreviewImage::render(*right);
+        auto* copy = window.findChild<QAction*>("action_CopyImage");
+        QVERIFY(copy && copy->isEnabled());
+        copy->trigger();
+        QCOMPARE(QApplication::clipboard()->image(), expected);
+        QVERIFY(QMetaObject::invokeMethod(&window, "toggleMinimalView"));
+        auto* footer = window.centralWidget()->findChild<QWidget*>("minimalImageFooter");
+        QVERIFY(footer && footer->toolTip().contains("[right, default]"));
+        QCOMPARE(document->activeFramebufferModel(), right);
+        QVERIFY(QMetaObject::invokeMethod(&window, "toggleMinimalView"));
+        QVERIFY(document->activeLayerTitleText().contains("[right, default]"));
+
+        // Equal dimensions do not make differently positioned parts safe to flatten.
+        data.headers.resize(2);
+        data.samples.resize(2);
+        for (auto& header : data.headers) header.erase("view");
+        const QString shiftedPath = fixture("shifted-parts");
+        writeMultipartFixture(shiftedPath, data);
+        OpenEXRImage shifted(shiftedPath, nullptr);
+        QVERIFY(!shifted.getLayerModel()->hasViews());
+        QVERIFY(shifted.getLayerModel()->viewLabel(shifted.getLayerModel()->defaultDisplayLayer()).isEmpty());
+        ImageSave::Source input;
+        input.sourceImage = &shifted;
+        ImageSave::Options options;
+        options.format = ImageSave::FormatExr;
+        options.target = ImageSave::TargetLayeredOriginal;
+        options.multipart = ImageSave::MultipartFlatten;
+        options.path = fixture("rejected-shifted-flatten");
+        const auto output = ImageSave::save(input, options);
+        QCOMPARE(output.status, ImageSave::StatusFailed);
+        QVERIFY(output.message.contains("different windows"));
+    }
+
+    void stereoMappingAndSourceReadouts()
+    {
+        const auto fixtureData = stereoFixture();
+        const QString path = fixture("stereo-colors");
+        writeMultipartFixture(path, fixtureData);
+        OpenEXRImage source(path, nullptr);
+        RGBFramebufferModel stereo(""), left(""), right("");
+        stereo.loadStereo(source.sharedEXR(), stereoInputs());
+        left.load(source.sharedEXR(), 0, {{"R", "G", "B", "A"}});
+        right.load(source.sharedEXR(), 1, {{"R", "G", "B", "A"}});
+        QTRY_VERIFY(stereo.isPreviewReady() && left.isPreviewReady() && right.isPreviewReady());
+        QVERIFY(stereo.isDerivedPreview() && stereo.getRawPixels().empty());
+        QCOMPARE(stereo.getDataWindow(), QRect(-2, -1, 4, 3));
+        QVERIFY(stereo.getColorInfo(0, 0).find("x: -2 y: -1 | Left:") == 0);
+        QVERIFY(stereo.getColorInfo(0, 0).find("A: 0") != std::string::npos);
+        QVERIFY(stereo.getColorInfo(0, 0).find("Right: no data") != std::string::npos);
+        QVERIFY(stereo.getColorInfo(0, 2).empty());
+        QCOMPARE(stereo.getDatasetMin(), 0.);
+        QCOMPARE(stereo.getDatasetMax(), double(.9f));
+        QCOMPARE(stereo.getLuminanceMin(), std::min(left.getLuminanceMin(), right.getLuminanceMin()));
+        QCOMPARE(stereo.getLuminanceMax(), std::max(left.getLuminanceMax(), right.getLuminanceMax()));
+        // Source alpha is not multiplied into either eye, including zero-alpha emission.
+        QVERIFY(stereo.getLoadedImage().pixelColor(0, 0).red() > 0);
+        QCOMPARE(stereo.getLoadedImage().pixelColor(0, 0).alpha(), 255);
+        for (auto mode : {RGBFramebufferModel::Preview_Exposure, RGBFramebufferModel::Preview_ToneMapping,
+                          RGBFramebufferModel::Preview_FalseColor}) {
+            for (auto* model : {&stereo, &left, &right}) {
+                model->setExposure(1.);
+                model->setToneMappingMethod(RGBFramebufferModel::Tone_Clamp);
+                model->setToneParameters(0., 1., 0., 0.);
+                model->setFalseColorRange(0., 1.);
+                model->setPreviewMode(mode);
+            }
+            QTRY_VERIFY(stereo.isPreviewReady() && left.isPreviewReady() && right.isPreviewReady());
+            for (int y = 0; y < 3; ++y) {
+                for (int x = 0; x < 4; ++x) {
+                    const QPoint file = QPoint(x, y) + stereo.getDataWindow().topLeft();
+                    const bool hasLeft = left.getDataWindow().contains(file);
+                    const bool hasRight = right.getDataWindow().contains(file);
+                    const auto l = hasLeft ? left.getLoadedImage().pixelColor(file - left.getDataWindow().topLeft()) : QColor(0, 0, 0);
+                    const auto r = hasRight ? right.getLoadedImage().pixelColor(file - right.getDataWindow().topLeft()) : QColor(0, 0, 0);
+                    QCOMPARE(stereo.getLoadedImage().pixelColor(x, y), QColor(l.red(), r.green(), r.blue(), hasLeft || hasRight ? 255 : 0));
+                }
+            }
+        }
+        const auto output = PreviewImage::render(stereo);
+        QCOMPARE(output.size(), QSize(6, 6));
+        QCOMPARE(output.pixelColor(1, 3).alpha(), 0); // Gap within the bounding data rectangle.
+        QCOMPARE(output.pixelColor(2, 2).alpha(), 255);
+    }
+
+    void stereoLuminanceChromaAndDiagnostics()
+    {
+        for (auto layout : {RGBFramebufferModel::Layer_Y, RGBFramebufferModel::Layer_YC}) {
+            auto data = stereoFixture();
+            data.samples[1] = {{"Y", std::vector<float>(6, .5f)}, {"A", std::vector<float>(6, 0.f)}};
+            auto inputs = stereoInputs();
+            inputs[1].layout = layout;
+            inputs[1].channels = {{"Y", "", "", "A"}};
+            if (layout == RGBFramebufferModel::Layer_YC) {
+                data.samples[1]["RY"] = std::vector<float>(6, 0.f);
+                data.samples[1]["BY"] = std::vector<float>(6, 0.f);
+                inputs[1].channels = {{"Y", "RY", "BY", "A"}};
+            }
+            data.samples[0]["G"][0] = std::numeric_limits<float>::quiet_NaN();
+            data.samples[1]["A"][5] = std::numeric_limits<float>::infinity();
+            const QString path = fixture(QString("stereo-y-%1").arg(int(layout)));
+            writeMultipartFixture(path, data);
+            OpenEXRImage source(path, nullptr);
+            QVERIFY(source.getLayerModel()->stereoLayers().anaglyphError.isEmpty());
+            RGBFramebufferModel stereo(""), right("", layout);
+            stereo.loadStereo(source.sharedEXR(), inputs);
+            right.load(source.sharedEXR(), 1, inputs[1].channels);
+            QTRY_VERIFY(stereo.isPreviewReady() && right.isPreviewReady());
+            QCOMPARE(stereo.getLoadedImage().pixelColor(3, 2).green(), right.getLoadedImage().pixelColor(2, 1).green());
+            QCOMPARE(stereo.getDatasetNaNCount(), uint64_t(1));
+            QCOMPARE(stereo.getDatasetPositiveInfCount(), uint64_t(1));
+            QCOMPARE(stereo.anomalyRegions().size(), size_t(2));
+            QCOMPARE(stereo.anomalyRegions()[0].bounds, QRect(0, 0, 1, 1));
+            QCOMPARE(stereo.anomalyRegions()[1].bounds, QRect(3, 2, 1, 1));
+            QVERIFY(stereo.getColorInfo(3, 2).find("Y: 0.5") != std::string::npos);
+            stereo.setHighlightNonFinite(true);
+            const QImage marked = PreviewImage::render(stereo);
+            QCOMPARE(marked.pixelColor(1, 3).alpha(), 0); // Markers cannot fill the uncovered gap.
+            QCOMPARE(marked.pixelColor(4, 1).alpha(), 0);
+        }
+    }
+
+    void stereoPairAvailability()
+    {
+        Imf::Header leftHeader(4, 4), rightHeader(4, 4);
+        QVERIFY(ViewMetadata::stereoGeometryMatches(leftHeader, rightHeader));
+        rightHeader.dataWindow().min.x = -1;
+        QVERIFY(ViewMetadata::stereoGeometryMatches(leftHeader, rightHeader));
+        rightHeader.displayWindow().min.x = 1;
+        QVERIFY(!ViewMetadata::stereoGeometryMatches(leftHeader, rightHeader));
+        rightHeader.displayWindow() = leftHeader.displayWindow();
+        rightHeader.pixelAspectRatio() = 1.5f;
+        QVERIFY(!ViewMetadata::stereoGeometryMatches(leftHeader, rightHeader));
+        for (int kind = 0; kind < 4; ++kind) {
+            auto data = stereoFixture();
+            if (kind == 0) data.headers[1].erase("view");
+            if (kind == 1) {
+                data.headers.push_back(data.headers[0]);
+                data.headers.back().setName("duplicate-left");
+                data.samples.push_back(data.samples[0]);
+            }
+            if (kind == 2) { // Other layer families must not be silently substituted.
+                const auto sourceChannels = data.samples[0];
+                data.samples[0].clear();
+                for (const auto& channel : sourceChannels)
+                    data.samples[0]["other." + channel.first] = channel.second;
+            }
+            if (kind == 3) for (auto& header : data.headers) header.erase("view");
+            const QString path = fixture(QString("stereo-unavailable-%1").arg(kind));
+            writeMultipartFixture(path, data);
+            OpenEXRImage source(path, nullptr);
+            const auto pair = source.getLayerModel()->stereoLayers();
+            QVERIFY(!pair.anaglyphError.isEmpty());
+            if (kind == 1) QVERIFY(pair.eyeErrors[0].contains("ambiguous"));
+        }
+    }
+
+    void stereoIncompleteInputDoesNotPublish()
+    {
+        const QString path = fixture("stereo-incomplete");
+        writeMultipartFixture(path, stereoFixture(), 1);
+        OpenEXRImage source(path, nullptr);
+        RGBFramebufferModel stereo("");
+        stereo.loadStereo(source.sharedEXR(), stereoInputs());
+        QTRY_VERIFY(!stereo.isLoading());
+        QVERIFY(!stereo.isImageLoaded() && !stereo.isPreviewReady());
+        QVERIFY(!stereo.errorString().isEmpty());
+        QVERIFY(stereo.getLoadedImage().isNull());
+    }
+
+    void stereoStateRefreshAndCancellation()
+    {
+        const QString path = fixture("stereo-state");
+        writeMultipartFixture(path, stereoFixture());
+        FileWidget widget(path), other(path);
+        QTRY_VERIFY(widget.activeFramebufferModel() && other.activeFramebufferModel()
+                    && widget.activeFramebufferModel()->isPreviewReady() && other.activeFramebufferModel()->isPreviewReady());
+        widget.setStereoMode(ImageFileWidget::StereoRight);
+        QCOMPARE(widget.stereoMode(), ImageFileWidget::StereoRight);
+        QCOMPARE(other.stereoMode(), ImageFileWidget::StereoDefault);
+        widget.setStereoMode(ImageFileWidget::StereoLeft);
+        QTRY_VERIFY(widget.activeFramebufferModel()->isPreviewReady());
+        auto* color = qobject_cast<RGBFramebufferWidget*>(widget.activePreviewWidget());
+        auto state = color->previewState();
+        state.exposure = -1.5;
+        state.highlightNonFinite = true;
+        color->restorePreviewState(state);
+        QTRY_VERIFY(widget.activeFramebufferModel()->isPreviewReady());
+        const auto* previous = widget.activeFramebufferModel();
+        widget.setStereoMode(ImageFileWidget::StereoAnaglyph);
+        QCOMPARE(widget.activeFramebufferModel(), previous); // Both eyes must finish first.
+        widget.setStereoMode(ImageFileWidget::StereoDefault); // Cancel before queued completion.
+        QCOMPARE(widget.stereoMode(), ImageFileWidget::StereoDefault);
+        widget.setStereoMode(ImageFileWidget::StereoLeft);
+        widget.setStereoMode(ImageFileWidget::StereoAnaglyph);
+        QTRY_VERIFY(widget.stereoMode() == ImageFileWidget::StereoAnaglyph);
+        QVERIFY(widget.activeFramebufferModel()->isDerivedPreview());
+        QCOMPARE(qobject_cast<RGBFramebufferWidget*>(widget.activePreviewWidget())->previewState().exposure, -1.5);
+        QVERIFY(widget.activeFramebufferModel()->highlightNonFinite());
+        const auto* stereo = widget.activeFramebufferModel();
+        widget.setStereoMode(ImageFileWidget::StereoRight);
+        widget.setStereoMode(ImageFileWidget::StereoAnaglyph);
+        QCOMPARE(widget.activeFramebufferModel(), stereo);
+        QCOMPARE(widget.findChildren<RGBFramebufferWidget*>().size(), 3);
+        widget.refresh();
+        QTRY_VERIFY(!widget.isRefreshInProgress());
+        QCOMPARE(widget.stereoMode(), ImageFileWidget::StereoAnaglyph);
+        QVERIFY(widget.activeFramebufferModel()->isPreviewReady());
+        QCOMPARE(qobject_cast<RGBFramebufferWidget*>(widget.activePreviewWidget())->previewState().exposure, -1.5);
+        auto* raw = widget.openLayer(widget.sourceImage()->getLayerModel()->findChannel(0, "R"));
+        QTRY_VERIFY(raw->isPreviewReady());
+        QCOMPARE(widget.stereoMode(), ImageFileWidget::StereoDefault);
+        widget.setStereoMode(ImageFileWidget::StereoAnaglyph);
+        const auto* oldImage = widget.sourceImage();
+        const auto* oldPreview = widget.activeFramebufferModel();
+        QVERIFY(QFile::rename(path, path + ".old"));
+        auto missing = stereoFixture();
+        missing.headers[0].erase("view");
+        writeMultipartFixture(path, missing);
+        dismissNextError();
+        widget.refresh();
+        QCOMPARE(widget.sourceImage(), oldImage);
+        QCOMPARE(widget.activeFramebufferModel(), oldPreview);
+        QCOMPARE(widget.stereoMode(), ImageFileWidget::StereoAnaglyph);
+    }
+
+    void stereoExportsMenuAndMinimal()
+    {
+        const QString path = fixture("stereo-ui");
+        writeMultipartFixture(path, stereoFixture());
+        MainWindow window;
+        window.resize(800, 600);
+        window.show();
+        window.open(path);
+        QTRY_VERIFY(window.findChild<ImageFileWidget*>());
+        auto* document = window.findChild<ImageFileWidget*>();
+        QTRY_VERIFY(document->activeFramebufferModel() && document->activeFramebufferModel()->isPreviewReady());
+        QVERIFY(window.findChild<QMenu*>("menu_Stereo"));
+        auto* action = window.findChild<QAction*>("action_StereoAnaglyph");
+        QVERIFY(action && action->isEnabled());
+        action->trigger();
+        QTRY_VERIFY(document->stereoMode() == ImageFileWidget::StereoAnaglyph);
+        QVERIFY(action->isChecked());
+        const auto* model = document->activeFramebufferModel();
+        window.findChild<QAction*>("action_CopyImageFullResolution")->trigger();
+        QCOMPARE(QApplication::clipboard()->image(), PreviewImage::render(*model));
+        QVERIFY(QMetaObject::invokeMethod(&window, "toggleMinimalView"));
+        auto* footer = window.centralWidget()->findChild<QWidget*>("minimalImageFooter");
+        QVERIFY(footer && footer->toolTip().contains("Anaglyph 3D"));
+        QVERIFY(QMetaObject::invokeMethod(&window, "toggleMinimalView"));
+        QCOMPARE(document->activeFramebufferModel(), model);
+        QCOMPARE(document->stereoMode(), ImageFileWidget::StereoAnaglyph);
+        SaveImageDialog dialog(fixture("stereo-dialog"));
+        dialog.setSourceState(true, true, {}, true);
+        auto* targets = dialog.findChild<QComboBox*>("targetCombo");
+        auto* items = qobject_cast<QStandardItemModel*>(targets->model());
+        QVERIFY(items);
+        QVERIFY(!items->item(targets->findData(ImageSave::TargetActiveOriginal))->isEnabled());
+        QVERIFY(!items->item(targets->findData(ImageSave::TargetHdrBracketedImages))->isEnabled());
+        ImageSave::Source source;
+        source.activeModel = model;
+        source.sourceImage = document->sourceImage();
+        ImageSave::Options options;
+        options.path = fixture("stereo-save");
+        for (auto target : {ImageSave::TargetActiveOriginal, ImageSave::TargetHdrBracketedImages}) {
+            options.target = target;
+            QCOMPARE(ImageSave::save(source, options).status, ImageSave::StatusFailed);
+        }
+        options.target = ImageSave::TargetPreview;
+        options.format = ImageSave::FormatHdr;
+        QCOMPARE(ImageSave::save(source, options).status, ImageSave::StatusFailed);
+        options.format = ImageSave::FormatPng;
+        options.path = m_directory.filePath("stereo-preview.png");
+        QCOMPARE(ImageSave::save(source, options).status, ImageSave::StatusSaved);
+        QCOMPARE(QImage(options.path).pixelColor(1, 3).alpha(), 0);
+        options.format = ImageSave::FormatJpeg;
+        options.jpegBackground = ImageSave::BackgroundWhite;
+        options.path = m_directory.filePath("stereo-preview.jpg");
+        QCOMPARE(ImageSave::save(source, options).status, ImageSave::StatusSaved);
+        QVERIFY(QImage(options.path).pixelColor(0, 5).red() > 200);
+        options.target = ImageSave::TargetLayeredOriginal;
+        options.format = ImageSave::FormatExr;
+        options.pixelType = ImageSave::PixelFloat;
+        options.path = fixture("stereo-source-out");
+        QCOMPARE(ImageSave::save(source, options).status, ImageSave::StatusSaved);
+        OpenEXRImage exported(options.path, nullptr);
+        QCOMPARE(exported.getEXR().parts(), 2);
+        QCOMPARE(exported.getEXR().header(0).view(), std::string("left"));
     }
 
     void displayWindowGeometry_data()
