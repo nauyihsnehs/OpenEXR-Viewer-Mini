@@ -9,6 +9,8 @@
 #include <OpenEXR/ImfInputPart.h>
 #include <OpenEXR/ImfPartType.h>
 #include <OpenEXR/ImfRgbaYca.h>
+#include <OpenEXR/ImfTiledInputPart.h>
+#include <OpenEXR/ImfTileDescription.h>
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -126,14 +128,14 @@ DecodeResult FramebufferLoader::decode(
       names[0].empty()
       || ((layout == RGB || layout == Chroma) && (names[1].empty() || names[2].empty())))
         throw std::runtime_error("Missing image channels.");
-    if (header.hasType() && header.type() != Imf::SCANLINEIMAGE)
+    if (header.hasType() && header.type() != Imf::SCANLINEIMAGE
+        && header.type() != Imf::TILEDIMAGE)
         throw std::runtime_error(
-          "This viewer supports scanline image parts only.");
-    const auto makePart = [&] {
-        const std::lock_guard<std::mutex> lock(source->mutex);
-        return Imf::InputPart(*file, partId);
-    };
-    Imf::InputPart     part    = makePart();
+          "Only flat scanline and single-level tiled image parts are supported; Deep is not supported.");
+    const bool tiled = header.hasType() ? header.type() == Imf::TILEDIMAGE
+                                        : header.hasTileDescription();
+    if (tiled && header.tileDescription().mode != Imf::ONE_LEVEL)
+        throw std::runtime_error("Mipmap and Ripmap tiled images are not supported yet.");
     const Imath::Box2i window  = header.dataWindow();
     const Imath::Box2i display = header.displayWindow();
     auto               data    = std::make_shared<FramebufferData>();
@@ -161,13 +163,35 @@ DecodeResult FramebufferLoader::decode(
             channels[i] = allocateChannel(header, names[i], window, buffer);
         if (cancel->load()) return DecodeResult();
     }
-    for (int64_t y = window.min.y; y <= window.max.y; y += 32) {
-        if (cancel->load()) return DecodeResult();
-        const std::lock_guard<std::mutex> lock(source->mutex);
-        part.setFrameBuffer(buffer);
-        part.readPixels(
-          static_cast<int>(y),
-          static_cast<int>(std::min<int64_t>(window.max.y, y + 31)));
+    if (tiled) {
+        const auto makePart = [&] {
+            const std::lock_guard<std::mutex> lock(source->mutex);
+            return Imf::TiledInputPart(*file, partId);
+        };
+        Imf::TiledInputPart part = makePart();
+        for (int y = 0; y < part.numYTiles(0); ++y) {
+            if (cancel->load()) return DecodeResult();
+            {
+                const std::lock_guard<std::mutex> lock(source->mutex);
+                part.setFrameBuffer(buffer);
+                part.readTiles(0, part.numXTiles(0) - 1, y, y, 0, 0);
+            }
+            if (cancel->load()) return DecodeResult();
+        }
+    } else {
+        const auto makePart = [&] {
+            const std::lock_guard<std::mutex> lock(source->mutex);
+            return Imf::InputPart(*file, partId);
+        };
+        Imf::InputPart part = makePart();
+        for (int64_t y = window.min.y; y <= window.max.y; y += 32) {
+            if (cancel->load()) return DecodeResult();
+            const std::lock_guard<std::mutex> lock(source->mutex);
+            part.setFrameBuffer(buffer);
+            part.readPixels(
+              static_cast<int>(y),
+              static_cast<int>(std::min<int64_t>(window.max.y, y + 31)));
+        }
     }
     // Count stored channel samples, not resampled pixels or synthesized RGBA.
     for (const Channel& channel : channels) {

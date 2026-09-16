@@ -46,6 +46,11 @@ Viewing controls
   exports remain converted RGB. HDR and exposure-bracket exports use display-linear
   colors. See the [ScanLines manual checklist](docs/scanline-images.md) for checks
   still requiring a running viewer.
+- Single-level tiled images use the same color and individual-channel previews as
+  scanline images, including depth channels, source values, and anomaly markers.
+  Mipmap, Ripmap, and Deep images are not supported. Raw EXR exports use scanline
+  storage and retain the existing channel, window, and metadata options; they do
+  not preserve the source tile layout. See the [Tiles manual checklist](docs/tiled-images.md).
 - RGB false-color and scalar ranges accept scientific notation, including tiny
   values and the full finite FLOAT range. Auto range is unavailable without finite
   samples. A constant range maps finite values to the bottom of the color scale.

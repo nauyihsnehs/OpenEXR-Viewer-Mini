@@ -43,6 +43,10 @@
 #include <OpenEXR/ImfHeader.h>
 #include <OpenEXR/ImfTiledOutputFile.h>
 #include <OpenEXR/ImfTileDescription.h>
+#include <OpenEXR/ImfDeepFrameBuffer.h>
+#include <OpenEXR/ImfDeepScanLineOutputFile.h>
+#include <OpenEXR/ImfDeepTiledOutputFile.h>
+#include <OpenEXR/ImfPartType.h>
 #include <cmath>
 #include <limits>
 #include <map>
@@ -84,9 +88,19 @@ namespace
                 sampling,
                 sampling));
         }
-        Imf::OutputFile file(path.toLocal8Bit().constData(), header);
-        file.setFrameBuffer(framebuffer);
-        file.writePixels(height);
+        if (header.hasTileDescription()) {
+            Imf::TiledOutputFile file(path.toLocal8Bit().constData(), header);
+            file.setFrameBuffer(framebuffer);
+            for (int ly = 0; ly < file.numYLevels(); ++ly)
+                for (int lx = 0; lx < file.numXLevels(); ++lx)
+                    if (file.isValidLevel(lx, ly))
+                        file.writeTiles(0, file.numXTiles(lx) - 1,
+                                        0, file.numYTiles(ly) - 1, lx, ly);
+        } else {
+            Imf::OutputFile file(path.toLocal8Bit().constData(), header);
+            file.setFrameBuffer(framebuffer);
+            file.writePixels(height);
+        }
     }
 
     const LayerItem* findLayer(
@@ -572,32 +586,200 @@ class ViewerTests: public QObject
         QVERIFY(depth.getColorInfo(1, 1).find("x: 0 y: 0") == 0);
     }
 
-    void unsupportedPartsAndInvalidMetadata()
+    void tiledScalarEdgesAndSmallImages()
     {
-        const QString tiledPath = fixture("tiled");
-        {
-            Imf::Header header(2, 2);
-            header.channels().insert("Y", Imf::Channel(Imf::FLOAT));
-            header.setTileDescription(Imf::TileDescription(2, 2));
-            Imf::TiledOutputFile file(
-              tiledPath.toLocal8Bit().constData(),
-              header);
-            float            pixels[] = {0.f, 1.f, 2.f, 3.f};
-            Imf::FrameBuffer buffer;
-            buffer.insert(
-              "Y",
-              Imf::Slice::Make(Imf::FLOAT, pixels, header.dataWindow()));
-            file.setFrameBuffer(buffer);
-            file.writeTiles(0, 0, 0, 0);
+        for (int tileWidth : {3, 16}) {
+            Imf::Header header(5, 3);
+            header.setTileDescription(Imf::TileDescription(tileWidth, 4));
+            std::vector<float> values(15);
+            for (size_t i = 0; i < values.size(); ++i) values[i] = float(i) + 0.5f;
+            const QString path = fixture(QString("tiled-scalar-%1").arg(tileWidth));
+            writeFixture(path, 5, 3, {{"V", values}}, 0, 0, 1.f, 1, &header);
+            OpenEXRImage source(path, nullptr);
+            YFramebufferModel model("V");
+            model.load(source.sharedEXR(), 0);
+            QTRY_VERIFY(model.isPreviewReady());
+            QVERIFY(model.getRawPixels() == values);
+            QCOMPARE(model.getDatasetMin(), 0.5);
+            QCOMPARE(model.getDatasetMax(), 14.5);
         }
-        OpenEXRImage      tiled(tiledPath, nullptr);
-        YFramebufferModel model("Y");
-        QSignalSpy        failed(&model, &FramebufferModel::loadFailed);
-        model.load(tiled.sharedEXR(), 0);
-        QTRY_COMPARE(failed.count(), 1);
-        QVERIFY(!model.isImageLoaded());
-        QVERIFY(model.errorString().contains("scanline"));
+    }
 
+    void tiledColorDepthCoordinatesAndScanlineExports()
+    {
+        const Imf::Chromaticities gamut(
+          Imath::V2f(0.62955f, 0.341f), Imath::V2f(0.2867f, 0.6108f),
+          Imath::V2f(0.1489f, 0.07125f), Imath::V2f(0.3155f, 0.33165f));
+        Imf::Header header(2, 2);
+        header.setTileDescription(Imf::TileDescription(3, 2));
+        header.insert("chromaticities", Imf::ChromaticitiesAttribute(gamut));
+        std::vector<float> red(15), depth(15, 2.f), alpha(15, 0.f);
+        for (size_t i = 0; i < red.size(); ++i) red[i] = float(i + 1) / 32.f;
+        for (int i : {7, 8, 12}) depth[i] = std::numeric_limits<float>::quiet_NaN();
+        const QString path = fixture("tiled-color-depth");
+        writeFixture(path, 5, 3,
+          {{"R", red}, {"G", std::vector<float>(15, 0.125f)},
+           {"B", std::vector<float>(15, 0.0625f)}, {"A", alpha}, {"Z", depth}},
+          -2, -1, 1.f, 1, &header);
+        OpenEXRImage source(path, nullptr);
+        RGBFramebufferModel rgba(""), rgb("");
+        YFramebufferModel z("Z");
+        rgba.load(source.sharedEXR(), 0, {{"R", "G", "B", "A"}});
+        rgb.load(source.sharedEXR(), 0, {{"R", "G", "B", ""}});
+        z.load(source.sharedEXR(), 0);
+        QTRY_VERIFY(rgba.isPreviewReady() && rgb.isPreviewReady() && z.isPreviewReady());
+        QCOMPARE(rgba.getDataWindow(), QRect(-2, -1, 5, 3));
+        QCOMPARE(rgba.getDisplayWindow(), QRect(0, 0, 2, 2));
+        for (int y = 0; y < 3; ++y)
+            for (int x = 0; x < 5; ++x) {
+                QCOMPARE(rgba.getRedInfo(x, y), red[y * 5 + x]);
+                QCOMPARE(rgb.getRedInfo(x, y), red[y * 5 + x]);
+                QCOMPARE(rgba.getLoadedImage().pixelColor(x, y), rgb.getLoadedImage().pixelColor(x, y));
+            }
+        QVERIFY(rgba.getLoadedImage().pixelColor(4, 2).red() > 0);
+        QCOMPARE(rgba.getLoadedImage().pixelColor(4, 2).alpha(), 255);
+        QVERIFY(rgba.getRawPixels() != rgba.getDisplayPixels());
+        QVERIFY(rgba.getColorInfo(0, 0).find("x: -2 y: -1") == 0);
+        QVERIFY(z.getColorInfo(4, 2).find("x: 2 y: 1") == 0);
+        QCOMPARE(z.getDatasetNaNCount(), uint64_t(3));
+        QCOMPARE(z.anomalyRegions().size(), size_t(1));
+        QCOMPARE(z.anomalyRegions()[0].bounds, QRect(2, 1, 2, 2));
+        QCOMPARE(z.anomalyRegions()[0].pixelCount, uint64_t(3));
+
+        ImageSave::Source input;
+        input.activeModel = &rgba;
+        input.sourceImage = &source;
+        for (auto target : {ImageSave::TargetActiveOriginal, ImageSave::TargetLayeredOriginal}) {
+            for (auto metadata : {ImageSave::MetadataBasic, ImageSave::MetadataNone}) {
+                ImageSave::Options options;
+                options.target = target;
+                options.format = ImageSave::FormatExr;
+                options.pixelType = ImageSave::PixelFloat;
+                options.metadata = metadata;
+                options.path = fixture(QString("tiled-export-%1-%2").arg(int(target)).arg(int(metadata)));
+                QCOMPARE(ImageSave::save(input, options).status, ImageSave::StatusSaved);
+                OpenEXRImage exported(options.path, nullptr);
+                const auto& outputHeader = exported.getEXR().header(0);
+                QVERIFY(!outputHeader.hasTileDescription());
+                QVERIFY(outputHeader.type() == Imf::SCANLINEIMAGE);
+                QVERIFY(outputHeader.dataWindow() == source.getEXR().header(0).dataWindow());
+                QVERIFY(outputHeader.displayWindow() == header.displayWindow());
+                const auto* chroma = outputHeader.findTypedAttribute<Imf::ChromaticitiesAttribute>("chromaticities");
+                if (metadata == ImageSave::MetadataBasic) {
+                    QVERIFY(chroma && chroma->value() == gamut);
+                } else {
+                    QVERIFY(!chroma);
+                }
+                RGBFramebufferModel roundTrip("");
+                roundTrip.load(exported.sharedEXR(), 0, {{"R", "G", "B", "A"}});
+                QTRY_VERIFY(roundTrip.isPreviewReady());
+                QVERIFY(roundTrip.getRawPixels() == rgba.getRawPixels());
+                if (target == ImageSave::TargetLayeredOriginal) {
+                    YFramebufferModel exportedZ("Z");
+                    exportedZ.load(exported.sharedEXR(), 0);
+                    QTRY_VERIFY(exportedZ.isPreviewReady());
+                    QCOMPARE(exportedZ.getRawPixels()[14], 2.f);
+                    QCOMPARE(exportedZ.getDatasetNaNCount(), uint64_t(3));
+                }
+            }
+        }
+        const auto cancel = std::make_shared<std::atomic_bool>(true);
+        QVERIFY(!FramebufferLoader::decode(source.sharedEXR(), 0, FramebufferLoader::Scalar,
+                                          {{"Z", "", "", ""}}, cancel).data);
+    }
+
+    void tiledMissingDataDoesNotPublishPartialPreview()
+    {
+        Imf::Header header(5, 3);
+        header.setTileDescription(Imf::TileDescription(3, 2));
+        const QString path = fixture("truncated-tiles");
+        writeFixture(path, 5, 3, {{"Y", std::vector<float>(15, 0.5f)}},
+                     0, 0, 1.f, 1, &header);
+        QFile damaged(path);
+        QVERIFY(damaged.open(QIODevice::ReadWrite));
+        QVERIFY(damaged.resize(damaged.size() - 8)); // Truncate the final tile payload.
+        damaged.close();
+        try {
+            OpenEXRImage source(path, nullptr);
+            YFramebufferModel model("Y");
+            QSignalSpy failed(&model, &FramebufferModel::loadFailed);
+            QSignalSpy loaded(&model, &FramebufferModel::imageLoaded);
+            model.load(source.sharedEXR(), 0);
+            QTRY_COMPARE(failed.count(), 1);
+            QCOMPARE(loaded.count(), 0);
+            QVERIFY(!model.isImageLoaded() && !model.isPreviewReady());
+            QVERIFY(model.getLoadedImage().isNull());
+            ImageSave::Source input;
+            input.sourceImage = &source;
+            ImageSave::Options options;
+            options.target = ImageSave::TargetLayeredOriginal;
+            options.format = ImageSave::FormatExr;
+            options.path = fixture("truncated-export");
+            QCOMPARE(ImageSave::save(input, options).status, ImageSave::StatusFailed);
+            QVERIFY(!QFile::exists(options.path));
+        } catch (const std::exception& error) {
+            QVERIFY(*error.what()); // The library may reject truncated input on open.
+        }
+    }
+
+    void deepAndMultilevelPartsRemainUnsupported()
+    {
+        for (int kind = 0; kind < 4; ++kind) {
+            const QString path = fixture(QString("unsupported-part-%1").arg(kind));
+            if (kind < 2) {
+                Imf::Header header(4, 4);
+                header.setTileDescription(Imf::TileDescription(
+                  2, 2, kind == 0 ? Imf::MIPMAP_LEVELS : Imf::RIPMAP_LEVELS));
+                writeFixture(path, 4, 4, {{"Z", std::vector<float>(16, 1.f)}},
+                             0, 0, 1.f, 1, &header);
+            } else {
+                Imf::Header header(1, 1);
+                header.setType(kind == 2 ? Imf::DEEPSCANLINE : Imf::DEEPTILE);
+                header.compression() = Imf::ZIPS_COMPRESSION;
+                header.channels().insert("Z", Imf::Channel(Imf::FLOAT));
+                unsigned int count = 1;
+                float value = 1.f;
+                float* sample = &value;
+                Imf::DeepFrameBuffer buffer;
+                buffer.insertSampleCountSlice(Imf::Slice(
+                  Imf::UINT, reinterpret_cast<char*>(&count), sizeof(count), sizeof(count)));
+                buffer.insert("Z", Imf::DeepSlice(
+                  Imf::FLOAT, reinterpret_cast<char*>(&sample), sizeof(sample),
+                  sizeof(sample), sizeof(float)));
+                if (kind == 2) {
+                    Imf::DeepScanLineOutputFile file(path.toLocal8Bit().constData(), header);
+                    file.setFrameBuffer(buffer);
+                    file.writePixels(1);
+                } else {
+                    header.setTileDescription(Imf::TileDescription(1, 1));
+                    Imf::DeepTiledOutputFile file(path.toLocal8Bit().constData(), header);
+                    file.setFrameBuffer(buffer);
+                    file.writeTile(0, 0, 0, 0);
+                }
+            }
+            OpenEXRImage source(path, nullptr);
+            YFramebufferModel model("Z");
+            QSignalSpy failed(&model, &FramebufferModel::loadFailed);
+            model.load(source.sharedEXR(), 0);
+            QTRY_COMPARE(failed.count(), 1);
+            QVERIFY(!model.isImageLoaded());
+            const QString expected = kind < 2 ? "Mipmap and Ripmap" : "Deep";
+            QVERIFY(model.errorString().contains(expected));
+            ImageSave::Source input;
+            input.sourceImage = &source;
+            ImageSave::Options options;
+            options.target = ImageSave::TargetLayeredOriginal;
+            options.format = ImageSave::FormatExr;
+            options.path = fixture(QString("unsupported-export-%1").arg(kind));
+            const auto saved = ImageSave::save(input, options);
+            QCOMPARE(saved.status, ImageSave::StatusFailed);
+            QVERIFY(saved.message.contains(expected));
+            QVERIFY(!QFile::exists(options.path));
+        }
+    }
+
+    void invalidMetadata()
+    {
         const QString path = fixture("invalid");
         writeFixture(path, 2, 2, {{"Y", {0.f, 1.f, 2.f, 3.f}}});
         QFile file(path);

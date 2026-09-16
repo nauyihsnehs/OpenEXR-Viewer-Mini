@@ -15,6 +15,9 @@
 #include <OpenEXR/ImfMultiPartOutputFile.h>
 #include <OpenEXR/ImfOutputFile.h>
 #include <OpenEXR/ImfOutputPart.h>
+#include <OpenEXR/ImfPartType.h>
+#include <OpenEXR/ImfTiledInputPart.h>
+#include <OpenEXR/ImfTileDescription.h>
 
 #include <Imath/ImathBox.h>
 
@@ -32,6 +35,7 @@
 #include <cmath>
 #include <cstdint>
 #include <exception>
+#include <stdexcept>
 #include <vector>
 
 namespace
@@ -221,9 +225,16 @@ namespace
       bool                    prefixNames)
     {
         Imf::MultiPartInputFile& file = image->getEXR();
-        Imf::InputPart           input(file, partIndex);
-        const Imf::Header&       header     = input.header();
+        const Imf::Header&       header     = file.header(partIndex);
         const Imath::Box2i       dataWindow = header.dataWindow();
+        if (header.hasType() && header.type() != Imf::SCANLINEIMAGE
+            && header.type() != Imf::TILEDIMAGE)
+            throw std::runtime_error(
+              "Only flat scanline and single-level tiled image parts are supported; Deep is not supported.");
+        const bool tiled = header.hasType() ? header.type() == Imf::TILEDIMAGE
+                                            : header.hasTileDescription();
+        if (tiled && header.tileDescription().mode != Imf::ONE_LEVEL)
+            throw std::runtime_error("Mipmap and Ripmap tiled images are not supported yet.");
 
         PartData part;
         part.width         = dataWindow.max.x - dataWindow.min.x + 1;
@@ -306,9 +317,21 @@ namespace
                 channel.ySampling));
         }
 
-        {
+        if (tiled) {
+            const auto makePart = [&] {
+                const std::lock_guard<std::mutex> lock(image->sharedEXR()->mutex);
+                return Imf::TiledInputPart(file, partIndex);
+            };
+            Imf::TiledInputPart input = makePart();
+            for (int y = 0; y < input.numYTiles(0); ++y) {
+                const std::lock_guard<std::mutex> lock(image->sharedEXR()->mutex);
+                input.setFrameBuffer(framebuffer);
+                input.readTiles(0, input.numXTiles(0) - 1, y, y, 0, 0);
+            }
+        } else {
             const std::lock_guard<std::mutex> lock(
               image->sharedEXR()->mutex);
+            Imf::InputPart input(file, partIndex);
             input.setFrameBuffer(framebuffer);
             input.readPixels(dataWindow.min.y, dataWindow.max.y);
         }
