@@ -1,6 +1,7 @@
 #pragma once
 
 #include <OpenEXR/ImfHeader.h>
+#include "ResolutionLevel.h"
 #include <string>
 #include <vector>
 
@@ -12,7 +13,7 @@ struct ViewMetadata {
     std::vector<std::string> multiView;
 
     static ViewMetadata read(const Imf::Header& header);
-    static bool stereoGeometryMatches(const Imf::Header& left, const Imf::Header& right, int level = 0);
+    static bool stereoGeometryMatches(const Imf::Header& left, const Imf::Header& right, ResolutionLevel level = {});
     void write(Imf::Header& header) const;
     bool present() const { return hasView || hasMultiView; }
     std::string defaultView() const;

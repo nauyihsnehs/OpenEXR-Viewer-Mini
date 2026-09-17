@@ -1,5 +1,5 @@
 #include "ImageSave.h"
-#include <util/MipLevels.h>
+#include <util/ResolutionLevels.h>
 #include <limits>
 #include <util/PreviewImage.h>
 
@@ -231,11 +231,11 @@ namespace
       OpenEXRImage*           image,
       int                     partIndex,
       ImageSave::ChannelScope scope,
-      bool                    prefixNames, int level)
+      bool                    prefixNames, ResolutionLevel level)
     {
         Imf::MultiPartInputFile& file = image->getEXR();
         const Imf::Header&       header     = file.header(partIndex);
-        const auto geometry = MipLevels::query(image->sharedEXR(), partIndex, level);
+        const auto geometry = ResolutionLevels::query(image->sharedEXR(), partIndex, level);
         const auto dataWindow = geometry.data;
         const bool tiled = geometry.tiled;
 
@@ -245,7 +245,7 @@ namespace
         if (width <= 0 || height <= 0 || width > std::numeric_limits<int>::max() / 4
             || height > std::numeric_limits<int>::max() / 4
             || width * height > std::numeric_limits<int>::max() / 4)
-            throw std::runtime_error("The selected mip level is too large to export safely.");
+            throw std::runtime_error("The selected resolution level is too large to export safely.");
         part.width = int(width);
         part.views         = ViewMetadata::read(header);
         part.height = int(height);
@@ -327,10 +327,10 @@ namespace
                 return Imf::TiledInputPart(file, partIndex);
             };
             Imf::TiledInputPart input = makePart();
-            for (int y = 0; y < input.numYTiles(level); ++y) {
+            for (int y = 0; y < input.numYTiles(level.y); ++y) {
                 const std::lock_guard<std::mutex> lock(image->sharedEXR()->mutex);
                 input.setFrameBuffer(framebuffer);
-                input.readTiles(0, input.numXTiles(level) - 1, y, y, level, level);
+                input.readTiles(0, input.numXTiles(level.x) - 1, y, y, level.x, level.y);
             }
         } else {
             const std::lock_guard<std::mutex> lock(
@@ -751,7 +751,7 @@ namespace
     }
 
     std::vector<PartData>
-    readLayeredParts(OpenEXRImage* image, const ImageSave::Options& options, int level)
+    readLayeredParts(OpenEXRImage* image, const ImageSave::Options& options, ResolutionLevel level)
     {
         std::vector<PartData> parts;
         if (!image) return parts;
@@ -777,7 +777,7 @@ namespace
     }
 
     ImageSave::Result
-    saveLayeredOriginal(OpenEXRImage* image, const ImageSave::Options& options, int level)
+    saveLayeredOriginal(OpenEXRImage* image, const ImageSave::Options& options, ResolutionLevel level)
     {
         if (options.format != ImageSave::FormatExr) {
             return result(
@@ -820,7 +820,7 @@ namespace
                   ImageSave::StatusFailed,
                   QObject::tr("No source image."));
             }
-            return saveLayeredOriginal(source.sourceImage, options, source.mipLevel);
+            return saveLayeredOriginal(source.sourceImage, options, source.resolutionLevel);
         }
 
         if (options.target == ImageSave::TargetHdrBracketedImages) {

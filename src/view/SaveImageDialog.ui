@@ -199,7 +199,7 @@
     </widget>
    </item>
    <item>
-    <widget class="QLabel" name="mipLevelLabel">
+    <widget class="QLabel" name="resolutionLevelLabel">
      <property name="wordWrap"><bool>true</bool></property>
      <property name="text"><string/></property>
     </widget>

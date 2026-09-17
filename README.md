@@ -69,24 +69,31 @@ Viewing controls
   still requiring a running viewer.
 - Single-level tiled images use the same color and individual-channel previews as
   scanline images, including depth channels, source values, and anomaly markers.
-  Mipmap images also support their stored resolution levels; Ripmap and Deep remain
-  unsupported. Raw EXR exports use scanline
-  storage and retain the existing channel, window, and metadata options; they do
+  Mipmap and Ripmap images also support their stored resolution levels; Deep remains
+  unsupported. Raw EXR exports use scanline storage and retain the existing channel,
+  window, and metadata options; they do
   not preserve the source tile layout. See the [Tiles manual checklist](docs/tiled-images.md).
-- **View > Show > Mipmap Level** selects a stored level for the current file. All
+- **View > Show > Resolution Level** selects a stored level for the current file. All
   open source and Anaglyph previews change together only after every new preview is
   ready; cancellation or failure retains the committed images and level. Each file
-  starts at level 0; refresh and minimal-window transitions preserve its selection.
-  The menu uses the levels common to every part (scanline/ONE_LEVEL parts allow only
-  level 0). Views use the selected level's native dimensions, retain manual display
-  parameters and zoom, recompute Auto ranges, and re-fit when Fit is active.
+  starts at `(0,0)`; refresh and minimal-window transitions preserve its selection.
+  Mipmap uses a flat list of `(L,L)` levels; Ripmap uses **X level > Y level** submenus.
+  Only the final pair selection starts a load. The menu intersects actual valid pairs
+  across all parts (scanline/ONE_LEVEL allow only `(0,0)`, Mipmap only diagonal pairs).
+  Views use the selected level's native dimensions, retain manual display parameters
+  and zoom, recompute Auto ranges, and re-fit when Fit is active.
   Data-window origins follow OpenEXR; the application retains the display-window
-  origin and shrinks its dimensions using the source rounding mode. Readouts identify
-  the current level and its sample coordinates, not corresponding level-0 positions.
+  origin and shrinks width by X and height by Y using the source rounding mode.
+  Readouts identify the current level and its sample coordinates, not corresponding
+  level-0 positions.
   Copy/preview export uses that level's display canvas. Active and whole-file raw EXR
-  exports save only the selected level as scanline data, not the mip pyramid; the save
+  exports save only the selected pair as scanline data, not the resolution pyramid; the save
   dialog states this explicitly. Source HDR/bracket exports also use the loaded level.
-  See the [MultiView manual checklist](docs/multiview-images.md).
+  Ripmap retains the selected level's native shape: Kapaa `(1,0)` is 400×546,
+  while `(0,1)` is 799×273. No aspect compensation is applied. `wrapmodes` remains
+  descriptive metadata; this viewer does not repeat or mirror textures on a surface.
+  See the [MultiView checklist](docs/multiview-images.md) and
+  [Multi-Resolution checklist](docs/multi-resolution-images.md) for pending checks.
 - The export option **Color channels (RGB/YC)** includes both RGB and luminance/chroma
   channels. See the [Chromaticities checklist](docs/chromaticities-images.md) and
   [Luminance/Chroma checklist](docs/luminance-chroma-images.md) for pending visual checks.

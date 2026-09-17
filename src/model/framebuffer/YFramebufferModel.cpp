@@ -49,7 +49,7 @@ YFramebufferModel::YFramebufferModel(
 YFramebufferModel::~YFramebufferModel() = default;
 
 void YFramebufferModel::load(
-  const std::shared_ptr<ExrInput>& file, int partId, int level)
+  const std::shared_ptr<ExrInput>& file, int partId, ResolutionLevel level)
 {
     m_partID                                  = partId;
     const std::array<std::string, 4> channels = {{m_layer, "", "", ""}};
@@ -68,7 +68,7 @@ std::string YFramebufferModel::getColorInfo(int x, int y) const
     if (!isImageLoaded() || x < 0 || x >= width() || y < 0 || y >= height())
         return "";
     std::stringstream text;
-    if (mipLevelCount() > 1) text << "Mip level " << mipLevel() << " | ";
+    if (resolutionLevelCount() > 1) text << "Level " << resolutionLevel().toString() << " | ";
     text << "x: " << x + getDataWindow().x()
          << " y: " << y + getDataWindow().y()
          << " | " << m_layer << ": "

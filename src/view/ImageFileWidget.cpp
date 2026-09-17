@@ -31,7 +31,7 @@
  */
 
 #include "ImageFileWidget.h"
-#include <util/MipLevels.h>
+#include <util/ResolutionLevels.h>
 #include <util/PreviewImage.h>
 
 #include <QAbstractItemModel>
@@ -242,7 +242,7 @@ struct ImageFileWidget::SavedDocument {
     std::vector<SavedPreview> previews;
     QString                   activeKey;
     StereoMode                stereoMode = StereoDefault;
-    int level = 0;
+    ResolutionLevel level;
 };
 
 struct ImageFileWidget::RefreshTransaction {
@@ -250,7 +250,7 @@ struct ImageFileWidget::RefreshTransaction {
     std::unique_ptr<OpenEXRImage> image; // Empty when changing levels on the current source.
     SavedDocument saved;
     std::vector<PreparedPreview> prepared;
-    int levelCount = 1;
+    std::vector<ResolutionLevel> levels;
 };
 
 template<typename Widget, typename Model>
@@ -408,7 +408,7 @@ ImageFileWidget::SavedDocument ImageFileWidget::captureDocumentState() const
 {
     SavedDocument state;
     state.stereoMode = m_stereoMode;
-    state.level = m_mipLevel;
+    state.level = m_resolutionLevel;
     const QMdiSubWindow* active = m_mdiArea->activeSubWindow();
     state.activeKey
       = active ? active->property("layerKey").toString() : QString();
@@ -456,32 +456,39 @@ void ImageFileWidget::restorePreview(
 void ImageFileWidget::refresh()
 {
     if (m_isStream || m_documentState != DocumentReady) return;
-    prepareDocument(m_mipLevel, true);
+    prepareDocument(m_resolutionLevel, true);
 }
 
-QStringList ImageFileWidget::mipLevelLabels() const
+bool ImageFileWidget::hasRipmapLevels() const
 {
-    QStringList labels;
-    if (!m_img || m_mipLevelCount <= 1) return labels;
+    if (!m_img) return false;
+    for (int part = 0; part < m_img->getEXR().parts(); ++part) {
+        const auto& header = m_img->getEXR().header(part);
+        if (header.hasTileDescription() && header.tileDescription().mode == Imf::RIPMAP_LEVELS)
+            return true;
+    }
+    return false;
+}
+
+QString ImageFileWidget::resolutionLevelLabel(ResolutionLevel level) const
+{
+    if (!m_img) return {};
     const LayerItem* item = nullptr;
     const auto index = activeLayerIndex();
     if (index.isValid()) item = static_cast<LayerItem*>(index.internalPointer());
     if (!item) item = m_img->getLayerModel()->defaultDisplayLayer();
-    if (!item) return labels;
+    if (!item) return {};
     const auto& header = m_img->getEXR().header(item->getPart());
-    for (int level = 0; level < m_mipLevelCount; ++level) {
-        const auto window = MipLevels::displayWindow(header, level);
-        labels << tr("Level %1 — %2 × %3").arg(level)
-          .arg(int64_t(window.max.x) - window.min.x + 1)
-          .arg(int64_t(window.max.y) - window.min.y + 1);
-    }
-    return labels;
+    const auto window = ResolutionLevels::displayWindow(header, level);
+    return tr("Level %1 — %2 × %3").arg(QString::fromStdString(level.toString()))
+      .arg(int64_t(window.max.x) - window.min.x + 1)
+      .arg(int64_t(window.max.y) - window.min.y + 1);
 }
 
-void ImageFileWidget::setMipLevel(int level)
+void ImageFileWidget::setResolutionLevel(ResolutionLevel level)
 {
-    if (!isDocumentReady() || level < 0 || level >= m_mipLevelCount) return;
-    if (level == m_mipLevel) {
+    if (!isDocumentReady() || !std::binary_search(m_resolutionLevels.begin(), m_resolutionLevels.end(), level)) return;
+    if (level == m_resolutionLevel) {
         ++m_preparationGeneration;
         m_refresh.reset();
         emit refreshInProgressChanged(false);
@@ -490,7 +497,7 @@ void ImageFileWidget::setMipLevel(int level)
     prepareDocument(level, false);
 }
 
-void ImageFileWidget::prepareDocument(int level, bool reopen)
+void ImageFileWidget::prepareDocument(ResolutionLevel level, bool reopen)
 {
     cancelStereoPreview();
     const unsigned generation = ++m_preparationGeneration;
@@ -499,15 +506,15 @@ void ImageFileWidget::prepareDocument(int level, bool reopen)
     try {
         if (reopen) transaction->image.reset(new OpenEXRImage(m_openedFilename, nullptr));
         auto* source = reopen ? transaction->image.get() : m_img;
-        transaction->levelCount = MipLevels::commonCount(source->sharedEXR());
-        if (level >= transaction->levelCount)
-            throw std::runtime_error("The selected mip level is no longer available; previous previews retained.");
+        transaction->levels = ResolutionLevels::commonLevels(source->sharedEXR());
+        if (!std::binary_search(transaction->levels.begin(), transaction->levels.end(), level))
+            throw std::runtime_error("The selected resolution level is no longer available; previous previews retained.");
         transaction->saved = captureDocumentState();
         transaction->saved.level = level;
         const auto mode = transaction->saved.stereoMode;
         if (mode == StereoLeft || mode == StereoRight) {
             const int eye = mode == StereoLeft ? 0 : 1;
-            const auto oldPair = m_img->getLayerModel()->stereoLayers(m_mipLevel);
+            const auto oldPair = m_img->getLayerModel()->stereoLayers(m_resolutionLevel);
             const auto newPair = source->getLayerModel()->stereoLayers(level);
             if (!oldPair.eyes[eye] || !newPair.eyes[eye]
                 || layerKey(oldPair.eyes[eye]) != layerKey(newPair.eyes[eye]))
@@ -575,8 +582,8 @@ void ImageFileWidget::commitRefresh()
         m_img = transaction->image.release();
         m_img->setParent(this);
     }
-    m_mipLevel = transaction->saved.level;
-    m_mipLevelCount = transaction->levelCount;
+    m_resolutionLevel = transaction->saved.level;
+    m_resolutionLevels = transaction->levels;
     afterOpen(false);
     QPointer<QMdiSubWindow> active;
     for (auto& preview : transaction->prepared) {
@@ -880,7 +887,7 @@ static RGBFramebufferModel::Input colorInput(const LayerItem* item)
     return input;
 }
 
-ImageFileWidget::PreparedPreview ImageFileWidget::createStereoPreview(OpenEXRImage* source, int level)
+ImageFileWidget::PreparedPreview ImageFileWidget::createStereoPreview(OpenEXRImage* source, ResolutionLevel level)
 {
     const auto pair = source->getLayerModel()->stereoLayers(level);
     if (!pair.anaglyphError.isEmpty()) throw std::runtime_error(pair.anaglyphError.toStdString());
@@ -904,7 +911,7 @@ ImageFileWidget::PreparedPreview ImageFileWidget::createStereoPreview(OpenEXRIma
 }
 
 ImageFileWidget::PreparedPreview ImageFileWidget::createPreview(
-  const LayerItem* item, OpenEXRImage* source, int level)
+  const LayerItem* item, OpenEXRImage* source, ResolutionLevel level)
 {
     if (
       !item || !source || item->getType() == LayerItem::GROUP
@@ -969,8 +976,8 @@ QMdiSubWindow* ImageFileWidget::installPreview(PreparedPreview& preview)
     const auto* model = preview.model;
     const QString title = preview.title;
     const auto updateTitle = [subWindow, model, title] {
-        subWindow->setWindowTitle(model->mipLevelCount() > 1
-          ? title + tr(" — Mip level %1 (%2 × %3)").arg(model->mipLevel()).arg(model->width()).arg(model->height()) : title);
+        subWindow->setWindowTitle(model->resolutionLevelCount() > 1
+          ? title + tr(" — Level %1 (%2 × %3)").arg(QString::fromStdString(model->resolutionLevel().toString())).arg(model->width()).arg(model->height()) : title);
     };
     connect(preview.model, &FramebufferModel::imageLoaded, subWindow, updateTitle);
     if (preview.model->isImageLoaded()) updateTitle();
@@ -1028,7 +1035,7 @@ FramebufferModel* ImageFileWidget::openLayer(const LayerItem* item)
         }
     }
 
-    PreparedPreview preview = createPreview(item, m_img, m_mipLevel);
+    PreparedPreview preview = createPreview(item, m_img, m_resolutionLevel);
     FramebufferModel* model = preview.model;
     installPreview(preview);
     return model;
@@ -1081,7 +1088,7 @@ QString ImageFileWidget::stereoUnavailableReason(StereoMode mode) const
 {
     if (!m_img || !isDocumentReady() || m_refresh) return tr("No ready document.");
     if (mode == StereoDefault) return {};
-    const auto pair = m_img->getLayerModel()->stereoLayers(m_mipLevel);
+    const auto pair = m_img->getLayerModel()->stereoLayers(m_resolutionLevel);
     if (mode == StereoAnaglyph) return pair.anaglyphError;
     return pair.eyeErrors[mode == StereoLeft ? 0 : 1];
 }
@@ -1092,7 +1099,7 @@ void ImageFileWidget::setStereoMode(StereoMode mode)
     cancelStereoPreview();
     const QScopedValueRollback<bool> selecting(m_selectingStereo, true);
     if (mode != StereoAnaglyph) {
-        const auto pair = m_img->getLayerModel()->stereoLayers(m_mipLevel);
+        const auto pair = m_img->getLayerModel()->stereoLayers(m_resolutionLevel);
         const auto* layer = mode == StereoDefault ? m_img->getLayerModel()->defaultDisplayLayer()
                                                  : pair.eyes[mode == StereoLeft ? 0 : 1];
         openLayer(layer);
@@ -1108,7 +1115,7 @@ void ImageFileWidget::setStereoMode(StereoMode mode)
         return;
     }
     try {
-        m_pendingStereo.reset(new PreparedPreview(createStereoPreview(m_img, m_mipLevel)));
+        m_pendingStereo.reset(new PreparedPreview(createStereoPreview(m_img, m_resolutionLevel)));
     } catch (const std::exception& error) {
         showLoadError(QString::fromUtf8(error.what()));
         return;
@@ -1250,7 +1257,7 @@ QString ImageFileWidget::activeLayerTitleText() const
 {
     const auto* window = m_mdiArea->activeSubWindow();
     const auto* model = activeFramebufferModel();
-    if (window && model && model->mipLevelCount() > 1)
+    if (window && model && model->resolutionLevelCount() > 1)
         return window->windowTitle().trimmed();
     QString title = layerTitleText(activeLayerIndex()).trimmed();
     if (title.isEmpty() && window) title = cleanLayerTitle(window->windowTitle());
@@ -1453,8 +1460,8 @@ void ImageFileWidget::open(std::istream& stream)
 
 void ImageFileWidget::afterOpen(bool defaultLayer)
 {
-    try { m_mipLevelCount = MipLevels::commonCount(m_img->sharedEXR()); }
-    catch (const std::exception&) { m_mipLevelCount = 1; }
+    try { m_resolutionLevels = ResolutionLevels::commonLevels(m_img->sharedEXR()); }
+    catch (const std::exception&) { m_resolutionLevels = {{0, 0}}; }
     m_attributesTreeView->setModel(m_img->getHeaderModel());
     m_attributesTreeView->expandAll();
     m_attributesTreeView->resizeColumnToContents(0);
@@ -1470,7 +1477,7 @@ void ImageFileWidget::afterOpen(bool defaultLayer)
         return;
     }
     try {
-        m_initialPrepared.reset(new PreparedPreview(createPreview(layer, m_img, m_mipLevel)));
+        m_initialPrepared.reset(new PreparedPreview(createPreview(layer, m_img, m_resolutionLevel)));
         trackInitialPreview(m_initialPrepared->model);
     } catch (const std::exception& error) {
         onLoadFailed(QString::fromUtf8(error.what()));

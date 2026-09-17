@@ -12,8 +12,8 @@
 
 // Published once by a decoder, then shared read-only by previews and exports.
 struct FramebufferData {
-    int mipLevel = 0;
-    int mipLevelCount = 1;
+    ResolutionLevel resolutionLevel;
+    std::vector<ResolutionLevel> resolutionLevels = {{0, 0}};
     int                width       = 0;
     int                height      = 0;
     float              pixelAspect = 1.f;

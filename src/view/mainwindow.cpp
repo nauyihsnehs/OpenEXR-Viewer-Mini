@@ -86,6 +86,7 @@
 #include <QScopedValueRollback>
 #include <QUrl>
 #include <QVariant>
+#include <QtAlgorithms>
 #include <cmath>
 
 #ifdef _WIN32
@@ -279,12 +280,13 @@ MainWindow::MainWindow(QWidget* parent)
     setupTitleBar();
     setupPreviewModeActions();
     setupStereoActions();
-    m_mipMenu = ui->menu_Show->addMenu(tr("Mipmap Level"));
-    m_mipMenu->setObjectName("menu_MipmapLevel");
-    m_mipActions = new QActionGroup(this);
-    m_mipActions->setExclusive(true);
-    connect(m_mipActions, &QActionGroup::triggered, this, [this](QAction* action) {
-        if (auto* widget = currentFileWidget()) widget->setMipLevel(action->data().toInt());
+    m_resolutionMenu = ui->menu_Show->addMenu(tr("Resolution Level"));
+    m_resolutionMenu->setObjectName("menu_ResolutionLevel");
+    m_resolutionActions = new QActionGroup(this);
+    m_resolutionActions->setExclusive(true);
+    connect(m_resolutionActions, &QActionGroup::triggered, this, [this](QAction* action) {
+        const QPoint level = action->data().toPoint();
+        if (auto* widget = currentFileWidget()) widget->setResolutionLevel({level.x(), level.y()});
         updateShowActions();
     });
     setupThemeActions();
@@ -727,25 +729,38 @@ void MainWindow::updateShowActions()
     ui->action_Save->setEnabled(model && model->isImageLoaded());
     ui->action_CopyImage->setEnabled(copyEnabled);
     ui->action_CopyImageFullResolution->setEnabled(copyEnabled);
-    if (m_mipMenu) {
-        const auto labels = widget ? widget->mipLevelLabels() : QStringList();
-        // Retain actions during asynchronous status updates and rapid selection.
-        while (m_mipActions->actions().size() > labels.size())
-            delete m_mipActions->actions().last();
-        for (int i = 0; i < labels.size(); ++i) {
-            QAction* action;
-            if (i < m_mipActions->actions().size()) action = m_mipActions->actions()[i];
-            else {
-                action = m_mipMenu->addAction(QString());
+    if (m_resolutionMenu) {
+        const auto levels = widget ? widget->resolutionLevels() : std::vector<ResolutionLevel>();
+        const bool ripmap = widget && widget->hasRipmapLevels();
+        // Keep actions alive during asynchronous status updates and rapid selection.
+        if (levels != m_menuResolutionLevels || ripmap != m_menuRipmap) {
+            qDeleteAll(m_resolutionActions->actions());
+            qDeleteAll(m_resolutionMenu->findChildren<QMenu*>(QString(), Qt::FindDirectChildrenOnly));
+            m_resolutionMenu->clear();
+            QMenu* submenu = m_resolutionMenu;
+            int previousX = -1;
+            for (const auto level : levels) {
+                if (ripmap && level.x != previousX) {
+                    submenu = m_resolutionMenu->addMenu(tr("X level %1").arg(level.x));
+                    submenu->setObjectName(QString("menu_ResolutionX%1").arg(level.x));
+                    previousX = level.x;
+                }
+                auto* action = submenu->addAction(QString());
                 action->setCheckable(true);
-                action->setData(i);
-                action->setObjectName(QString("action_MipLevel%1").arg(i));
-                m_mipActions->addAction(action);
+                action->setData(QPoint(level.x, level.y));
+                action->setObjectName(QString("action_ResolutionLevel%1_%2").arg(level.x).arg(level.y));
+                m_resolutionActions->addAction(action);
             }
-            action->setText(labels[i]);
-            action->setChecked(widget && i == widget->mipLevel());
+            m_menuResolutionLevels = levels;
+            m_menuRipmap = ripmap;
         }
-        m_mipMenu->setEnabled(widget && widget->isDocumentReady() && labels.size() > 1);
+        for (auto* action : m_resolutionActions->actions()) {
+            const QPoint point = action->data().toPoint();
+            const ResolutionLevel level(point.x(), point.y());
+            action->setText(widget->resolutionLevelLabel(level));
+            action->setChecked(level == widget->resolutionLevel());
+        }
+        m_resolutionMenu->setEnabled(widget && widget->isDocumentReady() && levels.size() > 1);
     }
     if (m_stereoActions) {
         for (auto* action : m_stereoActions->actions()) {
@@ -1068,7 +1083,7 @@ void MainWindow::updateMinimalSummary()
     const QString file = m_openFileTabs->tabText(m_openFileTabs->currentIndex());
     const auto* document = currentFileWidget();
     const QString layer = document && document->sourceImage()
-                            && (document->sourceImage()->getLayerModel()->hasViews() || m_minimalModel->mipLevelCount() > 1)
+                            && (document->sourceImage()->getLayerModel()->hasViews() || m_minimalModel->resolutionLevelCount() > 1)
                             ? document->activeLayerTitleText() : QString();
     const QSize displaySize = m_minimalModel->getDisplayWindow().size();
     m_minimalPage->setSummary(tr("%1 | Display %2 x %3 | %4% | %5")
@@ -1170,16 +1185,16 @@ void MainWindow::on_action_Save_triggered()
 
     const QPointer<const FramebufferModel> guardedModel(model);
     const QPointer<OpenEXRImage> guardedImage(widget ? widget->sourceImage() : nullptr);
-    const int savedLevel = widget ? widget->mipLevel() : 0;
+    const ResolutionLevel savedLevel = widget ? widget->resolutionLevel() : ResolutionLevel();
     bool multilevel = false;
     if (guardedImage) {
         for (int part = 0; part < guardedImage->getEXR().parts(); ++part) {
             const auto& header = guardedImage->getEXR().header(part);
-            if (header.hasTileDescription() && header.tileDescription().mode == Imf::MIPMAP_LEVELS)
+            if (header.hasTileDescription() && header.tileDescription().mode != Imf::ONE_LEVEL)
                 multilevel = true; // Also warn when another part restricts the document to level 0.
         }
     }
-    dialog.setMipLevelInfo(savedLevel, multilevel);
+    dialog.setResolutionLevelInfo(savedLevel, multilevel);
     const auto updateSource = [&dialog, guardedModel, guardedImage] {
         dialog.setSourceState(
           guardedModel && guardedImage && guardedModel->isImageLoaded(),
@@ -1208,7 +1223,7 @@ void MainWindow::on_action_Save_triggered()
           ImageSave::Source source;
           source.activeModel = guardedModel.data();
           source.sourceImage = guardedImage.data();
-          source.mipLevel = savedLevel;
+          source.resolutionLevel = savedLevel;
           ImageSave::Options options    = dialog.options();
           if (options.target == ImageSave::TargetPreview && !guardedModel->isPreviewReady())
               return;

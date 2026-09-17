@@ -232,7 +232,7 @@ QString LayerModel::viewLabel(const LayerItem* item) const
                                 : QString(" [%1]").arg(QString::fromStdString(view));
 }
 
-LayerModel::StereoLayers LayerModel::stereoLayers(int level) const
+LayerModel::StereoLayers LayerModel::stereoLayers(ResolutionLevel level) const
 {
     StereoLayers result;
     const auto isColor = [](const LayerItem* item) {

@@ -33,7 +33,7 @@
 #include <util/AnomalyMarkers.h>
 #include <util/PreviewImage.h>
 #include <util/ViewMetadata.h>
-#include <util/MipLevels.h>
+#include <util/ResolutionLevels.h>
 #include <OpenEXR/ImfTiledOutputPart.h>
 #include <util/YColormap.h>
 #include <util/ColormapModule.h>
@@ -151,6 +151,47 @@ namespace
             output.writeTiles(0, output.numXTiles(level) - 1, 0, output.numYTiles(level) - 1, level);
         }
         return output.numLevels();
+    }
+
+    float ripSample(ResolutionLevel level, int channel, size_t pixel)
+    {
+        return float(100 * level.x + 10 * level.y + channel) + float(pixel) / 1024.f;
+    }
+
+    QSize writeRipFixture(const QString& path, Imf::LevelRoundingMode rounding = Imf::ROUND_UP,
+                          ResolutionLevel missing = {-1, -1}, float aspect = 1.f)
+    {
+        const Imath::Box2i data(Imath::V2i(-4, -2), Imath::V2i(4, 2));
+        const Imath::Box2i display(Imath::V2i(-3, -1), Imath::V2i(7, 5));
+        Imf::Header header(display, data);
+        header.setTileDescription(Imf::TileDescription(4, 3, Imf::RIPMAP_LEVELS, rounding));
+        header.pixelAspectRatio() = aspect;
+        header.compression() = Imf::ZIP_COMPRESSION;
+        header.insert("multiView", Imf::StringVectorAttribute({"left", "right"}));
+        const std::vector<std::string> names = {"R", "G", "B", "A", "right.R", "right.G", "right.B", "right.A", "Z"};
+        for (const auto& name : names) header.channels().insert(name, Imf::Channel(Imf::FLOAT));
+        Imf::TiledOutputFile output(path.toLocal8Bit().constData(), header);
+        for (int x = 0; x < output.numXLevels(); ++x) {
+            for (int y = 0; y < output.numYLevels(); ++y) {
+                const ResolutionLevel level(x, y);
+                if (level == missing) continue;
+                const auto window = output.dataWindowForLevel(x, y);
+                const int width = output.levelWidth(x), height = output.levelHeight(y);
+                std::vector<std::vector<float>> values(names.size(), std::vector<float>(size_t(width) * height));
+                Imf::FrameBuffer buffer;
+                for (size_t c = 0; c < names.size(); ++c) {
+                    for (size_t i = 0; i < values[c].size(); ++i)
+                        values[c][i] = c == 3 || c == 7 ? 0.f : ripSample(level, int(c), i);
+                    if (names[c] == "Z" && values[c].size() > 1)
+                        values[c].back() = std::numeric_limits<float>::infinity();
+                    buffer.insert(names[c], Imf::Slice::Make(Imf::FLOAT, values[c].data(), window,
+                                  sizeof(float), size_t(width) * sizeof(float)));
+                }
+                output.setFrameBuffer(buffer);
+                output.writeTiles(0, output.numXTiles(x) - 1, 0, output.numYTiles(y) - 1, x, y);
+            }
+        }
+        return QSize(output.numXLevels(), output.numYLevels());
     }
 
     struct MultipartFixture {
@@ -1106,22 +1147,22 @@ class ViewerTests: public QObject
         }
     }
 
-    void mipLevelsReadStoredSamplesAndExportSelectedLevel()
+    void resolutionLevelsReadStoredSamplesAndExportSelectedLevel()
     {
         for (auto rounding : {Imf::ROUND_DOWN, Imf::ROUND_UP}) {
             const QString path = fixture(QString("mip-%1").arg(int(rounding)));
             const int count = writeMipFixture(path, rounding);
             OpenEXRImage source(path, nullptr);
-            QCOMPARE(MipLevels::commonCount(source.sharedEXR()), count);
+            QCOMPARE(int(ResolutionLevels::commonLevels(source.sharedEXR()).size()), count);
             int width = 9, height = 7, displayWidth = 11, displayHeight = 9;
             for (int level = 0; level < count; ++level) {
                 RGBFramebufferModel rgb("");
                 YFramebufferModel scalar("Z");
-                rgb.load(source.sharedEXR(), 0, {{"R", "G", "B", ""}}, level);
-                scalar.load(source.sharedEXR(), 0, level);
+                rgb.load(source.sharedEXR(), 0, {{"R", "G", "B", ""}}, {level, level});
+                scalar.load(source.sharedEXR(), 0, {level, level});
                 QTRY_VERIFY(rgb.isPreviewReady() && scalar.isPreviewReady());
-                QCOMPARE(rgb.mipLevel(), level);
-                QCOMPARE(rgb.mipLevelCount(), count);
+                QCOMPARE(rgb.resolutionLevel(), ResolutionLevel(level, level));
+                QCOMPARE(rgb.resolutionLevelCount(), size_t(count));
                 QCOMPARE(rgb.getDataWindow(), QRect(-4, -2, width, height));
                 QCOMPARE(rgb.getDisplayWindow(), QRect(-3, -1, displayWidth, displayHeight));
                 const int last = width * height - 1;
@@ -1130,7 +1171,7 @@ class ViewerTests: public QObject
                 QCOMPARE(scalar.getDatasetMin(), double(float(level) + .6f));
                 QCOMPARE(scalar.getDatasetPositiveInfCount(), uint64_t(last > 0 ? 1 : 0));
                 if (last > 0) QCOMPARE(scalar.anomalyRegions().back().bounds, QRect(width - 1, height - 1, 1, 1));
-                QVERIFY(rgb.getColorInfo(0, 0).find("Mip level " + std::to_string(level)) != std::string::npos);
+                QVERIFY(rgb.getColorInfo(0, 0).find("Level " + ResolutionLevel(level, level).toString()) != std::string::npos);
                 QCOMPARE(PreviewImage::render(rgb).size(), QSize(displayWidth, displayHeight));
                 if (width == 1 && height == 1)
                     QCOMPARE(PreviewImage::render(rgb).pixelColor(0, 0).alpha(), 0); // No window intersection.
@@ -1138,7 +1179,7 @@ class ViewerTests: public QObject
                     ImageSave::Source input;
                     input.sourceImage = &source;
                     input.activeModel = &rgb;
-                    input.mipLevel = level;
+                    input.resolutionLevel = {level, level};
                     ImageSave::Options options;
                     options.target = target;
                     options.format = ImageSave::FormatExr;
@@ -1149,7 +1190,7 @@ class ViewerTests: public QObject
                     OpenEXRImage reopened(options.path, nullptr);
                     const auto& out = reopened.getEXR().header(0);
                     QVERIFY(!out.hasTileDescription());
-                    QCOMPARE(out.displayWindow(), MipLevels::query(source.sharedEXR(), 0, level).display);
+                    QCOMPARE(out.displayWindow(), ResolutionLevels::query(source.sharedEXR(), 0, {level, level}).display);
                     QCOMPARE(ViewMetadata::read(out).multiView, std::vector<std::string>({"left", "right"}));
                     RGBFramebufferModel roundtrip("");
                     roundtrip.load(reopened.sharedEXR(), 0, {{"R", "G", "B", ""}});
@@ -1159,7 +1200,7 @@ class ViewerTests: public QObject
                 }
                 if (level == 1) {
                     ImageSave::Source input;
-                    input.activeModel = &rgb; input.sourceImage = &source; input.mipLevel = level;
+                    input.activeModel = &rgb; input.sourceImage = &source; input.resolutionLevel = {level, level};
                     ImageSave::Options options;
                     options.path = m_directory.filePath(QString("mip-preview-%1.png").arg(int(rounding)));
                     QCOMPARE(ImageSave::save(input, options).status, ImageSave::StatusSaved);
@@ -1185,20 +1226,31 @@ class ViewerTests: public QObject
             }
             for (int invalid : {-1, count}) {
                 YFramebufferModel model("Z");
-                model.load(source.sharedEXR(), 0, invalid);
+                model.load(source.sharedEXR(), 0, {invalid, invalid});
                 QTRY_VERIFY(!model.isLoading());
                 QVERIFY(!model.isImageLoaded() && !model.errorString().isEmpty());
             }
             const auto cancelled = std::make_shared<std::atomic_bool>(true);
             QVERIFY(!FramebufferLoader::decode(source.sharedEXR(), 0, FramebufferLoader::Scalar,
-                       {{"Z", "", "", ""}}, cancelled, 1).data);
+                       {{"Z", "", "", ""}}, cancelled, {1, 1}).data);
         }
     }
 
-    void mipDocumentSwitchIsAtomicAndPreservesParameters()
+    void resolutionDocumentSwitchIsAtomicAndPreservesParameters_data()
     {
-        const QString path = fixture("mip-document");
-        writeMipFixture(path);
+        QTest::addColumn<bool>("ripmap");
+        QTest::newRow("mipmap") << false;
+        QTest::newRow("ripmap") << true;
+    }
+
+    void resolutionDocumentSwitchIsAtomicAndPreservesParameters()
+    {
+        QFETCH(bool, ripmap);
+        const QString path = fixture(ripmap ? "rip-document" : "mip-document");
+        if (ripmap) writeRipFixture(path);
+        else writeMipFixture(path);
+        const ResolutionLevel pending = ripmap ? ResolutionLevel(1, 0) : ResolutionLevel(1, 1);
+        const ResolutionLevel selected = ripmap ? ResolutionLevel(0, 2) : ResolutionLevel(2, 2);
         FileWidget widget(path), other(path);
         widget.resize(900, 650);
         widget.show();
@@ -1222,20 +1274,20 @@ class ViewerTests: public QObject
         widget.setStereoMode(ImageFileWidget::StereoAnaglyph);
         QTRY_COMPARE(widget.stereoMode(), ImageFileWidget::StereoAnaglyph);
         const auto* oldModel = widget.activeFramebufferModel();
-        widget.setMipLevel(1);
-        QCOMPARE(widget.mipLevel(), 0);
+        widget.setResolutionLevel(pending);
+        QCOMPARE(widget.resolutionLevel(), ResolutionLevel(0, 0));
         QCOMPARE(widget.activeFramebufferModel(), oldModel);
-        widget.setMipLevel(2); // Supersede an in-flight request.
+        widget.setResolutionLevel(selected); // Supersede an in-flight request.
         QTRY_VERIFY(!widget.isRefreshInProgress());
-        QCOMPARE(widget.mipLevel(), 2);
-        QCOMPARE(other.mipLevel(), 0);
+        QCOMPARE(widget.resolutionLevel(), selected);
+        QCOMPARE(other.resolutionLevel(), ResolutionLevel(0, 0));
         QCOMPARE(widget.stereoMode(), ImageFileWidget::StereoAnaglyph);
         for (auto* page : widget.findChildren<RGBFramebufferWidget*>()) {
-            QCOMPARE(page->framebufferModel()->mipLevel(), 2);
+            QCOMPARE(page->framebufferModel()->resolutionLevel(), selected);
             QVERIFY(page->framebufferModel()->isPreviewReady());
         }
         scalar = widget.findChild<YFramebufferWidget*>();
-        QCOMPARE(scalar->framebufferModel()->mipLevel(), 2);
+        QCOMPARE(scalar->framebufferModel()->resolutionLevel(), selected);
         QVERIFY(scalar->previewState().automatic);
         QCOMPARE(scalar->previewState().minimum, scalar->framebufferModel()->getDatasetMin());
         widget.setStereoMode(ImageFileWidget::StereoLeft);
@@ -1245,22 +1297,25 @@ class ViewerTests: public QObject
         QCOMPARE(rgb->previewState().maximum, 8.);
         QVERIFY(rgb->previewState().highlightNonFinite);
         QCOMPARE(widget.activeGraphicsView()->viewState().zoom, 2.);
-        widget.setMipLevel(1);
-        widget.setMipLevel(2); // Re-select committed level to cancel.
+        widget.setResolutionLevel(pending);
+        widget.setResolutionLevel(selected); // Re-select committed level to cancel.
         QVERIFY(!widget.isRefreshInProgress());
-        QCOMPARE(widget.activeFramebufferModel()->mipLevel(), 2);
+        QCOMPARE(widget.activeFramebufferModel()->resolutionLevel(), selected);
         widget.refresh();
         QTRY_VERIFY(!widget.isRefreshInProgress());
-        QCOMPARE(widget.mipLevel(), 2);
+        QCOMPARE(widget.resolutionLevel(), selected);
         QCOMPARE(widget.stereoMode(), ImageFileWidget::StereoLeft);
-        // Replacing the file with fewer levels must retain the displayed snapshot.
+        // Missing pairs must retain the snapshot, even if both axis indices still exist.
         const auto* oldSource = widget.sourceImage();
+        const auto* oldPreview = widget.activeFramebufferModel();
         QVERIFY(QFile::rename(path, path + ".old"));
-        writeFixture(path, 1, 1, {{"Y", {1.f}}});
+        if (ripmap) writeMipFixture(path);
+        else writeFixture(path, 1, 1, {{"Y", {1.f}}});
         dismissNextError();
         widget.refresh();
         QCOMPARE(widget.sourceImage(), oldSource);
-        QCOMPARE(widget.mipLevel(), 2);
+        QCOMPARE(widget.activeFramebufferModel(), oldPreview);
+        QCOMPARE(widget.resolutionLevel(), selected);
     }
 
     void mipMenuMinimalAndSaveNotice()
@@ -1273,27 +1328,27 @@ class ViewerTests: public QObject
         window.open(path);
         auto* document = window.findChild<ImageFileWidget*>();
         QTRY_VERIFY(document && document->isDocumentReady());
-        auto* menu = window.findChild<QMenu*>("menu_MipmapLevel");
+        auto* menu = window.findChild<QMenu*>("menu_ResolutionLevel");
         QVERIFY(menu && menu->isEnabled());
-        auto* action = window.findChild<QAction*>("action_MipLevel1");
+        auto* action = window.findChild<QAction*>("action_ResolutionLevel1_1");
         QVERIFY(action && action->text().contains("5 × 4")); // Current display canvas.
         action->trigger();
         QTRY_VERIFY(!document->isRefreshInProgress());
-        QCOMPARE(document->mipLevel(), 1);
+        QCOMPARE(document->resolutionLevel(), ResolutionLevel(1, 1));
         QVERIFY(action->isChecked());
         window.findChild<QAction*>("action_CopyImageFullResolution")->trigger();
         QCOMPARE(QApplication::clipboard()->image().size(), QSize(5, 4));
         QVERIFY(QMetaObject::invokeMethod(&window, "toggleMinimalView"));
         auto* footer = window.centralWidget()->findChild<QWidget*>("minimalImageFooter");
-        QVERIFY(footer && footer->toolTip().contains("Mip level 1"));
+        QVERIFY(footer && footer->toolTip().contains("Level (1, 1)"));
         QVERIFY(QMetaObject::invokeMethod(&window, "toggleMinimalView"));
-        QCOMPARE(document->mipLevel(), 1);
+        QCOMPARE(document->resolutionLevel(), ResolutionLevel(1, 1));
         SaveImageDialog dialog(fixture("mip-save"));
-        dialog.setMipLevelInfo(1, true);
-        auto* notice = dialog.findChild<QLabel*>("mipLevelLabel");
+        dialog.setResolutionLevelInfo({1, 1}, true);
+        auto* notice = dialog.findChild<QLabel*>("resolutionLevelLabel");
         QVERIFY(notice && !notice->isHidden());
         QVERIFY(notice->text().contains("selected level only"));
-        dialog.setMipLevelInfo(0, false);
+        dialog.setResolutionLevelInfo({}, false);
         QVERIFY(notice->isHidden());
     }
 
@@ -1304,12 +1359,12 @@ class ViewerTests: public QObject
         OpenEXRImage source(path, nullptr);
         YFramebufferModel model("Z");
         QSignalSpy loaded(&model, &FramebufferModel::imageLoaded);
-        model.load(source.sharedEXR(), 0, count - 1);
+        model.load(source.sharedEXR(), 0, {count - 1, count - 1});
         QTRY_VERIFY(!model.isLoading());
         QCOMPARE(loaded.count(), 0);
         QVERIFY(!model.isPreviewReady() && !model.errorString().isEmpty());
         ImageSave::Source input;
-        input.sourceImage = &source; input.mipLevel = count - 1;
+        input.sourceImage = &source; input.resolutionLevel = {count - 1, count - 1};
         ImageSave::Options options;
         options.target = ImageSave::TargetLayeredOriginal;
         options.format = ImageSave::FormatExr;
@@ -1325,10 +1380,10 @@ class ViewerTests: public QObject
                 if (auto* message = qobject_cast<QMessageBox*>(top)) message->accept();
         });
         closeError.start(10);
-        widget.setMipLevel(count - 1);
+        widget.setResolutionLevel({count - 1, count - 1});
         QTRY_VERIFY(!widget.isRefreshInProgress());
         closeError.stop();
-        QCOMPARE(widget.mipLevel(), 0);
+        QCOMPARE(widget.resolutionLevel(), ResolutionLevel(0, 0));
         QCOMPARE(widget.activeFramebufferModel(), committed);
         QVERIFY(committed->isPreviewReady());
 
@@ -1357,56 +1412,277 @@ class ViewerTests: public QObject
             scanline.setFrameBuffer(buffer); scanline.writePixels(4);
         }
         OpenEXRImage mixed(mixedPath, nullptr);
-        QCOMPARE(MipLevels::commonCount(mixed.sharedEXR()), 1);
+        QVERIFY(ResolutionLevels::commonLevels(mixed.sharedEXR()) == std::vector<ResolutionLevel>({{0, 0}}));
         Imf::Header left(9, 7), right(9, 7);
         left.setTileDescription(Imf::TileDescription(4, 3, Imf::MIPMAP_LEVELS, Imf::ROUND_DOWN));
         right.setTileDescription(Imf::TileDescription(4, 3, Imf::MIPMAP_LEVELS, Imf::ROUND_UP));
         QVERIFY(ViewMetadata::stereoGeometryMatches(left, right));
-        QVERIFY(!ViewMetadata::stereoGeometryMatches(left, right, 1));
+        QVERIFY(!ViewMetadata::stereoGeometryMatches(left, right, {1, 1}));
     }
 
-    void deepAndRipmapPartsRemainUnsupported()
+    void ripmapReadsBothAxesAndExportsSelectedPair()
     {
-        for (int kind = 1; kind < 4; ++kind) {
-            const QString path = fixture(QString("unsupported-part-%1").arg(kind));
-            if (kind < 2) {
-                Imf::Header header(4, 4);
-                header.setTileDescription(Imf::TileDescription(
-                  2, 2, Imf::RIPMAP_LEVELS));
-                writeFixture(path, 4, 4, {{"Z", std::vector<float>(16, 1.f)}},
-                             0, 0, 1.f, 1, &header);
-            } else {
-                Imf::Header header(1, 1);
-                header.setType(kind == 2 ? Imf::DEEPSCANLINE : Imf::DEEPTILE);
-                header.compression() = Imf::ZIPS_COMPRESSION;
-                header.channels().insert("Z", Imf::Channel(Imf::FLOAT));
-                unsigned int count = 1;
-                float value = 1.f;
-                float* sample = &value;
-                Imf::DeepFrameBuffer buffer;
-                buffer.insertSampleCountSlice(Imf::Slice(
-                  Imf::UINT, reinterpret_cast<char*>(&count), sizeof(count), sizeof(count)));
-                buffer.insert("Z", Imf::DeepSlice(
-                  Imf::FLOAT, reinterpret_cast<char*>(&sample), sizeof(sample),
-                  sizeof(sample), sizeof(float)));
-                if (kind == 2) {
-                    Imf::DeepScanLineOutputFile file(path.toLocal8Bit().constData(), header);
-                    file.setFrameBuffer(buffer);
-                    file.writePixels(1);
-                } else {
-                    header.setTileDescription(Imf::TileDescription(1, 1));
-                    Imf::DeepTiledOutputFile file(path.toLocal8Bit().constData(), header);
-                    file.setFrameBuffer(buffer);
-                    file.writeTile(0, 0, 0, 0);
+        const std::array<RGBFramebufferModel::Input, 2> eyes = {{
+          {0, RGBFramebufferModel::Layer_RGB, {{"R", "G", "B", "A"}}},
+          {0, RGBFramebufferModel::Layer_RGB, {{"right.R", "right.G", "right.B", "right.A"}}}}};
+        for (auto rounding : {Imf::ROUND_DOWN, Imf::ROUND_UP}) {
+            const QString path = fixture(QString("rip-%1").arg(int(rounding)));
+            const float aspect = rounding == Imf::ROUND_DOWN ? 1.5f : 1.f;
+            const QSize counts = writeRipFixture(path, rounding, {-1, -1}, aspect);
+            OpenEXRImage source(path, nullptr);
+            const auto levels = ResolutionLevels::commonLevels(source.sharedEXR());
+            QCOMPARE(int(levels.size()), counts.width() * counts.height());
+            const auto dimension = [rounding](int size, int level) {
+                const int divisor = 1 << level;
+                return std::max(1, (size + (rounding == Imf::ROUND_UP ? divisor - 1 : 0)) / divisor);
+            };
+            for (const auto level : levels) {
+                const int width = dimension(9, level.x), height = dimension(5, level.y);
+                RGBFramebufferModel rgb(""), stereo("");
+                YFramebufferModel z("Z");
+                rgb.load(source.sharedEXR(), 0, {{"R", "G", "B", "A"}}, level);
+                z.load(source.sharedEXR(), 0, level);
+                stereo.loadStereo(source.sharedEXR(), eyes, level);
+                QTRY_VERIFY(rgb.isPreviewReady() && z.isPreviewReady() && stereo.isPreviewReady());
+                QCOMPARE(rgb.resolutionLevel(), level);
+                QCOMPARE(stereo.resolutionLevel(), level);
+                QCOMPARE(rgb.getDataWindow(), QRect(-4, -2, width, height));
+                QCOMPARE(rgb.getDisplayWindow(), QRect(-3, -1, dimension(11, level.x), dimension(7, level.y)));
+                QCOMPARE(rgb.pixelAspectRatio(), aspect);
+                const size_t last = size_t(width) * height - 1;
+                for (size_t pixel : {size_t(0), size_t(width - 1), size_t(width) * (height - 1), last}) {
+                    QCOMPARE(rgb.getRawPixels()[4 * pixel], ripSample(level, 0, pixel));
+                    QCOMPARE(rgb.getRawPixels()[4 * pixel + 2], ripSample(level, 2, pixel));
+                    QCOMPARE(rgb.getRawPixels()[4 * pixel + 3], 0.f);
+                }
+                QCOMPARE(rgb.getLoadedImage().pixelColor(0, 0).alpha(), 255);
+                QCOMPARE(z.getDatasetMin(), double(ripSample(level, 8, 0)));
+                QCOMPARE(z.getDatasetPositiveInfCount(), uint64_t(last > 0 ? 1 : 0));
+                if (last > 0) QCOMPARE(z.anomalyRegions().back().bounds, QRect(width - 1, height - 1, 1, 1));
+                QVERIFY(rgb.getColorInfo(0, 0).find("Level " + level.toString()) != std::string::npos);
+                QVERIFY(rgb.getColorInfo(0, 0).find("x: -4 y: -2") != std::string::npos);
+                QVERIFY(stereo.getColorInfo(0, 0).find("right.R:") != std::string::npos);
+                const QSize outputSize(int(std::lround(dimension(11, level.x) * aspect)), dimension(7, level.y));
+                QCOMPARE(PreviewImage::render(rgb).size(), outputSize);
+                if (width == 1 || height == 1)
+                    QCOMPARE(PreviewImage::render(rgb).pixelColor(0, 0).alpha(), 0);
+                const QColor combined = stereo.getLoadedImage().pixelColor(0, 0);
+                QCOMPARE(combined.red(), rgb.getLoadedImage().pixelColor(0, 0).red());
+
+                if (level != ResolutionLevel(1, 0) && level != ResolutionLevel(0, 1)
+                    && level != ResolutionLevel(counts.width() - 1, counts.height() - 1)) continue;
+                ImageSave::Source input;
+                input.activeModel = &rgb; input.sourceImage = &source; input.resolutionLevel = level;
+                ImageSave::Options preview;
+                preview.path = m_directory.filePath(QString("rip-preview-%1-%2-%3.png")
+                  .arg(int(rounding)).arg(level.x).arg(level.y));
+                QCOMPARE(ImageSave::save(input, preview).status, ImageSave::StatusSaved);
+                QCOMPARE(QImage(preview.path), PreviewImage::render(rgb));
+                ImageSave::Options hdr;
+                hdr.target = ImageSave::TargetActiveOriginal; hdr.format = ImageSave::FormatHdr;
+                hdr.path = preview.path + ".hdr";
+                QCOMPARE(ImageSave::save(input, hdr).status, ImageSave::StatusSaved);
+                QFile hdrFile(hdr.path);
+                QVERIFY(hdrFile.open(QIODevice::ReadOnly));
+                QVERIFY(hdrFile.readAll().contains(QString("-Y %1 +X %2\n").arg(height).arg(width).toLatin1()));
+                for (auto target : {ImageSave::TargetActiveOriginal, ImageSave::TargetLayeredOriginal}) {
+                    ImageSave::Options options;
+                    options.target = target; options.format = ImageSave::FormatExr;
+                    options.pixelType = ImageSave::PixelFloat; options.compression = ImageSave::CompressionZip;
+                    options.path = fixture(QString("rip-out-%1-%2-%3-%4").arg(int(rounding)).arg(level.x).arg(level.y).arg(int(target)));
+                    QCOMPARE(ImageSave::save(input, options).status, ImageSave::StatusSaved);
+                    OpenEXRImage reopened(options.path, nullptr);
+                    const auto& header = reopened.getEXR().header(0);
+                    QVERIFY(!header.hasTileDescription());
+                    QVERIFY(!header.hasType() || header.type() == Imf::SCANLINEIMAGE);
+                    QCOMPARE(header.displayWindow(), ResolutionLevels::query(source.sharedEXR(), 0, level).display);
+                    QCOMPARE(header.pixelAspectRatio(), aspect);
+                    QCOMPARE(ViewMetadata::read(header).multiView, std::vector<std::string>({"left", "right"}));
+                    RGBFramebufferModel copy("");
+                    copy.load(reopened.sharedEXR(), 0, {{"R", "G", "B", "A"}});
+                    QTRY_VERIFY(copy.isPreviewReady());
+                    QVERIFY(copy.getRawPixels() == rgb.getRawPixels());
+                    QCOMPARE(copy.getDataWindow(), rgb.getDataWindow());
                 }
             }
+            for (const auto invalid : {ResolutionLevel(-1, 0), ResolutionLevel(0, -1),
+                                      ResolutionLevel(counts.width(), 0), ResolutionLevel(0, counts.height())}) {
+                YFramebufferModel z("Z");
+                z.load(source.sharedEXR(), 0, invalid);
+                QTRY_VERIFY(!z.isLoading());
+                QVERIFY(!z.isImageLoaded() && !z.errorString().isEmpty());
+            }
+            const auto cancel = std::make_shared<std::atomic_bool>(true);
+            QVERIFY(!FramebufferLoader::decode(source.sharedEXR(), 0, FramebufferLoader::Scalar,
+                        {{"Z", "", "", ""}}, cancel, {1, 0}).data);
+        }
+    }
+
+    void ripmapDocumentAndMenuUseWholePairs()
+    {
+        const QString path = fixture("rip-ui");
+        const auto counts = writeRipFixture(path);
+        MainWindow window;
+        window.resize(900, 650); window.show(); window.open(path);
+        auto* document = window.findChild<ImageFileWidget*>();
+        QTRY_VERIFY(document && document->isDocumentReady());
+        FileWidget other(path);
+        QTRY_VERIFY(other.isDocumentReady());
+        auto* menu = window.findChild<QMenu*>("menu_ResolutionLevel");
+        QVERIFY(menu && menu->isEnabled());
+        QCOMPARE(menu->actions().size(), counts.width());
+        auto* x1 = menu->findChild<QMenu*>("menu_ResolutionX1");
+        QVERIFY(x1);
+        QCOMPARE(x1->actions().size(), counts.height());
+        auto* action10 = menu->findChild<QAction*>("action_ResolutionLevel1_0");
+        auto* action01 = menu->findChild<QAction*>("action_ResolutionLevel0_1");
+        QVERIFY(action10 && action01);
+        QVERIFY(action10->text().contains("6 × 7"));
+        x1->menuAction()->trigger(); // Entering X alone must not start a load.
+        QVERIFY(!document->isRefreshInProgress());
+        QCOMPARE(document->resolutionLevel(), ResolutionLevel());
+        document->setStereoMode(ImageFileWidget::StereoRight);
+        QTRY_VERIFY(document->activeFramebufferModel()->isPreviewReady());
+        document->setStereoMode(ImageFileWidget::StereoAnaglyph);
+        QTRY_COMPARE(document->stereoMode(), ImageFileWidget::StereoAnaglyph);
+        const auto* old = document->activeFramebufferModel();
+        action10->trigger();
+        QCOMPARE(document->activeFramebufferModel(), old);
+        action01->trigger();
+        QTRY_VERIFY(!document->isRefreshInProgress());
+        QCOMPARE(document->resolutionLevel(), ResolutionLevel(0, 1));
+        QCOMPARE(other.resolutionLevel(), ResolutionLevel());
+        QVERIFY(action01->isChecked() && !action10->isChecked());
+        for (auto* page : document->findChildren<RGBFramebufferWidget*>())
+            QCOMPARE(page->framebufferModel()->resolutionLevel(), ResolutionLevel(0, 1));
+        window.findChild<QAction*>("action_CopyImageFullResolution")->trigger();
+        QCOMPARE(QApplication::clipboard()->image().size(), QSize(11, 4));
+        QVERIFY(QMetaObject::invokeMethod(&window, "toggleMinimalView"));
+        auto* footer = window.centralWidget()->findChild<QWidget*>("minimalImageFooter");
+        QVERIFY(footer && footer->toolTip().contains("Level (0, 1)"));
+        QVERIFY(QMetaObject::invokeMethod(&window, "toggleMinimalView"));
+        QCOMPARE(document->resolutionLevel(), ResolutionLevel(0, 1));
+        document->refresh();
+        QTRY_VERIFY(!document->isRefreshInProgress());
+        QCOMPARE(document->resolutionLevel(), ResolutionLevel(0, 1));
+        QCOMPARE(document->stereoMode(), ImageFileWidget::StereoAnaglyph);
+        SaveImageDialog dialog(fixture("rip-dialog"));
+        dialog.setResolutionLevelInfo({0, 1}, true);
+        QVERIFY(dialog.findChild<QLabel*>("resolutionLevelLabel")->text().contains("(0, 1)"));
+        document->setResolutionLevel({1, 0});
+        document->setResolutionLevel({0, 1}); // Cancel back to the committed pair.
+        QVERIFY(!document->isRefreshInProgress());
+        QCOMPARE(document->activeFramebufferModel()->resolutionLevel(), ResolutionLevel(0, 1));
+    }
+
+    void ripmapMissingTilesRetainCommittedDocument()
+    {
+        const QString path = fixture("rip-incomplete");
+        writeRipFixture(path, Imf::ROUND_UP, {1, 0});
+        FileWidget widget(path);
+        QTRY_VERIFY(widget.isDocumentReady());
+        const auto* original = widget.activeFramebufferModel();
+        QTimer closeError;
+        connect(&closeError, &QTimer::timeout, &widget, [] {
+            for (auto* top : QApplication::topLevelWidgets())
+                if (auto* message = qobject_cast<QMessageBox*>(top)) message->accept();
+        });
+        closeError.start(10);
+        widget.setResolutionLevel({1, 0});
+        QTRY_VERIFY(!widget.isRefreshInProgress());
+        closeError.stop();
+        QCOMPARE(widget.activeFramebufferModel(), original);
+        QCOMPARE(widget.resolutionLevel(), ResolutionLevel());
+        ImageSave::Source input;
+        input.activeModel = original; input.sourceImage = widget.sourceImage(); input.resolutionLevel = {1, 0};
+        ImageSave::Options options;
+        options.target = ImageSave::TargetLayeredOriginal; options.format = ImageSave::FormatExr;
+        options.path = fixture("rip-incomplete-out");
+        QCOMPARE(ImageSave::save(input, options).status, ImageSave::StatusFailed);
+        QVERIFY(!QFile::exists(options.path));
+    }
+
+    void mixedResolutionPartsUseActualLevelIntersection()
+    {
+        for (auto secondMode : {Imf::ONE_LEVEL, Imf::MIPMAP_LEVELS, Imf::RIPMAP_LEVELS}) {
+            const QString path = fixture(QString("mixed-rip-%1").arg(int(secondMode)));
+            Imf::Header headers[] = {Imf::Header(9, 5), Imf::Header(9, 5)};
+            for (int part = 0; part < 2; ++part) {
+                headers[part].setName(std::to_string(part)); headers[part].setType(Imf::TILEDIMAGE);
+                headers[part].channels().insert("Y", Imf::Channel(Imf::FLOAT));
+                headers[part].setTileDescription(Imf::TileDescription(4, 3,
+                  part == 0 ? Imf::RIPMAP_LEVELS : secondMode, Imf::ROUND_UP));
+            }
+            {
+                Imf::MultiPartOutputFile output(path.toLocal8Bit().constData(), headers, 2);
+                for (int part = 0; part < 2; ++part) {
+                    Imf::TiledOutputPart tiled(output, part);
+                    for (int x = 0; x < tiled.numXLevels(); ++x) {
+                        for (int y = 0; y < tiled.numYLevels(); ++y) {
+                            if (!tiled.isValidLevel(x, y)) continue;
+                            const auto data = tiled.dataWindowForLevel(x, y);
+                            std::vector<float> values(size_t(tiled.levelWidth(x)) * tiled.levelHeight(y), float(100 * x + y));
+                            Imf::FrameBuffer buffer;
+                            buffer.insert("Y", Imf::Slice::Make(Imf::FLOAT, values.data(), data,
+                              sizeof(float), size_t(tiled.levelWidth(x)) * sizeof(float)));
+                            tiled.setFrameBuffer(buffer);
+                            tiled.writeTiles(0, tiled.numXTiles(x) - 1, 0, tiled.numYTiles(y) - 1, x, y);
+                        }
+                    }
+                }
+            }
+            OpenEXRImage source(path, nullptr);
+            const auto levels = ResolutionLevels::commonLevels(source.sharedEXR());
+            const int expected = secondMode == Imf::ONE_LEVEL ? 1 : secondMode == Imf::MIPMAP_LEVELS ? 4 : 20;
+            QCOMPARE(int(levels.size()), expected);
+            if (secondMode == Imf::MIPMAP_LEVELS)
+                for (const auto level : levels) QCOMPARE(level.x, level.y);
+            FileWidget widget(path);
+            QTRY_VERIFY(widget.isDocumentReady());
+            QVERIFY(widget.resolutionLevels() == levels);
+            if (secondMode != Imf::RIPMAP_LEVELS) {
+                widget.setResolutionLevel({1, 0});
+                QVERIFY(!widget.isRefreshInProgress());
+                QCOMPARE(widget.resolutionLevel(), ResolutionLevel());
+            }
+        }
+    }
+
+    void deepPartsRemainUnsupported()
+    {
+        for (int kind = 2; kind < 4; ++kind) {
+            const QString path = fixture(QString("unsupported-part-%1").arg(kind));
+            Imf::Header header(1, 1);
+            header.setType(kind == 2 ? Imf::DEEPSCANLINE : Imf::DEEPTILE);
+            header.compression() = Imf::ZIPS_COMPRESSION;
+            header.channels().insert("Z", Imf::Channel(Imf::FLOAT));
+            unsigned int count = 1;
+            float value = 1.f;
+            float* sample = &value;
+            Imf::DeepFrameBuffer buffer;
+            buffer.insertSampleCountSlice(Imf::Slice(
+              Imf::UINT, reinterpret_cast<char*>(&count), sizeof(count), sizeof(count)));
+            buffer.insert("Z", Imf::DeepSlice(
+              Imf::FLOAT, reinterpret_cast<char*>(&sample), sizeof(sample),
+              sizeof(sample), sizeof(float)));
+            if (kind == 2) {
+                Imf::DeepScanLineOutputFile file(path.toLocal8Bit().constData(), header);
+                file.setFrameBuffer(buffer);
+                file.writePixels(1);
+            } else {
+                header.setTileDescription(Imf::TileDescription(1, 1));
+                Imf::DeepTiledOutputFile file(path.toLocal8Bit().constData(), header);
+                file.setFrameBuffer(buffer);
+                file.writeTile(0, 0, 0, 0);
+            }
+
             OpenEXRImage source(path, nullptr);
             YFramebufferModel model("Z");
             QSignalSpy failed(&model, &FramebufferModel::loadFailed);
             model.load(source.sharedEXR(), 0);
             QTRY_COMPARE(failed.count(), 1);
             QVERIFY(!model.isImageLoaded());
-            const QString expected = kind < 2 ? "Ripmap" : "Deep";
+            const QString expected = "Deep";
             QVERIFY(model.errorString().contains(expected));
             ImageSave::Source input;
             input.sourceImage = &source;

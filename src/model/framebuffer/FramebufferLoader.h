@@ -20,5 +20,5 @@ namespace FramebufferLoader
       int                                             part,
       Layout                                          layout,
       const std::array<std::string, 4>&               channels,
-      const Cancellation&                             cancel, int level = 0);
+      const Cancellation&                             cancel, ResolutionLevel level = {});
 }   // namespace FramebufferLoader

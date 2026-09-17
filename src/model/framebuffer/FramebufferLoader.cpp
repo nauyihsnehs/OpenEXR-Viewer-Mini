@@ -1,5 +1,5 @@
 #include "FramebufferLoader.h"
-#include <util/MipLevels.h>
+#include <util/ResolutionLevels.h>
 #include "ToneMapping.h"
 #include "PixelDiagnostics.h"
 
@@ -119,7 +119,7 @@ DecodeResult FramebufferLoader::decode(
   int                                             partId,
   Layout                                          layout,
   const std::array<std::string, 4>&               names,
-  const Cancellation&                             cancel, int level)
+  const Cancellation&                             cancel, ResolutionLevel level)
 {
     const auto file = source ? source->file : nullptr;
     if (!file || partId < 0 || partId >= file->parts())
@@ -129,7 +129,7 @@ DecodeResult FramebufferLoader::decode(
       names[0].empty()
       || ((layout == RGB || layout == Chroma) && (names[1].empty() || names[2].empty())))
         throw std::runtime_error("Missing image channels.");
-    const auto geometry = MipLevels::query(source, partId, level);
+    const auto geometry = ResolutionLevels::query(source, partId, level);
     const bool tiled = geometry.tiled;
     bool subsampledChroma = false;
     if (layout == Chroma) {
@@ -151,8 +151,8 @@ DecodeResult FramebufferLoader::decode(
     const Imath::Box2i window  = geometry.data;
     const Imath::Box2i display = geometry.display;
     auto               data    = std::make_shared<FramebufferData>();
-    data->mipLevel = level;
-    data->mipLevelCount = geometry.count;
+    data->resolutionLevel = level;
+    data->resolutionLevels = geometry.levels;
     data->rawViews             = ViewMetadata::read(header);
     data->width                = dimension(window.min.x, window.max.x);
     data->height               = dimension(window.min.y, window.max.y);
@@ -186,12 +186,12 @@ DecodeResult FramebufferLoader::decode(
             return Imf::TiledInputPart(*file, partId);
         };
         Imf::TiledInputPart part = makePart();
-        for (int y = 0; y < part.numYTiles(level); ++y) {
+        for (int y = 0; y < part.numYTiles(level.y); ++y) {
             if (cancel->load()) return DecodeResult();
             {
                 const std::lock_guard<std::mutex> lock(source->mutex);
                 part.setFrameBuffer(buffer);
-                part.readTiles(0, part.numXTiles(level) - 1, y, y, level, level);
+                part.readTiles(0, part.numXTiles(level.x) - 1, y, y, level.x, level.y);
             }
             if (cancel->load()) return DecodeResult();
         }

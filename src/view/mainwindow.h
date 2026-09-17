@@ -180,8 +180,10 @@ class MainWindow: public QMainWindow
     bool isTitleBarDragArea(const QPoint& pos) const;
 
     Ui::MainWindow* ui;
-    QMenu* m_mipMenu = nullptr;
-    QActionGroup* m_mipActions = nullptr;
+    QMenu* m_resolutionMenu = nullptr;
+    QActionGroup* m_resolutionActions = nullptr;
+    std::vector<ResolutionLevel> m_menuResolutionLevels;
+    bool m_menuRipmap = false;
     QActionGroup* m_stereoActions = nullptr;
 
     QTabWidget* m_openFileTabs;

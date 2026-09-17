@@ -32,7 +32,7 @@ SaveImageDialog::SaveImageDialog(const QString& path, QWidget* parent)
     setWindowTitle(tr("Save Image"));
     setFixedWidth(520);
 
-    ui->mipLevelLabel->hide();
+    ui->resolutionLevelLabel->hide();
     setupOptions();
     applyComboBoxBehavior(this);
     ui->pathEdit->setText(path);
@@ -110,10 +110,10 @@ void SaveImageDialog::setStatus(const QString& message, bool error)
 }
 
 
-void SaveImageDialog::setMipLevelInfo(int level, bool multilevel)
+void SaveImageDialog::setResolutionLevelInfo(ResolutionLevel level, bool multilevel)
 {
-    ui->mipLevelLabel->setVisible(multilevel);
-    ui->mipLevelLabel->setText(tr("Mip level %1 — selected level only; scanline EXR").arg(level));
+    ui->resolutionLevelLabel->setVisible(multilevel);
+    ui->resolutionLevelLabel->setText(tr("Level %1 — selected level only; scanline EXR").arg(QString::fromStdString(level.toString())));
 }
 
 void SaveImageDialog::setSourceState(bool available, bool previewReady, const QString& error, bool derived)

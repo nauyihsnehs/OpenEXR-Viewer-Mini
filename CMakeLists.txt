@@ -192,7 +192,8 @@ set(PROJECT_SOURCES
     src/util/AnomalyMarkers.cpp
     src/util/PreviewImage.h
     src/util/PreviewImage.cpp
-    src/util/MipLevels.h
+    src/util/ResolutionLevel.h
+    src/util/ResolutionLevels.h
     src/util/ViewMetadata.h
     src/util/ViewMetadata.cpp
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QString>
+#include <util/ResolutionLevel.h>
 #include <QStringList>
 
 class FramebufferModel;
@@ -100,7 +101,7 @@ namespace ImageSave
     struct Source {
         const FramebufferModel* activeModel = nullptr;
         OpenEXRImage*           sourceImage = nullptr;
-        int mipLevel = 0;
+        ResolutionLevel resolutionLevel;
     };
 
     struct Result {

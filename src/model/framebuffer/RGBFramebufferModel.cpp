@@ -31,6 +31,7 @@
  */
 
 #include "RGBFramebufferModel.h"
+#include <util/ResolutionLevels.h>
 #include "PixelDiagnostics.h"
 #include "FramebufferLoader.h"
 #include <util/ColorTransform.h>
@@ -65,7 +66,7 @@ namespace {
 }
 
 void RGBFramebufferModel::loadStereo(const std::shared_ptr<ExrInput>& file,
-                                     const std::array<Input, 2>& eyes, int level)
+                                     const std::array<Input, 2>& eyes, ResolutionLevel level)
 {
     m_channels = {};
     startLoading([file, eyes, level](const Cancellation& cancel) -> DecodeResult {
@@ -84,9 +85,9 @@ void RGBFramebufferModel::loadStereo(const std::shared_ptr<ExrInput>& file,
         const auto& left = *data->stereo[0];
         const auto& right = *data->stereo[1];
         if (left.displayWindow != right.displayWindow || left.pixelAspect != right.pixelAspect)
-            throw std::runtime_error("Stereo mip levels require identical display windows and pixel aspect ratios.");
-        data->mipLevel = level;
-        data->mipLevelCount = std::min(left.mipLevelCount, right.mipLevelCount);
+            throw std::runtime_error("Stereo resolution levels require identical display windows and pixel aspect ratios.");
+        data->resolutionLevel = level;
+        data->resolutionLevels = ResolutionLevels::intersection(left.resolutionLevels, right.resolutionLevels);
         const int x = std::min(left.dataWindow.left(), right.dataWindow.left());
         const int y = std::min(left.dataWindow.top(), right.dataWindow.top());
         const int64_t width = int64_t(std::max(left.dataWindow.right(), right.dataWindow.right())) - x + 1;
@@ -131,7 +132,7 @@ void RGBFramebufferModel::loadStereo(const std::shared_ptr<ExrInput>& file,
 void RGBFramebufferModel::load(
   const std::shared_ptr<ExrInput>& file,
   int                                             partId,
-  const std::array<std::string, 4>&               channels, int level)
+  const std::array<std::string, 4>&               channels, ResolutionLevel level)
 {
     m_channels = channels;
     const auto layout = decodeLayout(m_layerType);
@@ -153,7 +154,7 @@ std::string RGBFramebufferModel::getColorInfo(int x, int y) const
         const QPoint position = getDataWindow().topLeft() + QPoint(x, y);
         if (!pixelCoverage().contains(QPoint(x, y))) return "";
         std::stringstream text;
-        if (mipLevelCount() > 1) text << "Mip level " << mipLevel() << " | ";
+        if (resolutionLevelCount() > 1) text << "Level " << resolutionLevel().toString() << " | ";
         text << "x: " << position.x() << " y: " << position.y();
         for (size_t i = 0; i < 2; ++i) {
             const auto& eye = *m_data->stereo[i];
@@ -176,7 +177,7 @@ std::string RGBFramebufferModel::getColorInfo(int x, int y) const
     }
     const float*      pixel = &getRawPixels()[4 * (size_t(y) * width() + x)];
     std::stringstream text;
-    if (mipLevelCount() > 1) text << "Mip level " << mipLevel() << " | ";
+    if (resolutionLevelCount() > 1) text << "Level " << resolutionLevel().toString() << " | ";
     text << "x: " << x + getDataWindow().x()
          << " y: " << y + getDataWindow().y() << " |";
     const auto names = rawChannelNames();
