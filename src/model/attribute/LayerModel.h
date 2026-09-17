@@ -68,7 +68,7 @@ class LayerModel: public QAbstractItemModel
         std::array<QString, 2> eyeErrors;
         QString anaglyphError;
     };
-    StereoLayers stereoLayers() const;
+    StereoLayers stereoLayers(int level = 0) const;
     const LayerItem*
     findChannel(int part, const std::string& channelName) const;
 

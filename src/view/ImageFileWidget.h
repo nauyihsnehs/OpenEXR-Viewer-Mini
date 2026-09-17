@@ -93,6 +93,10 @@ class ImageFileWidget: public QWidget
     QString                 activeLayerTitleText() const;
     void setRgbPreviewMode(RGBFramebufferModel::PreviewMode mode);
     enum StereoMode { StereoDefault, StereoLeft, StereoRight, StereoAnaglyph };
+    int mipLevel() const { return m_mipLevel; }
+    int mipLevelCount() const { return m_mipLevelCount; }
+    QStringList mipLevelLabels() const;
+    void setMipLevel(int level);
     StereoMode stereoMode() const { return m_stereoMode; }
     QString stereoUnavailableReason(StereoMode mode) const;
     void setStereoMode(StereoMode mode);
@@ -157,18 +161,19 @@ class ImageFileWidget: public QWidget
 
     static QString layerKey(const LayerItem* item);
     PreparedPreview createPreview(
-      const LayerItem* item, OpenEXRImage* source);
-    PreparedPreview createStereoPreview(OpenEXRImage* source);
+      const LayerItem* item, OpenEXRImage* source, int level);
+    PreparedPreview createStereoPreview(OpenEXRImage* source, int level);
     void cancelStereoPreview();
     QMdiSubWindow* installPreview(PreparedPreview& preview);
     SavedDocument captureDocumentState() const;
     void          restorePreview(
                QWidget* widget, const SavedPreview& state) const;
     void trackInitialPreview(FramebufferModel* model);
+    void prepareDocument(int level, bool reopen);
     void commitRefresh();
     void abortRefresh(const QString& message);
     void showLoadError(const QString& message) const;
-    void           clearImage();
+    void           clearImage(bool keepSource = false);
     void           configurePreviewTabBar();
     void           syncActiveLayerSelection();
     void           updatePropertiesVisibility();
@@ -202,6 +207,9 @@ class ImageFileWidget: public QWidget
     DocumentState                    m_documentState = DocumentPending;
     std::unique_ptr<PreparedPreview> m_initialPrepared;
     std::unique_ptr<PreparedPreview> m_pendingStereo;
+    int m_mipLevel = 0;
+    int m_mipLevelCount = 1;
+    unsigned m_preparationGeneration = 0;
     StereoMode m_stereoMode = StereoDefault;
     bool m_selectingStereo = false;
     QPointer<FramebufferModel>       m_initialPreview;

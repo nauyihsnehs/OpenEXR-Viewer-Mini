@@ -1,7 +1,8 @@
 # Tiles 核对清单
 
-覆盖 `OpenEXR Test Images/Tiles` 的全部 3 张 EXR。本轮仅支持普通单层级（ONE_LEVEL）
-Tiled，不支持 Mipmap、Ripmap 和 Deep；这些类型在预览和整文件原始导出时明确报错。
+覆盖 `OpenEXR Test Images/Tiles` 的全部 3 张 EXR。这组样例均为普通单层级（ONE_LEVEL）
+Tiled。现已增加 Mipmap 支持，见 [MultiView 核对清单](multiview-images.md)；Ripmap 和 Deep
+仍在预览和整文件原始导出时明确报错。
 样例文件未修改或移动。
 
 ## 文件头与静态审查
@@ -26,7 +27,7 @@ Tiled，不支持 Mipmap、Ripmap 和 Deep；这些类型在预览和整文件�
   Attributes 已有 tile 描述显示，无需新控件或公共模型接口。
 - 补充未执行的测试代码：标量与 RGB/RGBA、多 tile 行、边缘残块、小于单 tile 的图像、
   非方形 tile、负起点和不同窗口、非标准色域、零 Alpha 发光、FLOAT Z、跨 tile 异常区域、
-  同源并发图层、预先取消、末尾 tile 截断、扫描线导出往返及 Deep／多层级拒绝。
+  同源并发图层、预先取消、末尾 tile 截断、扫描线导出往返及 Deep／Ripmap 拒绝。
 - 完成调用路径及补丁空白检查。
 
 这些是文件头与源码的静态审查，不代表画面验收通过。本轮未编译、启动查看器或运行测试。
@@ -51,5 +52,5 @@ Tiled，不支持 Mipmap、Ripmap 和 Deep；这些类型在预览和整文件�
 4. 活动图层、独立 Z 和整文件原始导出选择 FLOAT 与 ZIP 等无损压缩；重新打开确认是扫描线
    存储，通道值、数据／显示窗口正确，基础元数据保留色域、None 去除色域。
    Spirals 的源 PXR24 解码结果是比较基准，不追溯压缩前的数据。
-5. 不完整或损坏 tile 必须报错，不能把未读区域补零后显示为成功图像；Mipmap、Ripmap 和
+5. 不完整或损坏 tile 必须报错，不能把未读区域补零后显示为成功图像；Ripmap 和
    Deep 文件明确拒绝，且不产生成功的整文件原始导出。

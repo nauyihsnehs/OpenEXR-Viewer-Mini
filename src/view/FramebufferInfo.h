@@ -33,7 +33,9 @@ inline QString framebufferSummaryText(const FramebufferModel* model)
         if (model->isImageLoaded() && !model->isPreviewReady())
             return "Rendering...";
     }
-    return "Size " + framebufferSizeText(model)
+    const QString level = model && model->mipLevelCount() > 1
+      ? QString("Mip level %1 | ").arg(model->mipLevel()) : QString();
+    return level + "Size " + framebufferSizeText(model)
            + (model && model->isDerivedPreview() ? "   Two-eye source max " : "   Max ")
            + framebufferDatasetValueText(model, false);
 }

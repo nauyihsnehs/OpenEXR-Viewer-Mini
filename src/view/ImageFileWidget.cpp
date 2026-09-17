@@ -31,6 +31,8 @@
  */
 
 #include "ImageFileWidget.h"
+#include <util/MipLevels.h>
+#include <util/PreviewImage.h>
 
 #include <QAbstractItemModel>
 #include <QEvent>
@@ -225,6 +227,7 @@ struct ImageFileWidget::PreparedPreview {
     QString           compressionShort;
     QString           compression;
     QStringList       stereoKeys;
+    bool stateApplied = false;
 };
 
 struct ImageFileWidget::SavedPreview {
@@ -232,22 +235,22 @@ struct ImageFileWidget::SavedPreview {
     PreviewState            preview;
     GraphicsView::ViewState view;
     QStringList             stereoKeys;
+    QRectF canvas;
 };
 
 struct ImageFileWidget::SavedDocument {
     std::vector<SavedPreview> previews;
     QString                   activeKey;
     StereoMode                stereoMode = StereoDefault;
+    int level = 0;
 };
 
 struct ImageFileWidget::RefreshTransaction {
-    ~RefreshTransaction() { delete prepared.widget; }
-
-    std::unique_ptr<OpenEXRImage> image;
-    SavedDocument                 saved;
-    PreparedPreview               prepared;
-    QString                       gateKey;
-    bool                          stateApplied = false;
+    ~RefreshTransaction() { for (auto& preview : prepared) delete preview.widget; }
+    std::unique_ptr<OpenEXRImage> image; // Empty when changing levels on the current source.
+    SavedDocument saved;
+    std::vector<PreparedPreview> prepared;
+    int levelCount = 1;
 };
 
 template<typename Widget, typename Model>
@@ -362,7 +365,7 @@ bool ImageFileWidget::isRefreshInProgress() const
 }
 
 
-void ImageFileWidget::clearImage()
+void ImageFileWidget::clearImage(bool keepSource)
 {
     cancelStereoPreview();
     if (m_initialPrepared) {
@@ -383,8 +386,10 @@ void ImageFileWidget::clearImage()
     m_attributesTreeView->setModel(nullptr);
     m_layersTreeView->setModel(nullptr);
 
-    delete m_img;
-    m_img = nullptr;
+    if (!keepSource) {
+        delete m_img;
+        m_img = nullptr;
+    }
     m_previewOrder.clear();
 }
 
@@ -403,6 +408,7 @@ ImageFileWidget::SavedDocument ImageFileWidget::captureDocumentState() const
 {
     SavedDocument state;
     state.stereoMode = m_stereoMode;
+    state.level = m_mipLevel;
     const QMdiSubWindow* active = m_mdiArea->activeSubWindow();
     state.activeKey
       = active ? active->property("layerKey").toString() : QString();
@@ -426,6 +432,9 @@ ImageFileWidget::SavedDocument ImageFileWidget::captureDocumentState() const
             preview.preview = scalar->previewState();
         if (auto* view = window->findChild<GraphicsView*>())
             preview.view = view->viewState();
+        const auto* model = framebufferModel(window);
+        if (model && model->isImageLoaded())
+            preview.canvas = PreviewImage::Geometry(*model).sceneWindow();
         state.previews.push_back(preview);
     }
     return state;
@@ -446,166 +455,140 @@ void ImageFileWidget::restorePreview(
 
 void ImageFileWidget::refresh()
 {
-    if (m_isStream || m_documentState != DocumentReady || m_refresh) return;
-    cancelStereoPreview();
-    std::unique_ptr<RefreshTransaction> transaction(new RefreshTransaction);
-    try {
-        transaction->image.reset(new OpenEXRImage(m_openedFilename, nullptr));
-    } catch (const std::exception& error) {
-        showLoadError(QString::fromUtf8(error.what()));
-        return;
-    }
-    transaction->saved = captureDocumentState();
-    QAbstractItemModel* layers = transaction->image->getLayerModel();
-    QModelIndex gate = findLayerIndexByKey(
-      layers,
-      QModelIndex(),
-      transaction->saved.activeKey);
-    if (!gate.isValid()) {
-        for (const SavedPreview& state : transaction->saved.previews) {
-            gate = findLayerIndexByKey(layers, QModelIndex(), state.key);
-            if (gate.isValid()) break;
-        }
-    }
-    const LayerItem* gateItem = gate.isValid()
-                                  ? static_cast<LayerItem*>(gate.internalPointer())
-                                  : transaction->image->getLayerModel()
-                                      ->defaultDisplayLayer();
-    if (!gateItem) {
-        showLoadError(tr("The refreshed file has no displayable layers."));
-        return;
-    }
-    try {
-        const auto stereo = std::find_if(transaction->saved.previews.begin(), transaction->saved.previews.end(),
-          [](const SavedPreview& saved) { return !saved.stereoKeys.isEmpty(); });
-        if (stereo != transaction->saved.previews.end()) {
-            // Gate the transaction on both eyes, even if a source tab is currently active.
-            const auto pair = transaction->image->getLayerModel()->stereoLayers();
-            if (!pair.anaglyphError.isEmpty()) throw std::runtime_error(pair.anaglyphError.toStdString());
-            const QStringList keys = {layerKey(pair.eyes[0]), layerKey(pair.eyes[1])};
-            if (keys != stereo->stereoKeys)
-                throw std::runtime_error("The refreshed stereo pair has changed; the previous preview was retained.");
-            transaction->prepared = createStereoPreview(transaction->image.get());
-        } else {
-            transaction->prepared = createPreview(gateItem, transaction->image.get());
-        }
-        transaction->gateKey = transaction->prepared.key;
-    } catch (const std::exception& error) {
-        showLoadError(QString::fromUtf8(error.what()));
-        return;
-    }
-
-    m_refresh = std::move(transaction);
-    FramebufferModel* gateModel = m_refresh->prepared.model;
-    QWidget*          gateWidget = m_refresh->prepared.widget;
-    const auto savedGate = std::find_if(
-      m_refresh->saved.previews.begin(),
-      m_refresh->saved.previews.end(),
-      [this](const SavedPreview& state) {
-          return state.key == m_refresh->gateKey;
-      });
-    if (savedGate == m_refresh->saved.previews.end()) {
-        m_refresh->stateApplied = true;
-    } else {
-        const QString gateKey = m_refresh->gateKey;
-        connect(
-          gateModel,
-          &FramebufferModel::imageLoaded,
-          this,
-          [this, gateWidget, gateKey] {
-              if (!m_refresh || m_refresh->gateKey != gateKey) return;
-              const auto state = std::find_if(
-                m_refresh->saved.previews.begin(),
-                m_refresh->saved.previews.end(),
-                [&gateKey](const SavedPreview& saved) {
-                    return saved.key == gateKey;
-                });
-              if (state == m_refresh->saved.previews.end()) return;
-              restorePreview(gateWidget, *state);
-              m_refresh->stateApplied = true;
-          });
-    }
-    connect(
-      gateModel,
-      &FramebufferModel::imageChanged,
-      this,
-      [this, gateModel] {
-          if (
-            m_refresh && m_refresh->prepared.model == gateModel
-            && m_refresh->stateApplied && gateModel->isPreviewReady())
-              commitRefresh();
-      });
-    emit refreshInProgressChanged(true);
+    if (m_isStream || m_documentState != DocumentReady) return;
+    prepareDocument(m_mipLevel, true);
 }
 
+QStringList ImageFileWidget::mipLevelLabels() const
+{
+    QStringList labels;
+    if (!m_img || m_mipLevelCount <= 1) return labels;
+    const LayerItem* item = nullptr;
+    const auto index = activeLayerIndex();
+    if (index.isValid()) item = static_cast<LayerItem*>(index.internalPointer());
+    if (!item) item = m_img->getLayerModel()->defaultDisplayLayer();
+    if (!item) return labels;
+    const auto& header = m_img->getEXR().header(item->getPart());
+    for (int level = 0; level < m_mipLevelCount; ++level) {
+        const auto window = MipLevels::displayWindow(header, level);
+        labels << tr("Level %1 — %2 × %3").arg(level)
+          .arg(int64_t(window.max.x) - window.min.x + 1)
+          .arg(int64_t(window.max.y) - window.min.y + 1);
+    }
+    return labels;
+}
+
+void ImageFileWidget::setMipLevel(int level)
+{
+    if (!isDocumentReady() || level < 0 || level >= m_mipLevelCount) return;
+    if (level == m_mipLevel) {
+        ++m_preparationGeneration;
+        m_refresh.reset();
+        emit refreshInProgressChanged(false);
+        return;
+    }
+    prepareDocument(level, false);
+}
+
+void ImageFileWidget::prepareDocument(int level, bool reopen)
+{
+    cancelStereoPreview();
+    const unsigned generation = ++m_preparationGeneration;
+    m_refresh.reset();
+    std::unique_ptr<RefreshTransaction> transaction(new RefreshTransaction);
+    try {
+        if (reopen) transaction->image.reset(new OpenEXRImage(m_openedFilename, nullptr));
+        auto* source = reopen ? transaction->image.get() : m_img;
+        transaction->levelCount = MipLevels::commonCount(source->sharedEXR());
+        if (level >= transaction->levelCount)
+            throw std::runtime_error("The selected mip level is no longer available; previous previews retained.");
+        transaction->saved = captureDocumentState();
+        transaction->saved.level = level;
+        const auto mode = transaction->saved.stereoMode;
+        if (mode == StereoLeft || mode == StereoRight) {
+            const int eye = mode == StereoLeft ? 0 : 1;
+            const auto oldPair = m_img->getLayerModel()->stereoLayers(m_mipLevel);
+            const auto newPair = source->getLayerModel()->stereoLayers(level);
+            if (!oldPair.eyes[eye] || !newPair.eyes[eye]
+                || layerKey(oldPair.eyes[eye]) != layerKey(newPair.eyes[eye]))
+                throw std::runtime_error("The selected stereo eye is no longer available; previous previews retained.");
+        }
+        for (const auto& state : transaction->saved.previews) {
+            if (!state.stereoKeys.isEmpty()) {
+                const auto pair = source->getLayerModel()->stereoLayers(level);
+                if (!pair.anaglyphError.isEmpty()) throw std::runtime_error(pair.anaglyphError.toStdString());
+                if (QStringList({layerKey(pair.eyes[0]), layerKey(pair.eyes[1])}) != state.stereoKeys)
+                    throw std::runtime_error("The stereo pair has changed; previous previews retained.");
+                transaction->prepared.push_back(createStereoPreview(source, level));
+            } else {
+                const auto index = findLayerIndexByKey(source->getLayerModel(), {}, state.key);
+                if (!index.isValid()) throw std::runtime_error("An open source layer is no longer available; previous previews retained.");
+                transaction->prepared.push_back(createPreview(static_cast<LayerItem*>(index.internalPointer()), source, level));
+            }
+        }
+    } catch (const std::exception& error) {
+        transaction.reset();
+        emit refreshInProgressChanged(false);
+        showLoadError(QString::fromUtf8(error.what()));
+        return;
+    }
+    m_refresh = std::move(transaction);
+    for (size_t i = 0; i < m_refresh->prepared.size(); ++i) {
+        auto* model = m_refresh->prepared[i].model;
+        connect(model, &FramebufferModel::imageLoaded, this, [this, generation, i] {
+            if (!m_refresh || generation != m_preparationGeneration) return;
+            auto& preview = m_refresh->prepared[i];
+            auto state = m_refresh->saved.previews[i];
+            const auto canvas = PreviewImage::Geometry(*preview.model).sceneWindow();
+            if (!state.view.fit && !state.canvas.isEmpty()) {
+                const QPointF relative((state.view.center.x() - state.canvas.x()) / state.canvas.width(),
+                                       (state.view.center.y() - state.canvas.y()) / state.canvas.height());
+                state.view.center = canvas.topLeft() + QPointF(relative.x() * canvas.width(), relative.y() * canvas.height());
+            }
+            m_refresh->saved.previews[i].view = state.view;
+            restorePreview(preview.widget, state);
+            preview.stateApplied = true;
+        });
+        connect(model, &FramebufferModel::imageChanged, this, [this, generation] {
+            if (!m_refresh || generation != m_preparationGeneration) return;
+            for (const auto& preview : m_refresh->prepared)
+                if (!preview.stateApplied || !preview.model->isPreviewReady()) return;
+            // Leave the emitting model's signal stack before replacing widgets.
+            QTimer::singleShot(0, this, [this, generation] {
+                if (!m_refresh || generation != m_preparationGeneration) return;
+                for (const auto& preview : m_refresh->prepared)
+                    if (!preview.stateApplied || !preview.model->isPreviewReady()) return;
+                commitRefresh();
+            });
+        });
+    }
+    emit refreshInProgressChanged(true);
+    if (m_refresh->prepared.empty()) commitRefresh();
+}
 
 void ImageFileWidget::commitRefresh()
 {
     if (!m_refresh) return;
-    std::unique_ptr<RefreshTransaction> transaction = std::move(m_refresh);
-    PreparedPreview gatePreview = transaction->prepared;
-    transaction->prepared.widget = nullptr;
-
-    clearImage();
-    m_img = transaction->image.release();
-    m_img->setParent(this);
-    afterOpen(false);
-
-    QPointer<QMdiSubWindow> restoredActive;
-    QPointer<QMdiSubWindow> gateWindow;
-    bool                    gateInstalled = false;
-    for (const SavedPreview& state : transaction->saved.previews) {
-        const QModelIndex index = findLayerIndexByKey(
-          m_layersTreeView->model(),
-          QModelIndex(),
-          state.key);
-        if (!index.isValid() && state.key != transaction->gateKey) continue;
-
-        FramebufferModel* model  = nullptr;
-        QMdiSubWindow*    window = nullptr;
-        if (state.key == transaction->gateKey) {
-            model         = gatePreview.model;
-            window        = installPreview(gatePreview);
-            gateWindow    = window;
-            gateInstalled = true;
-        } else {
-            try {
-                model = openLayer(
-                  static_cast<LayerItem*>(index.internalPointer()));
-            } catch (const std::exception& error) {
-                showLoadError(QString::fromUtf8(error.what()));
-                continue;
-            }
-            window = m_mdiArea->activeSubWindow();
-            if (auto* view = window ? window->findChild<GraphicsView*>()
-                                    : nullptr)
-                view->restoreViewState(state.view);
-            if (model && window) {
-                const auto restore = [this, window, state] {
-                    restorePreview(window->widget(), state);
-                };
-                if (model->isImageLoaded())
-                    restore();
-                else
-                    connect(
-                      model,
-                      &FramebufferModel::imageLoaded,
-                      window,
-                      restore);
-            }
-        }
-        if (!window) continue;
-        if (state.key == transaction->saved.activeKey)
-            restoredActive = window;
+    auto transaction = std::move(m_refresh);
+    clearImage(!transaction->image);
+    if (transaction->image) {
+        m_img = transaction->image.release();
+        m_img->setParent(this);
     }
-
-    if (!gateInstalled) gateWindow = installPreview(gatePreview);
-    if (restoredActive)
-        m_mdiArea->setActiveSubWindow(restoredActive);
-    else if (gateWindow)
-        m_mdiArea->setActiveSubWindow(gateWindow);
-    m_stereoMode = restoredActive ? transaction->saved.stereoMode
-                    : gatePreview.stereoKeys.isEmpty() ? StereoDefault : StereoAnaglyph;
+    m_mipLevel = transaction->saved.level;
+    m_mipLevelCount = transaction->levelCount;
+    afterOpen(false);
+    QPointer<QMdiSubWindow> active;
+    for (auto& preview : transaction->prepared) {
+        auto* window = installPreview(preview);
+        if (preview.key == transaction->saved.activeKey) active = window;
+    }
+    if (active) m_mdiArea->setActiveSubWindow(active);
+    for (size_t i = 0; i < transaction->prepared.size(); ++i) {
+        auto* view = transaction->prepared[i].model->parent()->findChild<GraphicsView*>();
+        if (view) view->restoreViewState(transaction->saved.previews[i].view);
+    }
+    m_stereoMode = transaction->saved.stereoMode;
     syncActiveLayerSelection();
     emit activeFramebufferChanged();
     emit refreshInProgressChanged(false);
@@ -885,7 +868,7 @@ static RGBFramebufferModel::Input colorInput(const LayerItem* item)
                    : type == LayerItem::YC || type == LayerItem::YCA
                      ? RGBFramebufferModel::Layer_YC : RGBFramebufferModel::Layer_Y;
     const auto name = [item](LayerItem::LayerType channel) {
-        const auto* child = item->child(channel);
+        const auto* child = item->getType() == channel ? item : item->child(channel);
         return child ? child->getOriginalFullName() : std::string();
     };
     if (input.layout == RGBFramebufferModel::Layer_RGB)
@@ -897,9 +880,9 @@ static RGBFramebufferModel::Input colorInput(const LayerItem* item)
     return input;
 }
 
-ImageFileWidget::PreparedPreview ImageFileWidget::createStereoPreview(OpenEXRImage* source)
+ImageFileWidget::PreparedPreview ImageFileWidget::createStereoPreview(OpenEXRImage* source, int level)
 {
-    const auto pair = source->getLayerModel()->stereoLayers();
+    const auto pair = source->getLayerModel()->stereoLayers(level);
     if (!pair.anaglyphError.isEmpty()) throw std::runtime_error(pair.anaglyphError.toStdString());
     PreparedPreview preview;
     preview.stereoKeys = {layerKey(pair.eyes[0]), layerKey(pair.eyes[1])};
@@ -914,14 +897,14 @@ ImageFileWidget::PreparedPreview ImageFileWidget::createStereoPreview(OpenEXRIma
     auto* model = new RGBFramebufferModel("", RGBFramebufferModel::Layer_RGB, widget.get());
     widget->setPreviewMode(m_rgbPreviewMode);
     configureFramebuffer(widget.get(), model, this);
-    model->loadStereo(source->sharedEXR(), {{colorInput(pair.eyes[0]), colorInput(pair.eyes[1])}});
+    model->loadStereo(source->sharedEXR(), {{colorInput(pair.eyes[0]), colorInput(pair.eyes[1])}}, level);
     preview.widget = widget.release();
     preview.model = model;
     return preview;
 }
 
 ImageFileWidget::PreparedPreview ImageFileWidget::createPreview(
-  const LayerItem* item, OpenEXRImage* source)
+  const LayerItem* item, OpenEXRImage* source, int level)
 {
     if (
       !item || !source || item->getType() == LayerItem::GROUP
@@ -951,7 +934,7 @@ ImageFileWidget::PreparedPreview ImageFileWidget::createPreview(
         auto* model
           = new YFramebufferModel(item->getOriginalFullName(), widget.get());
         configureFramebuffer(widget.get(), model, this);
-        model->load(source->sharedEXR(), partId);
+        model->load(source->sharedEXR(), partId, level);
         preview.widget = widget.release();
         preview.model  = model;
         return preview;
@@ -966,7 +949,7 @@ ImageFileWidget::PreparedPreview ImageFileWidget::createPreview(
       widget.get());
     widget->setPreviewMode(m_rgbPreviewMode);
     configureFramebuffer(widget.get(), model, this);
-    model->load(source->sharedEXR(), partId, input.channels);
+    model->load(source->sharedEXR(), partId, input.channels, level);
     preview.widget = widget.release();
     preview.model  = model;
     return preview;
@@ -983,6 +966,14 @@ QMdiSubWindow* ImageFileWidget::installPreview(PreparedPreview& preview)
     m_previewOrder.append(preview.key);
     subWindow->setAttribute(Qt::WA_DeleteOnClose);
     subWindow->setWindowTitle(preview.title);
+    const auto* model = preview.model;
+    const QString title = preview.title;
+    const auto updateTitle = [subWindow, model, title] {
+        subWindow->setWindowTitle(model->mipLevelCount() > 1
+          ? title + tr(" — Mip level %1 (%2 × %3)").arg(model->mipLevel()).arg(model->width()).arg(model->height()) : title);
+    };
+    connect(preview.model, &FramebufferModel::imageLoaded, subWindow, updateTitle);
+    if (preview.model->isImageLoaded()) updateTitle();
     subWindow->setProperty("layerKey", preview.key);
     subWindow->setProperty("stereoKeys", preview.stereoKeys);
     subWindow->setProperty("pixelType", preview.pixelType);
@@ -1005,6 +996,7 @@ QMdiSubWindow* ImageFileWidget::installPreview(PreparedPreview& preview)
 
 FramebufferModel* ImageFileWidget::openLayer(const LayerItem* item)
 {
+    if (m_refresh) return nullptr;
     if (
       !item || item->getType() == LayerItem::GROUP
       || item->getType() == LayerItem::PART
@@ -1036,7 +1028,7 @@ FramebufferModel* ImageFileWidget::openLayer(const LayerItem* item)
         }
     }
 
-    PreparedPreview preview = createPreview(item, m_img);
+    PreparedPreview preview = createPreview(item, m_img, m_mipLevel);
     FramebufferModel* model = preview.model;
     installPreview(preview);
     return model;
@@ -1089,7 +1081,7 @@ QString ImageFileWidget::stereoUnavailableReason(StereoMode mode) const
 {
     if (!m_img || !isDocumentReady() || m_refresh) return tr("No ready document.");
     if (mode == StereoDefault) return {};
-    const auto pair = m_img->getLayerModel()->stereoLayers();
+    const auto pair = m_img->getLayerModel()->stereoLayers(m_mipLevel);
     if (mode == StereoAnaglyph) return pair.anaglyphError;
     return pair.eyeErrors[mode == StereoLeft ? 0 : 1];
 }
@@ -1100,7 +1092,7 @@ void ImageFileWidget::setStereoMode(StereoMode mode)
     cancelStereoPreview();
     const QScopedValueRollback<bool> selecting(m_selectingStereo, true);
     if (mode != StereoAnaglyph) {
-        const auto pair = m_img->getLayerModel()->stereoLayers();
+        const auto pair = m_img->getLayerModel()->stereoLayers(m_mipLevel);
         const auto* layer = mode == StereoDefault ? m_img->getLayerModel()->defaultDisplayLayer()
                                                  : pair.eyes[mode == StereoLeft ? 0 : 1];
         openLayer(layer);
@@ -1116,7 +1108,7 @@ void ImageFileWidget::setStereoMode(StereoMode mode)
         return;
     }
     try {
-        m_pendingStereo.reset(new PreparedPreview(createStereoPreview(m_img)));
+        m_pendingStereo.reset(new PreparedPreview(createStereoPreview(m_img, m_mipLevel)));
     } catch (const std::exception& error) {
         showLoadError(QString::fromUtf8(error.what()));
         return;
@@ -1166,7 +1158,10 @@ void ImageFileWidget::setRgbPreviewMode(RGBFramebufferModel::PreviewMode mode)
             rgb->setPreviewMode(mode);
     };
     if (m_initialPrepared) applyMode(m_initialPrepared->widget);
-    if (m_refresh) applyMode(m_refresh->prepared.widget);
+    if (m_refresh) {
+        for (auto& state : m_refresh->saved.previews) state.preview.mode = int(mode);
+        for (auto& preview : m_refresh->prepared) applyMode(preview.widget);
+    }
     if (m_pendingStereo) applyMode(m_pendingStereo->widget);
 
     for (QMdiSubWindow* subWindow : m_mdiArea->subWindowList()) {
@@ -1253,17 +1248,13 @@ QString ImageFileWidget::activeFramebufferStatusToolTip() const
 
 QString ImageFileWidget::activeLayerTitleText() const
 {
-    QModelIndex index = activeLayerIndex();
-    QString     title = layerTitleText(index).trimmed();
-
-    if (title.isEmpty()) {
-        QMdiSubWindow* subWindow = m_mdiArea->activeSubWindow();
-        if (subWindow) title = cleanLayerTitle(subWindow->windowTitle());
-    }
-
-    if (title == "RGB") return QString();
-
-    return title;
+    const auto* window = m_mdiArea->activeSubWindow();
+    const auto* model = activeFramebufferModel();
+    if (window && model && model->mipLevelCount() > 1)
+        return window->windowTitle().trimmed();
+    QString title = layerTitleText(activeLayerIndex()).trimmed();
+    if (title.isEmpty() && window) title = cleanLayerTitle(window->windowTitle());
+    return title == "RGB" ? QString() : title;
 }
 
 
@@ -1462,6 +1453,8 @@ void ImageFileWidget::open(std::istream& stream)
 
 void ImageFileWidget::afterOpen(bool defaultLayer)
 {
+    try { m_mipLevelCount = MipLevels::commonCount(m_img->sharedEXR()); }
+    catch (const std::exception&) { m_mipLevelCount = 1; }
     m_attributesTreeView->setModel(m_img->getHeaderModel());
     m_attributesTreeView->expandAll();
     m_attributesTreeView->resizeColumnToContents(0);
@@ -1477,7 +1470,7 @@ void ImageFileWidget::afterOpen(bool defaultLayer)
         return;
     }
     try {
-        m_initialPrepared.reset(new PreparedPreview(createPreview(layer, m_img)));
+        m_initialPrepared.reset(new PreparedPreview(createPreview(layer, m_img, m_mipLevel)));
         trackInitialPreview(m_initialPrepared->model);
     } catch (const std::exception& error) {
         onLoadFailed(QString::fromUtf8(error.what()));
@@ -1527,10 +1520,12 @@ void ImageFileWidget::onLoadFailed(const QString& msg)
       = qobject_cast<FramebufferModel*>(sender());
     if (
       m_refresh && failedModel
-      && m_refresh->prepared.model == failedModel) {
+      && std::any_of(m_refresh->prepared.begin(), m_refresh->prepared.end(),
+           [failedModel](const PreparedPreview& preview) { return preview.model == failedModel; })) {
         const QString message = msg;
-        QTimer::singleShot(0, this, [this, message] {
-            if (m_refresh) abortRefresh(message);
+        const unsigned generation = m_preparationGeneration;
+        QTimer::singleShot(0, this, [this, message, generation] {
+            if (m_refresh && generation == m_preparationGeneration) abortRefresh(message);
         });
         return;
     }

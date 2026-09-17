@@ -66,6 +66,7 @@ class QToolBar;
 class QMoveEvent;
 class MinimalImageWidget;
 class QActionGroup;
+class QMenu;
 
 class MainWindow: public QMainWindow
 {
@@ -179,6 +180,8 @@ class MainWindow: public QMainWindow
     bool isTitleBarDragArea(const QPoint& pos) const;
 
     Ui::MainWindow* ui;
+    QMenu* m_mipMenu = nullptr;
+    QActionGroup* m_mipActions = nullptr;
     QActionGroup* m_stereoActions = nullptr;
 
     QTabWidget* m_openFileTabs;

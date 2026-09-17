@@ -69,9 +69,24 @@ Viewing controls
   still requiring a running viewer.
 - Single-level tiled images use the same color and individual-channel previews as
   scanline images, including depth channels, source values, and anomaly markers.
-  Mipmap, Ripmap, and Deep images are not supported. Raw EXR exports use scanline
+  Mipmap images also support their stored resolution levels; Ripmap and Deep remain
+  unsupported. Raw EXR exports use scanline
   storage and retain the existing channel, window, and metadata options; they do
   not preserve the source tile layout. See the [Tiles manual checklist](docs/tiled-images.md).
+- **View > Show > Mipmap Level** selects a stored level for the current file. All
+  open source and Anaglyph previews change together only after every new preview is
+  ready; cancellation or failure retains the committed images and level. Each file
+  starts at level 0; refresh and minimal-window transitions preserve its selection.
+  The menu uses the levels common to every part (scanline/ONE_LEVEL parts allow only
+  level 0). Views use the selected level's native dimensions, retain manual display
+  parameters and zoom, recompute Auto ranges, and re-fit when Fit is active.
+  Data-window origins follow OpenEXR; the application retains the display-window
+  origin and shrinks its dimensions using the source rounding mode. Readouts identify
+  the current level and its sample coordinates, not corresponding level-0 positions.
+  Copy/preview export uses that level's display canvas. Active and whole-file raw EXR
+  exports save only the selected level as scanline data, not the mip pyramid; the save
+  dialog states this explicitly. Source HDR/bracket exports also use the loaded level.
+  See the [MultiView manual checklist](docs/multiview-images.md).
 - The export option **Color channels (RGB/YC)** includes both RGB and luminance/chroma
   channels. See the [Chromaticities checklist](docs/chromaticities-images.md) and
   [Luminance/Chroma checklist](docs/luminance-chroma-images.md) for pending visual checks.
@@ -86,12 +101,17 @@ Viewing controls
   Beachball is viewed one file at a time, without sequence playback.
   **View > Show > Stereo** offers **Default**, **Left eye only**, **Right eye only**,
   and **Anaglyph 3D**, independently for each open file. Eye shortcuts open color
-  layers while leaving the full layer tree available. Anaglyph combines the left
+  layers (including pure Y) while leaving the full layer tree available. Anaglyph combines the left
   red component with the right green/blue components after applying the same
   display settings to both eyes. It requires a unique pair in the default color
   layer family with matching display windows and pixel aspect ratios; unavailable
   choices explain why in their tooltips. Different data windows align by file
   coordinates, with transparent areas wherever both eyes lack data.
+  Default honors the original view order: Adjuster opens center, while its stereo pair
+  remains left/right. Pure Y eye pages use scalar Colormap (gray, 0–1 by default);
+  their Anaglyph interprets Y as linear gray and applies the color preview settings,
+  so its default brightness can differ. `ilut` and `xDensity` are displayed metadata,
+  not additional LUT or physical-size transforms.
   Anaglyph readouts show each eye's source samples and its statistics include both
   eyes. Copies and PNG/JPEG exports include the derived preview. Active original,
   HDR and bracketed exports require selecting a source eye layer; whole-file EXR

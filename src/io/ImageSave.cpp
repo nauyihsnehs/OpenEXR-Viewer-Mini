@@ -1,4 +1,6 @@
 #include "ImageSave.h"
+#include <util/MipLevels.h>
+#include <limits>
 #include <util/PreviewImage.h>
 
 #include <io/ImageSavePlan.h>
@@ -229,27 +231,27 @@ namespace
       OpenEXRImage*           image,
       int                     partIndex,
       ImageSave::ChannelScope scope,
-      bool                    prefixNames)
+      bool                    prefixNames, int level)
     {
         Imf::MultiPartInputFile& file = image->getEXR();
         const Imf::Header&       header     = file.header(partIndex);
-        const Imath::Box2i       dataWindow = header.dataWindow();
-        if (header.hasType() && header.type() != Imf::SCANLINEIMAGE
-            && header.type() != Imf::TILEDIMAGE)
-            throw std::runtime_error(
-              "Only flat scanline and single-level tiled image parts are supported; Deep is not supported.");
-        const bool tiled = header.hasType() ? header.type() == Imf::TILEDIMAGE
-                                            : header.hasTileDescription();
-        if (tiled && header.tileDescription().mode != Imf::ONE_LEVEL)
-            throw std::runtime_error("Mipmap and Ripmap tiled images are not supported yet.");
+        const auto geometry = MipLevels::query(image->sharedEXR(), partIndex, level);
+        const auto dataWindow = geometry.data;
+        const bool tiled = geometry.tiled;
 
         PartData part;
-        part.width         = dataWindow.max.x - dataWindow.min.x + 1;
+        const int64_t width = int64_t(dataWindow.max.x) - dataWindow.min.x + 1;
+        const int64_t height = int64_t(dataWindow.max.y) - dataWindow.min.y + 1;
+        if (width <= 0 || height <= 0 || width > std::numeric_limits<int>::max() / 4
+            || height > std::numeric_limits<int>::max() / 4
+            || width * height > std::numeric_limits<int>::max() / 4)
+            throw std::runtime_error("The selected mip level is too large to export safely.");
+        part.width = int(width);
         part.views         = ViewMetadata::read(header);
-        part.height        = dataWindow.max.y - dataWindow.min.y + 1;
+        part.height = int(height);
         part.pixelAspect   = header.pixelAspectRatio();
         part.dataWindow    = dataWindow;
-        part.displayWindow = header.displayWindow();
+        part.displayWindow = geometry.display;
         if (const auto* attribute
             = header.findTypedAttribute<Imf::ChromaticitiesAttribute>("chromaticities")) {
             part.hasChromaticities = true;
@@ -325,10 +327,10 @@ namespace
                 return Imf::TiledInputPart(file, partIndex);
             };
             Imf::TiledInputPart input = makePart();
-            for (int y = 0; y < input.numYTiles(0); ++y) {
+            for (int y = 0; y < input.numYTiles(level); ++y) {
                 const std::lock_guard<std::mutex> lock(image->sharedEXR()->mutex);
                 input.setFrameBuffer(framebuffer);
-                input.readTiles(0, input.numXTiles(0) - 1, y, y, 0, 0);
+                input.readTiles(0, input.numXTiles(level) - 1, y, y, level, level);
             }
         } else {
             const std::lock_guard<std::mutex> lock(
@@ -749,7 +751,7 @@ namespace
     }
 
     std::vector<PartData>
-    readLayeredParts(OpenEXRImage* image, const ImageSave::Options& options)
+    readLayeredParts(OpenEXRImage* image, const ImageSave::Options& options, int level)
     {
         std::vector<PartData> parts;
         if (!image) return parts;
@@ -767,7 +769,7 @@ namespace
         }
 
         for (int i = 0; i < partCount; i++) {
-            PartData part = readSourcePart(image, i, options.channelScope, prefix);
+            PartData part = readSourcePart(image, i, options.channelScope, prefix, level);
             if (!part.channels.empty()) parts.push_back(std::move(part));
         }
 
@@ -775,7 +777,7 @@ namespace
     }
 
     ImageSave::Result
-    saveLayeredOriginal(OpenEXRImage* image, const ImageSave::Options& options)
+    saveLayeredOriginal(OpenEXRImage* image, const ImageSave::Options& options, int level)
     {
         if (options.format != ImageSave::FormatExr) {
             return result(
@@ -786,7 +788,7 @@ namespace
         std::vector<PartData> parts;
 
         try {
-            parts = readLayeredParts(image, options);
+            parts = readLayeredParts(image, options, level);
         } catch (const std::exception& e) {
             return result(
               ImageSave::StatusFailed,
@@ -818,7 +820,7 @@ namespace
                   ImageSave::StatusFailed,
                   QObject::tr("No source image."));
             }
-            return saveLayeredOriginal(source.sourceImage, options);
+            return saveLayeredOriginal(source.sourceImage, options, source.mipLevel);
         }
 
         if (options.target == ImageSave::TargetHdrBracketedImages) {

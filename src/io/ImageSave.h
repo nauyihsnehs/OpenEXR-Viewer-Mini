@@ -100,6 +100,7 @@ namespace ImageSave
     struct Source {
         const FramebufferModel* activeModel = nullptr;
         OpenEXRImage*           sourceImage = nullptr;
+        int mipLevel = 0;
     };
 
     struct Result {

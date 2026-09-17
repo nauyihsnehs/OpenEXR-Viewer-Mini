@@ -173,8 +173,7 @@ const LayerItem* LayerModel::defaultDisplayLayer() const
     if (!m_defaultView.empty()) {
         preferred = findPreferredLayer(m_rootItem.get(), [this](const LayerItem* item) {
             std::string view;
-            return item->getType() != LayerItem::Y
-                   && layerView(item, view) && view == m_defaultView;
+            return layerView(item, view) && view == m_defaultView;
         });
     }
     if (!preferred) preferred = findPreferredLayer(m_rootItem.get());
@@ -233,17 +232,18 @@ QString LayerModel::viewLabel(const LayerItem* item) const
                                 : QString(" [%1]").arg(QString::fromStdString(view));
 }
 
-LayerModel::StereoLayers LayerModel::stereoLayers() const
+LayerModel::StereoLayers LayerModel::stereoLayers(int level) const
 {
     StereoLayers result;
     const auto isColor = [](const LayerItem* item) {
         return item && (item->getType() == LayerItem::RGB || item->getType() == LayerItem::RGBA
           || item->getType() == LayerItem::YA || item->getType() == LayerItem::YC
-          || item->getType() == LayerItem::YCA);
+          || item->getType() == LayerItem::YCA
+          || (item->getType() == LayerItem::Y && item->getPixelType() != Imf::NUM_PIXELTYPES));
     };
     // The first real channel supplies the source layer path; part names are irrelevant.
     const auto path = [this](const LayerItem* color) -> std::string {
-        const auto* channel = color->child(0);
+        const auto* channel = color->getType() == LayerItem::Y ? color : color->child(0);
         const auto& views = m_views[channel->getPart()];
         std::string name = channel->getOriginalFullName();
         auto dot = name.find_last_of('.');
@@ -286,7 +286,7 @@ LayerModel::StereoLayers LayerModel::stereoLayers() const
     if (result.anaglyphError.isEmpty()) {
         const auto& left = m_fileHandle.header(result.eyes[0]->getPart());
         const auto& right = m_fileHandle.header(result.eyes[1]->getPart());
-        if (!ViewMetadata::stereoGeometryMatches(left, right))
+        if (!ViewMetadata::stereoGeometryMatches(left, right, level))
             result.anaglyphError = tr("Stereo views require identical display windows and pixel aspect ratios.");
     }
     return result;

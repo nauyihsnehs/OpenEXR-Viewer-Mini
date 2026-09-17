@@ -47,7 +47,7 @@ class YFramebufferModel: public FramebufferModel
     virtual ~YFramebufferModel();
 
     virtual void
-    load(const std::shared_ptr<ExrInput>& file, int partId);
+    load(const std::shared_ptr<ExrInput>& file, int partId, int level = 0);
 
     const std::string& getLayerName() const { return m_layer; }
     int                getPartId() const { return m_partID; }

@@ -33,6 +33,8 @@
 #include <util/AnomalyMarkers.h>
 #include <util/PreviewImage.h>
 #include <util/ViewMetadata.h>
+#include <util/MipLevels.h>
+#include <OpenEXR/ImfTiledOutputPart.h>
 #include <util/YColormap.h>
 #include <util/ColormapModule.h>
 #include <view/FileDrop.h>
@@ -117,6 +119,38 @@ namespace
             file.setFrameBuffer(framebuffer);
             file.writePixels(height);
         }
+    }
+
+    // Each level stores distinct values, not a downsample of level zero.
+    int writeMipFixture(const QString& path, Imf::LevelRoundingMode rounding = Imf::ROUND_DOWN,
+                        bool omitLast = false)
+    {
+        const Imath::Box2i data(Imath::V2i(-4, -2), Imath::V2i(4, 4));
+        const Imath::Box2i display(Imath::V2i(-3, -1), Imath::V2i(7, 7));
+        Imf::Header header(display, data);
+        header.setTileDescription(Imf::TileDescription(4, 3, Imf::MIPMAP_LEVELS, rounding));
+        header.compression() = Imf::ZIP_COMPRESSION;
+        header.insert("multiView", Imf::StringVectorAttribute({"left", "right"}));
+        const std::vector<std::string> names = {"R", "G", "B", "right.R", "right.G", "right.B", "Z"};
+        for (const auto& name : names) header.channels().insert(name, Imf::Channel(Imf::FLOAT));
+        Imf::TiledOutputFile output(path.toLocal8Bit().constData(), header);
+        for (int level = 0; level < output.numLevels() - (omitLast ? 1 : 0); ++level) {
+            const auto window = output.dataWindowForLevel(level);
+            const int width = output.levelWidth(level), height = output.levelHeight(level);
+            std::vector<std::vector<float>> values(names.size(), std::vector<float>(size_t(width) * height));
+            Imf::FrameBuffer buffer;
+            for (size_t c = 0; c < names.size(); ++c) {
+                for (size_t i = 0; i < values[c].size(); ++i)
+                    values[c][i] = float(level) + float(c) / 10.f + float(i) / 1000.f;
+                if (names[c] == "Z" && values[c].size() > 1)
+                    values[c].back() = std::numeric_limits<float>::infinity();
+                buffer.insert(names[c], Imf::Slice::Make(Imf::FLOAT, values[c].data(), window,
+                              sizeof(float), size_t(width) * sizeof(float)));
+            }
+            output.setFrameBuffer(buffer);
+            output.writeTiles(0, output.numXTiles(level) - 1, 0, output.numYTiles(level) - 1, level);
+        }
+        return output.numLevels();
     }
 
     struct MultipartFixture {
@@ -1028,14 +1062,317 @@ class ViewerTests: public QObject
         }
     }
 
-    void deepAndMultilevelPartsRemainUnsupported()
+    void pureLuminanceViewsAndDefaultOrder()
     {
-        for (int kind = 0; kind < 4; ++kind) {
+        for (const auto& order : {std::vector<std::string>{"left", "right"},
+                                 std::vector<std::string>{"right", "left"},
+                                 std::vector<std::string>{"center", "left", "right"}}) {
+            const QString path = fixture("luminance-views-" + QString::fromStdString(order[0]));
+            Imf::Header header(2, 2);
+            header.insert("multiView", Imf::StringVectorAttribute(order));
+            std::map<std::string, std::vector<float>> samples;
+            for (const auto& view : order)
+                samples[view == order[0] ? "Y" : view + ".Y"] = std::vector<float>(4, view == "left" ? .25f : .5f);
+            writeFixture(path, 2, 2, samples, 0, 0, 1.f, 1, &header);
+            FileWidget widget(path);
+            QTRY_VERIFY(widget.isDocumentReady());
+            QCOMPARE(widget.activeFramebufferModel()->rawChannelNames()[0], std::string("Y"));
+            QVERIFY(qobject_cast<YFramebufferWidget*>(widget.activePreviewWidget()));
+            const auto pair = widget.sourceImage()->getLayerModel()->stereoLayers();
+            QVERIFY(pair.anaglyphError.isEmpty());
+            QCOMPARE(pair.eyes[0]->getType(), LayerItem::Y);
+            widget.setStereoMode(ImageFileWidget::StereoLeft);
+            QTRY_VERIFY(widget.activeFramebufferModel()->isPreviewReady());
+            QCOMPARE(widget.activeFramebufferModel()->getRawPixels()[0], .25f);
+            widget.setStereoMode(ImageFileWidget::StereoRight);
+            QTRY_VERIFY(widget.activeFramebufferModel()->isPreviewReady());
+            QCOMPARE(widget.activeFramebufferModel()->getRawPixels()[0], .5f);
+            widget.setStereoMode(ImageFileWidget::StereoAnaglyph);
+            QTRY_COMPARE(widget.stereoMode(), ImageFileWidget::StereoAnaglyph);
+            RGBFramebufferModel left("", RGBFramebufferModel::Layer_Y), right("", RGBFramebufferModel::Layer_Y);
+            left.load(widget.sourceImage()->sharedEXR(), 0, {{pair.eyes[0]->getOriginalFullName(), "", "", ""}});
+            right.load(widget.sourceImage()->sharedEXR(), 0, {{pair.eyes[1]->getOriginalFullName(), "", "", ""}});
+            QTRY_VERIFY(left.isPreviewReady() && right.isPreviewReady());
+            const auto* stereo = widget.activeFramebufferModel();
+            const auto pixel = stereo->getLoadedImage().pixelColor(0, 0);
+            QCOMPARE(pixel.red(), left.getLoadedImage().pixelColor(0, 0).red());
+            QCOMPARE(pixel.green(), right.getLoadedImage().pixelColor(0, 0).green());
+            QCOMPARE(pixel.blue(), right.getLoadedImage().pixelColor(0, 0).blue());
+            QCOMPARE(stereo->getDatasetMin(), .25);
+            QCOMPARE(stereo->getDatasetMax(), .5);
+            QVERIFY(stereo->getColorInfo(0, 0).find("Left:") != std::string::npos);
+            widget.setStereoMode(ImageFileWidget::StereoDefault);
+            QCOMPARE(widget.activeFramebufferModel()->rawChannelNames()[0], std::string("Y"));
+        }
+    }
+
+    void mipLevelsReadStoredSamplesAndExportSelectedLevel()
+    {
+        for (auto rounding : {Imf::ROUND_DOWN, Imf::ROUND_UP}) {
+            const QString path = fixture(QString("mip-%1").arg(int(rounding)));
+            const int count = writeMipFixture(path, rounding);
+            OpenEXRImage source(path, nullptr);
+            QCOMPARE(MipLevels::commonCount(source.sharedEXR()), count);
+            int width = 9, height = 7, displayWidth = 11, displayHeight = 9;
+            for (int level = 0; level < count; ++level) {
+                RGBFramebufferModel rgb("");
+                YFramebufferModel scalar("Z");
+                rgb.load(source.sharedEXR(), 0, {{"R", "G", "B", ""}}, level);
+                scalar.load(source.sharedEXR(), 0, level);
+                QTRY_VERIFY(rgb.isPreviewReady() && scalar.isPreviewReady());
+                QCOMPARE(rgb.mipLevel(), level);
+                QCOMPARE(rgb.mipLevelCount(), count);
+                QCOMPARE(rgb.getDataWindow(), QRect(-4, -2, width, height));
+                QCOMPARE(rgb.getDisplayWindow(), QRect(-3, -1, displayWidth, displayHeight));
+                const int last = width * height - 1;
+                QCOMPARE(rgb.getRawPixels()[size_t(last) * 4], float(level) + float(last) / 1000.f);
+                QCOMPARE(rgb.getRawPixels()[0], float(level));
+                QCOMPARE(scalar.getDatasetMin(), double(float(level) + .6f));
+                QCOMPARE(scalar.getDatasetPositiveInfCount(), uint64_t(last > 0 ? 1 : 0));
+                if (last > 0) QCOMPARE(scalar.anomalyRegions().back().bounds, QRect(width - 1, height - 1, 1, 1));
+                QVERIFY(rgb.getColorInfo(0, 0).find("Mip level " + std::to_string(level)) != std::string::npos);
+                QCOMPARE(PreviewImage::render(rgb).size(), QSize(displayWidth, displayHeight));
+                if (width == 1 && height == 1)
+                    QCOMPARE(PreviewImage::render(rgb).pixelColor(0, 0).alpha(), 0); // No window intersection.
+                for (auto target : {ImageSave::TargetActiveOriginal, ImageSave::TargetLayeredOriginal}) {
+                    ImageSave::Source input;
+                    input.sourceImage = &source;
+                    input.activeModel = &rgb;
+                    input.mipLevel = level;
+                    ImageSave::Options options;
+                    options.target = target;
+                    options.format = ImageSave::FormatExr;
+                    options.pixelType = ImageSave::PixelFloat;
+                    options.compression = ImageSave::CompressionZip;
+                    options.path = fixture(QString("mip-out-%1-%2-%3").arg(int(rounding)).arg(level).arg(int(target)));
+                    QCOMPARE(ImageSave::save(input, options).status, ImageSave::StatusSaved);
+                    OpenEXRImage reopened(options.path, nullptr);
+                    const auto& out = reopened.getEXR().header(0);
+                    QVERIFY(!out.hasTileDescription());
+                    QCOMPARE(out.displayWindow(), MipLevels::query(source.sharedEXR(), 0, level).display);
+                    QCOMPARE(ViewMetadata::read(out).multiView, std::vector<std::string>({"left", "right"}));
+                    RGBFramebufferModel roundtrip("");
+                    roundtrip.load(reopened.sharedEXR(), 0, {{"R", "G", "B", ""}});
+                    QTRY_VERIFY(roundtrip.isPreviewReady());
+                    QVERIFY(roundtrip.getRawPixels() == rgb.getRawPixels());
+                    QCOMPARE(roundtrip.getDataWindow(), rgb.getDataWindow());
+                }
+                if (level == 1) {
+                    ImageSave::Source input;
+                    input.activeModel = &rgb; input.sourceImage = &source; input.mipLevel = level;
+                    ImageSave::Options options;
+                    options.path = m_directory.filePath(QString("mip-preview-%1.png").arg(int(rounding)));
+                    QCOMPARE(ImageSave::save(input, options).status, ImageSave::StatusSaved);
+                    QCOMPARE(QImage(options.path), PreviewImage::render(rgb));
+                    options.target = ImageSave::TargetActiveOriginal;
+                    options.format = ImageSave::FormatHdr;
+                    options.path = m_directory.filePath(QString("mip-hdr-%1.hdr").arg(int(rounding)));
+                    QCOMPARE(ImageSave::save(input, options).status, ImageSave::StatusSaved);
+                    QFile hdr(options.path);
+                    QVERIFY(hdr.open(QIODevice::ReadOnly));
+                    QVERIFY(hdr.readAll().contains(QString("-Y %1 +X %2\n").arg(height).arg(width).toLatin1()));
+                    options.target = ImageSave::TargetHdrBracketedImages;
+                    options.format = ImageSave::FormatPng;
+                    options.bracketCount = 1;
+                    options.path = m_directory.filePath(QString("mip-bracket-%1.png").arg(int(rounding)));
+                    const auto bracket = ImageSave::save(input, options);
+                    QCOMPARE(bracket.status, ImageSave::StatusSaved);
+                    QCOMPARE(QImage(bracket.paths.front()).size(), QSize(width, height));
+                }
+                const auto shrink = [rounding](int n) { return std::max(1, (n + (rounding == Imf::ROUND_UP ? 1 : 0)) / 2); };
+                width = shrink(width); height = shrink(height);
+                displayWidth = shrink(displayWidth); displayHeight = shrink(displayHeight);
+            }
+            for (int invalid : {-1, count}) {
+                YFramebufferModel model("Z");
+                model.load(source.sharedEXR(), 0, invalid);
+                QTRY_VERIFY(!model.isLoading());
+                QVERIFY(!model.isImageLoaded() && !model.errorString().isEmpty());
+            }
+            const auto cancelled = std::make_shared<std::atomic_bool>(true);
+            QVERIFY(!FramebufferLoader::decode(source.sharedEXR(), 0, FramebufferLoader::Scalar,
+                       {{"Z", "", "", ""}}, cancelled, 1).data);
+        }
+    }
+
+    void mipDocumentSwitchIsAtomicAndPreservesParameters()
+    {
+        const QString path = fixture("mip-document");
+        writeMipFixture(path);
+        FileWidget widget(path), other(path);
+        widget.resize(900, 650);
+        widget.show();
+        QTRY_VERIFY(widget.isDocumentReady() && other.isDocumentReady());
+        auto* rgb = qobject_cast<RGBFramebufferWidget*>(widget.activePreviewWidget());
+        QVERIFY(rgb);
+        auto color = rgb->previewState();
+        color.exposure = -2.; color.highlightNonFinite = true;
+        color.minimum = -.5; color.maximum = 8.; color.automatic = false;
+        rgb->restorePreviewState(color);
+        widget.activeGraphicsView()->setZoomLevel(2.);
+        widget.setStereoMode(ImageFileWidget::StereoRight);
+        QTRY_VERIFY(widget.activeFramebufferModel()->isPreviewReady());
+        auto* z = widget.sourceImage()->getLayerModel()->findChannel(0, "Z");
+        widget.openLayer(z);
+        QTRY_VERIFY(widget.activeFramebufferModel()->isPreviewReady());
+        auto* scalar = qobject_cast<YFramebufferWidget*>(widget.activePreviewWidget());
+        auto scalarState = scalar->previewState();
+        scalarState.automatic = true;
+        scalar->restorePreviewState(scalarState);
+        widget.setStereoMode(ImageFileWidget::StereoAnaglyph);
+        QTRY_COMPARE(widget.stereoMode(), ImageFileWidget::StereoAnaglyph);
+        const auto* oldModel = widget.activeFramebufferModel();
+        widget.setMipLevel(1);
+        QCOMPARE(widget.mipLevel(), 0);
+        QCOMPARE(widget.activeFramebufferModel(), oldModel);
+        widget.setMipLevel(2); // Supersede an in-flight request.
+        QTRY_VERIFY(!widget.isRefreshInProgress());
+        QCOMPARE(widget.mipLevel(), 2);
+        QCOMPARE(other.mipLevel(), 0);
+        QCOMPARE(widget.stereoMode(), ImageFileWidget::StereoAnaglyph);
+        for (auto* page : widget.findChildren<RGBFramebufferWidget*>()) {
+            QCOMPARE(page->framebufferModel()->mipLevel(), 2);
+            QVERIFY(page->framebufferModel()->isPreviewReady());
+        }
+        scalar = widget.findChild<YFramebufferWidget*>();
+        QCOMPARE(scalar->framebufferModel()->mipLevel(), 2);
+        QVERIFY(scalar->previewState().automatic);
+        QCOMPARE(scalar->previewState().minimum, scalar->framebufferModel()->getDatasetMin());
+        widget.setStereoMode(ImageFileWidget::StereoLeft);
+        rgb = qobject_cast<RGBFramebufferWidget*>(widget.activePreviewWidget());
+        QCOMPARE(rgb->previewState().exposure, -2.);
+        QCOMPARE(rgb->previewState().minimum, -.5);
+        QCOMPARE(rgb->previewState().maximum, 8.);
+        QVERIFY(rgb->previewState().highlightNonFinite);
+        QCOMPARE(widget.activeGraphicsView()->viewState().zoom, 2.);
+        widget.setMipLevel(1);
+        widget.setMipLevel(2); // Re-select committed level to cancel.
+        QVERIFY(!widget.isRefreshInProgress());
+        QCOMPARE(widget.activeFramebufferModel()->mipLevel(), 2);
+        widget.refresh();
+        QTRY_VERIFY(!widget.isRefreshInProgress());
+        QCOMPARE(widget.mipLevel(), 2);
+        QCOMPARE(widget.stereoMode(), ImageFileWidget::StereoLeft);
+        // Replacing the file with fewer levels must retain the displayed snapshot.
+        const auto* oldSource = widget.sourceImage();
+        QVERIFY(QFile::rename(path, path + ".old"));
+        writeFixture(path, 1, 1, {{"Y", {1.f}}});
+        dismissNextError();
+        widget.refresh();
+        QCOMPARE(widget.sourceImage(), oldSource);
+        QCOMPARE(widget.mipLevel(), 2);
+    }
+
+    void mipMenuMinimalAndSaveNotice()
+    {
+        const QString path = fixture("mip-ui");
+        writeMipFixture(path);
+        MainWindow window;
+        window.resize(900, 650);
+        window.show();
+        window.open(path);
+        auto* document = window.findChild<ImageFileWidget*>();
+        QTRY_VERIFY(document && document->isDocumentReady());
+        auto* menu = window.findChild<QMenu*>("menu_MipmapLevel");
+        QVERIFY(menu && menu->isEnabled());
+        auto* action = window.findChild<QAction*>("action_MipLevel1");
+        QVERIFY(action && action->text().contains("5 × 4")); // Current display canvas.
+        action->trigger();
+        QTRY_VERIFY(!document->isRefreshInProgress());
+        QCOMPARE(document->mipLevel(), 1);
+        QVERIFY(action->isChecked());
+        window.findChild<QAction*>("action_CopyImageFullResolution")->trigger();
+        QCOMPARE(QApplication::clipboard()->image().size(), QSize(5, 4));
+        QVERIFY(QMetaObject::invokeMethod(&window, "toggleMinimalView"));
+        auto* footer = window.centralWidget()->findChild<QWidget*>("minimalImageFooter");
+        QVERIFY(footer && footer->toolTip().contains("Mip level 1"));
+        QVERIFY(QMetaObject::invokeMethod(&window, "toggleMinimalView"));
+        QCOMPARE(document->mipLevel(), 1);
+        SaveImageDialog dialog(fixture("mip-save"));
+        dialog.setMipLevelInfo(1, true);
+        auto* notice = dialog.findChild<QLabel*>("mipLevelLabel");
+        QVERIFY(notice && !notice->isHidden());
+        QVERIFY(notice->text().contains("selected level only"));
+        dialog.setMipLevelInfo(0, false);
+        QVERIFY(notice->isHidden());
+    }
+
+    void incompleteMipDoesNotPublishAndCommonLevelsAreRestricted()
+    {
+        const QString path = fixture("missing-mip");
+        const int count = writeMipFixture(path, Imf::ROUND_DOWN, true);
+        OpenEXRImage source(path, nullptr);
+        YFramebufferModel model("Z");
+        QSignalSpy loaded(&model, &FramebufferModel::imageLoaded);
+        model.load(source.sharedEXR(), 0, count - 1);
+        QTRY_VERIFY(!model.isLoading());
+        QCOMPARE(loaded.count(), 0);
+        QVERIFY(!model.isPreviewReady() && !model.errorString().isEmpty());
+        ImageSave::Source input;
+        input.sourceImage = &source; input.mipLevel = count - 1;
+        ImageSave::Options options;
+        options.target = ImageSave::TargetLayeredOriginal;
+        options.format = ImageSave::FormatExr;
+        options.path = fixture("missing-mip-export");
+        QCOMPARE(ImageSave::save(input, options).status, ImageSave::StatusFailed);
+        QVERIFY(!QFile::exists(options.path));
+        FileWidget widget(path);
+        QTRY_VERIFY(widget.isDocumentReady());
+        const auto* committed = widget.activeFramebufferModel();
+        QTimer closeError;
+        connect(&closeError, &QTimer::timeout, &widget, [] {
+            for (auto* top : QApplication::topLevelWidgets())
+                if (auto* message = qobject_cast<QMessageBox*>(top)) message->accept();
+        });
+        closeError.start(10);
+        widget.setMipLevel(count - 1);
+        QTRY_VERIFY(!widget.isRefreshInProgress());
+        closeError.stop();
+        QCOMPARE(widget.mipLevel(), 0);
+        QCOMPARE(widget.activeFramebufferModel(), committed);
+        QVERIFY(committed->isPreviewReady());
+
+        const QString mixedPath = fixture("mixed-levels");
+        Imf::Header headers[] = {Imf::Header(4, 4), Imf::Header(4, 4)};
+        for (int part = 0; part < 2; ++part) {
+            headers[part].setName(std::to_string(part));
+            headers[part].setType(part == 0 ? Imf::TILEDIMAGE : Imf::SCANLINEIMAGE);
+            headers[part].channels().insert("Y", Imf::Channel(Imf::FLOAT));
+        }
+        headers[0].setTileDescription(Imf::TileDescription(2, 2, Imf::MIPMAP_LEVELS));
+        {
+            Imf::MultiPartOutputFile output(mixedPath.toLocal8Bit().constData(), headers, 2);
+            Imf::TiledOutputPart tiled(output, 0);
+            float samples[16] = {};
+            for (int level = 0; level < tiled.numLevels(); ++level) {
+                Imf::FrameBuffer buffer;
+                buffer.insert("Y", Imf::Slice::Make(Imf::FLOAT, samples, tiled.dataWindowForLevel(level),
+                              sizeof(float), size_t(tiled.levelWidth(level)) * sizeof(float)));
+                tiled.setFrameBuffer(buffer);
+                tiled.writeTiles(0, tiled.numXTiles(level) - 1, 0, tiled.numYTiles(level) - 1, level);
+            }
+            Imf::OutputPart scanline(output, 1);
+            Imf::FrameBuffer buffer;
+            buffer.insert("Y", Imf::Slice::Make(Imf::FLOAT, samples, headers[1].dataWindow(), sizeof(float), 4 * sizeof(float)));
+            scanline.setFrameBuffer(buffer); scanline.writePixels(4);
+        }
+        OpenEXRImage mixed(mixedPath, nullptr);
+        QCOMPARE(MipLevels::commonCount(mixed.sharedEXR()), 1);
+        Imf::Header left(9, 7), right(9, 7);
+        left.setTileDescription(Imf::TileDescription(4, 3, Imf::MIPMAP_LEVELS, Imf::ROUND_DOWN));
+        right.setTileDescription(Imf::TileDescription(4, 3, Imf::MIPMAP_LEVELS, Imf::ROUND_UP));
+        QVERIFY(ViewMetadata::stereoGeometryMatches(left, right));
+        QVERIFY(!ViewMetadata::stereoGeometryMatches(left, right, 1));
+    }
+
+    void deepAndRipmapPartsRemainUnsupported()
+    {
+        for (int kind = 1; kind < 4; ++kind) {
             const QString path = fixture(QString("unsupported-part-%1").arg(kind));
             if (kind < 2) {
                 Imf::Header header(4, 4);
                 header.setTileDescription(Imf::TileDescription(
-                  2, 2, kind == 0 ? Imf::MIPMAP_LEVELS : Imf::RIPMAP_LEVELS));
+                  2, 2, Imf::RIPMAP_LEVELS));
                 writeFixture(path, 4, 4, {{"Z", std::vector<float>(16, 1.f)}},
                              0, 0, 1.f, 1, &header);
             } else {
@@ -1069,7 +1406,7 @@ class ViewerTests: public QObject
             model.load(source.sharedEXR(), 0);
             QTRY_COMPARE(failed.count(), 1);
             QVERIFY(!model.isImageLoaded());
-            const QString expected = kind < 2 ? "Mipmap and Ripmap" : "Deep";
+            const QString expected = kind < 2 ? "Ripmap" : "Deep";
             QVERIFY(model.errorString().contains(expected));
             ImageSave::Source input;
             input.sourceImage = &source;
@@ -2321,23 +2658,29 @@ class ViewerTests: public QObject
           QMdiArea::TabbedView);
         QPointer<FramebufferModel> previous = depthModel;
         QVERIFY(QFile::rename(path, path + ".old"));
-        writeFixture(path, 2, 2, {{"Y", {10.f, 11.f, 12.f, 13.f}}});
+        writeFixture(path, 2, 2, {{"Y", {10.f, 11.f, 12.f, 13.f}}, {"depth", {20.f, 21.f, 22.f, 23.f}}});
         widget.refresh();
         QVERIFY(widget.isRefreshInProgress());
         QTRY_VERIFY(!widget.isRefreshInProgress());
         QVERIFY(previous.isNull());
-        QCOMPARE(widget.findChildren<YFramebufferWidget*>().size(), 1);
+        QCOMPARE(widget.findChildren<YFramebufferWidget*>().size(), 2);
         QVERIFY(widget.findChildren<RGBFramebufferWidget*>().isEmpty());
-        scalar = widget.findChild<YFramebufferWidget*>();
-        QVERIFY(scalar);
-        QTRY_VERIFY(scalar->framebufferModel()->isPreviewReady());
-        QVERIFY(scalar->previewState().automatic);
-        QVERIFY(std::abs(scalar->previewState().minimum - 10.) < 0.001);
-        QVERIFY(std::abs(scalar->previewState().maximum - 13.) < 0.001);
-        // A single remaining preview fills the workspace without a tab bar.
-        QCOMPARE(
-          widget.findChild<QMdiArea*>()->viewMode(),
-          QMdiArea::SubWindowView);
+        const auto pages = widget.findChildren<YFramebufferWidget*>();
+        for (auto* page : pages) {
+            if (page->framebufferModel()->rawChannelNames()[0] != "Y") continue;
+            QVERIFY(page->previewState().automatic);
+            QCOMPARE(page->previewState().minimum, 10.);
+            QCOMPARE(page->previewState().maximum, 13.);
+        }
+        QCOMPARE(widget.findChild<QMdiArea*>()->viewMode(), QMdiArea::TabbedView);
+        const auto* oldSource = widget.sourceImage();
+        QVERIFY(QFile::rename(path, path + ".new"));
+        writeFixture(path, 2, 2, {{"Y", {1.f, 2.f, 3.f, 4.f}}});
+        dismissNextError();
+        widget.refresh();
+        QVERIFY(!widget.isRefreshInProgress());
+        QCOMPARE(widget.sourceImage(), oldSource);
+        QCOMPARE(widget.findChildren<YFramebufferWidget*>().size(), 2);
     }
 
     void closeAndRefreshDuringDecode()

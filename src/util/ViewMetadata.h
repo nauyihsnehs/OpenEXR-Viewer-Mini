@@ -12,7 +12,7 @@ struct ViewMetadata {
     std::vector<std::string> multiView;
 
     static ViewMetadata read(const Imf::Header& header);
-    static bool stereoGeometryMatches(const Imf::Header& left, const Imf::Header& right);
+    static bool stereoGeometryMatches(const Imf::Header& left, const Imf::Header& right, int level = 0);
     void write(Imf::Header& header) const;
     bool present() const { return hasView || hasMultiView; }
     std::string defaultView() const;

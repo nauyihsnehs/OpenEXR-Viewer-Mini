@@ -65,24 +65,28 @@ namespace {
 }
 
 void RGBFramebufferModel::loadStereo(const std::shared_ptr<ExrInput>& file,
-                                     const std::array<Input, 2>& eyes)
+                                     const std::array<Input, 2>& eyes, int level)
 {
     m_channels = {};
-    startLoading([file, eyes](const Cancellation& cancel) -> DecodeResult {
+    startLoading([file, eyes, level](const Cancellation& cancel) -> DecodeResult {
         if (!file || !file->file) throw std::runtime_error("No source image.");
-        if (!ViewMetadata::stereoGeometryMatches(file->file->header(eyes[0].part), file->file->header(eyes[1].part)))
+        if (!ViewMetadata::stereoGeometryMatches(file->file->header(eyes[0].part), file->file->header(eyes[1].part), level))
             throw std::runtime_error("Stereo views require identical display windows and pixel aspect ratios.");
         auto data = std::make_shared<FramebufferData>();
         for (size_t i = 0; i < eyes.size(); ++i) {
             if (cancel->load()) return DecodeResult();
             auto decoded = FramebufferLoader::decode(file, eyes[i].part,
-              decodeLayout(eyes[i].layout), eyes[i].channels, cancel);
+              decodeLayout(eyes[i].layout), eyes[i].channels, cancel, level);
             if (!decoded.data) return decoded;
             data->stereo[i] = decoded.data;
             data->stereoChannels[i] = eyes[i].channels;
         }
         const auto& left = *data->stereo[0];
         const auto& right = *data->stereo[1];
+        if (left.displayWindow != right.displayWindow || left.pixelAspect != right.pixelAspect)
+            throw std::runtime_error("Stereo mip levels require identical display windows and pixel aspect ratios.");
+        data->mipLevel = level;
+        data->mipLevelCount = std::min(left.mipLevelCount, right.mipLevelCount);
         const int x = std::min(left.dataWindow.left(), right.dataWindow.left());
         const int y = std::min(left.dataWindow.top(), right.dataWindow.top());
         const int64_t width = int64_t(std::max(left.dataWindow.right(), right.dataWindow.right())) - x + 1;
@@ -127,17 +131,17 @@ void RGBFramebufferModel::loadStereo(const std::shared_ptr<ExrInput>& file,
 void RGBFramebufferModel::load(
   const std::shared_ptr<ExrInput>& file,
   int                                             partId,
-  const std::array<std::string, 4>&               channels)
+  const std::array<std::string, 4>&               channels, int level)
 {
     m_channels = channels;
     const auto layout = decodeLayout(m_layerType);
-    startLoading([file, partId, channels, layout](const Cancellation& cancel) {
+    startLoading([file, partId, channels, layout, level](const Cancellation& cancel) {
         return FramebufferLoader::decode(
           file,
           partId,
           layout,
           channels,
-          cancel);
+          cancel, level);
     });
 }
 
@@ -149,6 +153,7 @@ std::string RGBFramebufferModel::getColorInfo(int x, int y) const
         const QPoint position = getDataWindow().topLeft() + QPoint(x, y);
         if (!pixelCoverage().contains(QPoint(x, y))) return "";
         std::stringstream text;
+        if (mipLevelCount() > 1) text << "Mip level " << mipLevel() << " | ";
         text << "x: " << position.x() << " y: " << position.y();
         for (size_t i = 0; i < 2; ++i) {
             const auto& eye = *m_data->stereo[i];
@@ -171,6 +176,7 @@ std::string RGBFramebufferModel::getColorInfo(int x, int y) const
     }
     const float*      pixel = &getRawPixels()[4 * (size_t(y) * width() + x)];
     std::stringstream text;
+    if (mipLevelCount() > 1) text << "Mip level " << mipLevel() << " | ";
     text << "x: " << x + getDataWindow().x()
          << " y: " << y + getDataWindow().y() << " |";
     const auto names = rawChannelNames();

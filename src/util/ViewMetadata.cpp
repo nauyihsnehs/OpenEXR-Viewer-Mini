@@ -1,10 +1,11 @@
 #include "ViewMetadata.h"
+#include "MipLevels.h"
 #include <OpenEXR/ImfMultiView.h>
 #include <OpenEXR/ImfStringVectorAttribute.h>
 
-bool ViewMetadata::stereoGeometryMatches(const Imf::Header& left, const Imf::Header& right)
+bool ViewMetadata::stereoGeometryMatches(const Imf::Header& left, const Imf::Header& right, int level)
 {
-    return left.displayWindow() == right.displayWindow()
+    return MipLevels::displayWindow(left, level) == MipLevels::displayWindow(right, level)
            && left.pixelAspectRatio() == right.pixelAspectRatio();
 }
 

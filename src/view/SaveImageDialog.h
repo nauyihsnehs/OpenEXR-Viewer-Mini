@@ -19,6 +19,7 @@ class SaveImageDialog: public QDialog
 
     ImageSave::Options options() const;
     void               setStatus(const QString& message, bool error);
+    void setMipLevelInfo(int level, bool multilevel);
     void setSourceState(bool available, bool previewReady, const QString& error = QString(), bool derived = false);
 
   public slots:

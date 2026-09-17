@@ -92,6 +92,8 @@ class FramebufferModel: public QObject
         return int(rawChannelNames().size());
     }
 
+    int mipLevel() const { return m_data ? m_data->mipLevel : 0; }
+    int mipLevelCount() const { return m_data ? m_data->mipLevelCount : 1; }
     virtual std::string              getColorInfo(int x, int y) const = 0;
     virtual std::vector<std::string> rawChannelNames() const          = 0;
     virtual std::vector<int> rawChannelComponents() const

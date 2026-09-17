@@ -79,12 +79,12 @@ class RGBFramebufferModel: public FramebufferModel
         LayerType layout = Layer_RGB;
         std::array<std::string, 4> channels;
     };
-    void loadStereo(const std::shared_ptr<ExrInput>& file, const std::array<Input, 2>& eyes);
+    void loadStereo(const std::shared_ptr<ExrInput>& file, const std::array<Input, 2>& eyes, int level = 0);
 
     virtual void load(
       const std::shared_ptr<ExrInput>& file,
       int                                             partId,
-      const std::array<std::string, 4>&               channels);
+      const std::array<std::string, 4>&               channels, int level = 0);
 
     virtual std::string getColorInfo(int x, int y) const;
 

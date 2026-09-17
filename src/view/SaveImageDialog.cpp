@@ -32,6 +32,7 @@ SaveImageDialog::SaveImageDialog(const QString& path, QWidget* parent)
     setWindowTitle(tr("Save Image"));
     setFixedWidth(520);
 
+    ui->mipLevelLabel->hide();
     setupOptions();
     applyComboBoxBehavior(this);
     ui->pathEdit->setText(path);
@@ -108,6 +109,12 @@ void SaveImageDialog::setStatus(const QString& message, bool error)
       error ? "color: rgb(220, 80, 80);" : "color: rgb(80, 170, 80);");
 }
 
+
+void SaveImageDialog::setMipLevelInfo(int level, bool multilevel)
+{
+    ui->mipLevelLabel->setVisible(multilevel);
+    ui->mipLevelLabel->setText(tr("Mip level %1 — selected level only; scanline EXR").arg(level));
+}
 
 void SaveImageDialog::setSourceState(bool available, bool previewReady, const QString& error, bool derived)
 {
