@@ -92,6 +92,8 @@ ImageSave::Options SaveImageDialog::options() const
       static_cast<ImageSave::MetadataPolicy>(ui->metadataCombo->currentData().toInt());
     options.multipart =
       static_cast<ImageSave::MultipartPolicy>(ui->multipartCombo->currentData().toInt());
+    if (m_fileDeep && options.target == ImageSave::TargetLayeredOriginal)
+        options.multipart = ImageSave::MultipartPreserve;
     options.conflict = ImageSave::ConflictAsk;
     options.bracketCount = ui->bracketCountCombo->currentData().toInt();
     options.bracketStepEv = ui->bracketStepSpinBox->value();
@@ -114,6 +116,13 @@ void SaveImageDialog::setResolutionLevelInfo(ResolutionLevel level, bool multile
 {
     ui->resolutionLevelLabel->setVisible(multilevel);
     ui->resolutionLevelLabel->setText(tr("Level %1 — selected level only; scanline EXR").arg(QString::fromStdString(level.toString())));
+}
+
+void SaveImageDialog::setDeepSourceInfo(bool activeDeep, bool fileDeep)
+{
+    m_activeDeep = activeDeep;
+    m_fileDeep = fileDeep;
+    updateOptions();
 }
 
 void SaveImageDialog::setSourceState(bool available, bool previewReady, const QString& error, bool derived)
@@ -307,6 +316,14 @@ void SaveImageDialog::updateOptions()
     ui->multipartCombo->setEnabled(layered);
     ui->multipartLabel->setVisible(layered);
     ui->multipartCombo->setVisible(layered);
+    const bool deep = exr && (layered ? m_fileDeep : m_activeDeep);
+    ui->deepInfoLabel->setVisible(deep);
+    ui->compressionCombo->setVisible(!deep);
+    ui->pixelTypeCombo->setVisible(!deep);
+    ui->compressionLabel->setVisible(!deep);
+    ui->pixelTypeLabel->setVisible(!deep);
+    ui->deepMultipartLabel->setVisible(layered && deep);
+    ui->multipartCombo->setVisible(layered && !deep);
     ui->hdrInfoLabel->setVisible(hdr);
     updateSaveAvailability();
 }

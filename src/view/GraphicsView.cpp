@@ -139,6 +139,7 @@ void GraphicsView::onImageChanged()
 {
     if (_model)
         _imageItem->setPixmap(QPixmap::fromImage(_model->getLoadedImage()));
+    refreshPixelInfo();
 }
 
 void GraphicsView::setZoomLevel(double zoom)

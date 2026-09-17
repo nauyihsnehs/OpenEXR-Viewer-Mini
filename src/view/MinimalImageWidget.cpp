@@ -1,6 +1,7 @@
 #include "MinimalImageWidget.h"
 #include "GraphicsView.h"
 #include "CropIndicator.h"
+#include "DepthRangeWidget.h"
 
 #include <QLabel>
 #include <QFontMetrics>
@@ -28,6 +29,7 @@ MinimalImageWidget::MinimalImageWidget(QWidget* parent) : QWidget(parent)
     m_pixelLabel->setObjectName("minimalPixelInfo");
     m_pixelLabel->setTextFormat(Qt::PlainText);
     m_pixelLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    m_depthRange = new DepthRangeWidget(m_footer);
     items->addWidget(m_footer);
 }
 
@@ -39,6 +41,10 @@ int MinimalImageWidget::footerHeight() const
 void MinimalImageWidget::setSummary(const QString& text, const FramebufferModel* model)
 {
     m_cropIndicator->setModel(model);
+    // The preview owns a mutable model; the minimal window edits the same range.
+    m_depthRange->setModel(const_cast<FramebufferModel*>(model));
+    m_footer->setFixedHeight(fontMetrics().height() + 12
+      + (model && model->hasDeepSamples() ? m_depthRange->sizeHint().height() : 0));
     m_summary = text;
     m_summaryLabel->setToolTip(text);
     updateSummary();
@@ -59,15 +65,17 @@ void MinimalImageWidget::resizeEvent(QResizeEvent* event)
 
 void MinimalImageWidget::updateSummary()
 {
+    const int rowHeight = fontMetrics().height() + 12;
+    m_depthRange->setGeometry(0, rowHeight, width(), qMax(0, footerHeight() - rowHeight));
     const int left = m_cropIndicator->isHidden() ? 8 : 32;
-    m_cropIndicator->move(8, (footerHeight() - m_cropIndicator->height()) / 2);
+    m_cropIndicator->move(8, (rowHeight - m_cropIndicator->height()) / 2);
     const int available = qMax(0, width() - left - 8);
     const int pixels = m_pixelInfo.isEmpty() ? 0 : qMin(
       available, m_pixelLabel->fontMetrics().boundingRect(m_pixelInfo).width() + 2);
     const int gap = pixels > 0 && pixels < available ? qMin(8, available - pixels) : 0;
     const int summary = available - pixels - gap;
-    m_summaryLabel->setGeometry(left, 0, summary, footerHeight());
-    m_pixelLabel->setGeometry(left + summary + gap, 0, pixels, footerHeight());
+    m_summaryLabel->setGeometry(left, 0, summary, rowHeight);
+    m_pixelLabel->setGeometry(left + summary + gap, 0, pixels, rowHeight);
     m_summaryLabel->setVisible(summary > 0);
     m_pixelLabel->setVisible(pixels > 0);
     m_summaryLabel->setText(m_summaryLabel->fontMetrics().elidedText(

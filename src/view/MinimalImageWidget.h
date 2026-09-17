@@ -2,6 +2,7 @@
 
 #include <QWidget>
 
+class DepthRangeWidget;
 class GraphicsView;
 class QLabel;
 class CropIndicator;
@@ -23,6 +24,7 @@ class MinimalImageWidget : public QWidget
     void updateSummary();
     GraphicsView* m_view;
     QWidget* m_footer;
+    DepthRangeWidget* m_depthRange;
     CropIndicator* m_cropIndicator;
     QLabel* m_summaryLabel;
     QLabel* m_pixelLabel;

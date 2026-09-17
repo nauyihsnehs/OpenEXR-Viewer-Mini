@@ -1124,12 +1124,14 @@ void ImageFileWidget::setStereoMode(StereoMode mode)
     auto* page = qobject_cast<RGBFramebufferWidget*>(m_pendingStereo->widget);
     const auto* current = qobject_cast<RGBFramebufferWidget*>(activePreviewWidget());
     const bool inheritParameters = current != nullptr;
-    const PreviewState parameters = current ? current->previewState() : PreviewState();
+    PreviewState parameters = current ? current->previewState() : PreviewState();
+    if (activeFramebufferModel()) parameters.depth = activeFramebufferModel()->depthRange();
     const auto* oldModel = activeFramebufferModel();
     const QPoint oldOrigin = oldModel ? oldModel->getDataWindow().topLeft() : QPoint();
     const auto viewState = activeGraphicsView() ? activeGraphicsView()->viewState() : GraphicsView::ViewState();
     connect(model, &FramebufferModel::imageLoaded, this,
       [this, page, model, parameters, inheritParameters, oldOrigin, viewState] {
+        model->setDepthRange(parameters.depth);
         if (inheritParameters) {
             auto state = parameters;
             state.mode = int(m_rgbPreviewMode);
@@ -1232,6 +1234,8 @@ ImageFileWidget::framebufferStatusToolTip(QMdiSubWindow* subWindow) const
     lines << "Source finite max: " + framebufferDatasetValueText(model, false);
 
     if (loaded) {
+        if (model->hasDeepSamples())
+            lines << "Deep statistics include all stored samples and channels of the source part(s), before Depth Range filtering.";
         lines << (model->isDerivedPreview() ? "Two-eye source channel samples (not pixels):"
                                            : "Source channel samples (not pixels):");
         lines << "NaN count: " + QString::number(model->getDatasetNaNCount());

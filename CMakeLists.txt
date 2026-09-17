@@ -131,6 +131,8 @@ set(PROJECT_SOURCES
     src/view/ScaleWidget.h
     src/view/RangeSliderWidget.cpp
     src/view/RangeSliderWidget.h
+    src/view/DepthRangeWidget.cpp
+    src/view/DepthRangeWidget.h
     src/view/ScientificDoubleSpinBox.h
     src/view/AnomalyMarkerButton.h
     src/view/AnomalyMarkerButton.cpp
@@ -140,6 +142,10 @@ set(PROJECT_SOURCES
     # ------------------------------------------------------------------------
     src/model/OpenEXRImage.cpp
     src/model/OpenEXRImage.h
+    src/model/DeepSamples.cpp
+    src/model/DeepSamples.h
+    src/model/framebuffer/DeepPreview.cpp
+    src/model/framebuffer/DeepPreview.h
 
     # OpenEXR attributes
     src/model/attribute/HeaderItem.cpp

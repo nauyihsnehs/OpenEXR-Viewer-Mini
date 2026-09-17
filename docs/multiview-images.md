@@ -41,7 +41,7 @@ Fog 独立 Y 默认灰度、0～1；Anaglyph 把 Y 当作线性灰色，使用 R
 4. 快速切层、返回已显示层取消请求、关闭文档；确认不会闪现旧请求或半数页面切层。
    有任一读取失败时应保留原层级、全部旧页面及源文件。刷新后层或配对消失应报错，不自动换眼。
 5. 文件可选层为所有 parts 的交集，含扫描线或 ONE_LEVEL 的混合文件只能选第 0 层。
-   Ripmap 现已支持，见 [Multi-Resolution 清单](multi-resolution-images.md)；Deep 继续拒绝。
+   Ripmap 现已支持，见 [Multi-Resolution 清单](multi-resolution-images.md)；Deep Scanline 现见 [独立核对清单](deep-scanline-images.md)，Deep Tiled 仍不支持。
    此组样例没有混合 parts，需用测试夹具核对。
 
 数据窗口采用 OpenEXR `dataWindowForLevel`，起点不变；应用的当前层显示窗口保留原显示起点，

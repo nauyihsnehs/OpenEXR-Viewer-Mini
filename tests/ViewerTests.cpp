@@ -45,6 +45,7 @@
 #include <view/RGBFramebufferWidget.h>
 #include <view/YFramebufferWidget.h>
 #include <view/RangeSliderWidget.h>
+#include <view/DepthRangeWidget.h>
 #include <view/ScaleWidget.h>
 #include <view/mainwindow.h>
 #include <OpenEXR/ImfChannelList.h>
@@ -59,6 +60,7 @@
 #include <OpenEXR/ImfTileDescription.h>
 #include <OpenEXR/ImfDeepFrameBuffer.h>
 #include <OpenEXR/ImfDeepScanLineOutputFile.h>
+#include <OpenEXR/ImfDeepScanLineOutputPart.h>
 #include <OpenEXR/ImfDeepTiledOutputFile.h>
 #include <OpenEXR/ImfPartType.h>
 #include <OpenEXR/ImfRgbaFile.h>
@@ -69,6 +71,69 @@
 
 namespace
 {
+    // Small point-sample fixture; file order deliberately differs from depth order.
+    void writeDeepFixture(const QString& path, bool stereo = false, bool zBack = false,
+                          int omittedPart = -1, float depthShift = 0.f, bool constant = false)
+    {
+        const int parts = stereo ? 2 : 1;
+        const Imath::Box2i display(Imath::V2i(-3, -2), Imath::V2i(2, 2));
+        std::vector<Imf::Header> headers;
+        for (int eye = 0; eye < parts; ++eye) {
+            const Imath::Box2i data(Imath::V2i(-2 + eye, -1 + eye), Imath::V2i(eye, eye));
+            headers.emplace_back(display, data);
+            auto& header = headers.back();
+            header.setName(eye == 0 ? "rgba.left" : "rgba.right");
+            header.setView(eye == 0 ? "left" : "right");
+            header.setType(Imf::DEEPSCANLINE);
+            header.setVersion(1);
+            header.compression() = Imf::ZIPS_COMPRESSION;
+            header.insert("chromaticities", Imf::ChromaticitiesAttribute(Imf::Chromaticities()));
+            for (const char* name : {"R", "G", "B", "A"})
+                header.channels().insert(name, Imf::Channel(Imf::HALF));
+            header.channels().insert("Z", Imf::Channel(Imf::FLOAT));
+            header.channels().insert("id", Imf::Channel(Imf::UINT));
+            if (zBack) header.channels().insert("ZBack", Imf::Channel(Imf::FLOAT));
+        }
+        Imf::MultiPartOutputFile file(path.toLocal8Bit().constData(), headers.data(), parts);
+        for (int eye = 0; eye < parts; ++eye) {
+            if (eye == omittedPart) continue;
+            std::vector<uint32_t> counts = {0, 3, 1, 2, 1, 1};
+            const std::vector<size_t> offsets = {0, 0, 3, 4, 6, 7};
+            const float nan = std::numeric_limits<float>::quiet_NaN();
+            const float inf = std::numeric_limits<float>::infinity();
+            const float rgba[8][4] = {{.5f,.25f,0,1}, {.25f,.125f,0,.5f}, {.5f,0,.25f,.5f},
+              {.25f,0,.5f,0}, {0,0,0,1}, {0,0,0,1}, {nan,0,0,1}, {.125f,.25f,.5f,.5f}};
+            std::vector<float> z = {3, 1, 1, 2, nan, inf, 4, 2};
+            if (constant) std::fill(z.begin(), z.end(), 7.f);
+            for (auto& value : z) if (std::isfinite(value)) value += depthShift + eye * 10;
+            std::vector<uint32_t> ids;
+            for (uint32_t i = 0; i < 8; ++i) ids.push_back(4000000000u + i);
+            std::array<std::vector<half>, 4> colors;
+            for (size_t c = 0; c < 4; ++c)
+                for (const auto& sample : rgba) colors[c].push_back(half(sample[c]));
+            const auto window = headers[eye].dataWindow();
+            Imf::DeepFrameBuffer buffer;
+            buffer.insertSampleCountSlice(Imf::Slice::Make(Imf::UINT, counts.data(), window,
+              sizeof(uint32_t), 3 * sizeof(uint32_t)));
+            std::vector<std::vector<char*>> pointers(zBack ? 7 : 6, std::vector<char*>(6));
+            const std::array<const char*, 7> names = {{"R", "G", "B", "A", "Z", "id", "ZBack"}};
+            for (size_t c = 0; c < pointers.size(); ++c) {
+                const auto type = c < 4 ? Imf::HALF : c == 5 ? Imf::UINT : Imf::FLOAT;
+                const size_t stride = c < 4 ? sizeof(half) : sizeof(uint32_t);
+                char* samples = c < 4 ? reinterpret_cast<char*>(colors[c].data())
+                  : c == 5 ? reinterpret_cast<char*>(ids.data()) : reinterpret_cast<char*>(z.data());
+                for (size_t p = 0; p < 6; ++p)
+                    pointers[c][p] = counts[p] ? samples + offsets[p] * stride : nullptr;
+                const auto slice = Imf::Slice::Make(Imf::FLOAT, pointers[c].data(), window,
+                  sizeof(char*), 3 * sizeof(char*));
+                buffer.insert(names[c], Imf::DeepSlice(type, slice.base, slice.xStride, slice.yStride, stride));
+            }
+            Imf::DeepScanLineOutputPart output(file, eye);
+            output.setFrameBuffer(buffer);
+            output.writePixels(2);
+        }
+    }
+
     void writeFixture(
       const QString&                                   path,
       int                                              width,
@@ -1648,7 +1713,270 @@ class ViewerTests: public QObject
         }
     }
 
-    void deepPartsRemainUnsupported()
+    void deepRangeCompositesAndReadouts()
+    {
+        const QString path = fixture("deep-range");
+        writeDeepFixture(path);
+        OpenEXRImage source(path, nullptr);
+        RGBFramebufferModel rgb("", RGBFramebufferModel::Layer_RGB);
+        YFramebufferModel red("R"), alpha("A"), depth("Z");
+        rgb.load(source.sharedEXR(), 0, {{"R", "G", "B", "A"}});
+        red.load(source.sharedEXR(), 0); alpha.load(source.sharedEXR(), 0); depth.load(source.sharedEXR(), 0);
+        QTRY_VERIFY(rgb.isPreviewReady() && red.isPreviewReady() && alpha.isPreviewReady() && depth.isPreviewReady());
+        QVERIFY(rgb.deepSamples() == red.deepSamples() && red.deepSamples() == depth.deepSamples());
+        QCOMPARE(rgb.depthBounds().minimum, 1.); QCOMPARE(rgb.depthBounds().maximum, 4.);
+        QCOMPARE(rgb.getRedInfo(1, 0), .625f);
+        QCOMPARE(rgb.getGreenInfo(1, 0), .1875f);
+        QCOMPARE(rgb.getBlueInfo(1, 0), .125f);
+        QCOMPARE(rgb.getAlphaInfo(1, 0), 1.f);
+        QCOMPARE(red.getDisplayPixels()[1], rgb.getRedInfo(1, 0));
+        QCOMPARE(alpha.getDisplayPixels()[1], 1.f);
+        QCOMPARE(depth.getDisplayPixels()[1], 1.f);
+        QCOMPARE(rgb.getLoadedImage().pixelColor(0, 0).alpha(), 0);
+        QCOMPARE(rgb.getLoadedImage().pixelColor(2, 0).alpha(), 255); // Zero-alpha emission.
+        QVERIFY(rgb.getLoadedImage().pixelColor(2, 0).red() > 0);
+        QVERIFY(QString::fromStdString(rgb.getColorInfo(1, 0)).contains("x: -1 y: -1 | Composite"));
+        QVERIFY(QString::fromStdString(red.getColorInfo(0, 0)).contains("No samples"));
+        QCOMPARE(rgb.getDatasetNaNCount(), uint64_t(2)); // One R and one Z, across the whole part.
+        QCOMPARE(rgb.getDatasetPositiveInfCount(), uint64_t(1));
+        QVERIFY(!depth.anomalyRegions().empty());
+        const auto native = rgb.deepSamples();
+        DepthRange range; range.full = false; range.minimum = range.maximum = 1.;
+        rgb.setDepthRange(range); red.setDepthRange(range); alpha.setDepthRange(range); depth.setDepthRange(range);
+        QCOMPARE(rgb.getRedInfo(1, 0), .625f); // Until atomic completion, both image and readout remain old.
+        QTRY_VERIFY(rgb.isPreviewReady() && red.isPreviewReady() && alpha.isPreviewReady() && depth.isPreviewReady());
+        QCOMPARE(rgb.getRedInfo(1, 0), .5f);
+        QCOMPARE(rgb.getAlphaInfo(1, 0), .75f);
+        QCOMPARE(red.getDisplayPixels()[1], .5f);
+        QCOMPARE(alpha.getDisplayPixels()[1], .75f);
+        QCOMPARE(depth.getDisplayPixels()[1], 1.f);
+        QCOMPARE(rgb.getLoadedImage().pixelColor(2, 0).alpha(), 0);
+        QCOMPARE(rgb.getDatasetNaNCount(), uint64_t(2));
+        QVERIFY(rgb.anomalyRegions().empty());
+        range.minimum = range.maximum = 2.5;
+        rgb.setDepthRange(range);
+        QTRY_VERIFY(rgb.isPreviewReady());
+        for (int y = 0; y < rgb.height(); ++y)
+            for (int x = 0; x < rgb.width(); ++x) QCOMPARE(rgb.getLoadedImage().pixelColor(x, y).alpha(), 0);
+        QVERIFY(!rgb.hasFiniteLuminanceSamples());
+        const auto empty = PreviewImage::render(rgb);
+        QCOMPARE(empty.size(), QSize(6, 5));
+        QCOMPARE(PreviewImage::render(rgb, 0, Qt::white).pixelColor(2, 2), QColor(Qt::white));
+        // Several unprocessed requests must leave only the last range visible.
+        for (double z : {1., 3., 4., 2.}) { range.minimum = range.maximum = z; rgb.setDepthRange(range); }
+        QTRY_VERIFY(rgb.isPreviewReady());
+        QCOMPARE(rgb.getLoadedImage().pixelColor(1, 0).alpha(), 0);
+        QCOMPARE(rgb.getRedInfo(2, 0), .25f);
+        QVERIFY(rgb.deepSamples() == native);
+        red.setAutomaticRange(true); red.setDepthRange(range);
+        QTRY_VERIFY(red.isPreviewReady());
+        QCOMPARE(red.displayMinimum(), .125);
+        QCOMPARE(red.displayMaximum(), .25);
+        QCOMPARE(native->find("Z")->value(0), 3.); // Sorting did not mutate stored order.
+        rgb.setDepthRange(DepthRange());
+        QTRY_VERIFY(rgb.isPreviewReady());
+        QVERIFY(rgb.depthRange().full);
+        QCOMPARE(rgb.getRedInfo(1, 0), .625f);
+    }
+
+    void deepRawExportsPreserveNativeSamples()
+    {
+        const QString path = fixture("deep-export");
+        writeDeepFixture(path, true);
+        OpenEXRImage source(path, nullptr);
+        YFramebufferModel red("R"), depth("Z");
+        red.load(source.sharedEXR(), 0); depth.load(source.sharedEXR(), 0);
+        QTRY_VERIFY(red.isPreviewReady() && depth.isPreviewReady());
+        DepthRange range; range.minimum = range.maximum = 2.5; range.full = false;
+        red.setDepthRange(range);
+        QTRY_VERIFY(red.isPreviewReady());
+        const auto original = red.deepSamples();
+        ImageSave::Source input; input.sourceImage = &source; input.activeModel = &red;
+        for (bool whole : {false, true}) for (bool basic : {false, true}) {
+            ImageSave::Options options;
+            options.target = whole ? ImageSave::TargetLayeredOriginal : ImageSave::TargetActiveOriginal;
+            options.format = ImageSave::FormatExr;
+            options.pixelType = ImageSave::PixelFloat;
+            options.compression = ImageSave::CompressionDwaa; // Deep ignores lossy/converted settings.
+            options.metadata = basic ? ImageSave::MetadataBasic : ImageSave::MetadataNone;
+            options.path = fixture(QString("deep-roundtrip-%1-%2").arg(whole).arg(basic));
+            QCOMPARE(ImageSave::save(input, options).status, ImageSave::StatusSaved);
+            OpenEXRImage output(options.path, nullptr);
+            QCOMPARE(output.getEXR().parts(), whole ? 2 : 1);
+            for (int part = 0; part < output.getEXR().parts(); ++part) {
+                const auto& header = output.getEXR().header(part);
+                QCOMPARE(header.type(), Imf::DEEPSCANLINE);
+                QCOMPARE(header.compression(), Imf::ZIPS_COMPRESSION);
+                QCOMPARE(header.channels().findChannel("R")->type, Imf::HALF);
+                QVERIFY(header.channels().findChannel("A") && header.channels().findChannel("Z"));
+                QCOMPARE(header.hasView(), basic);
+                QCOMPARE(header.findTypedAttribute<Imf::ChromaticitiesAttribute>("chromaticities") != nullptr, basic);
+                if (basic) QCOMPARE(header.view(), std::string(part == 0 ? "left" : "right"));
+                QVERIFY(header.dataWindow() == source.getEXR().header(part).dataWindow());
+                QVERIFY(header.displayWindow() == source.getEXR().header(part).displayWindow());
+                const auto cancel = std::make_shared<std::atomic_bool>(false);
+                const auto native = readDeepSamples(source.sharedEXR(), part, cancel);
+                const auto saved = readDeepSamples(output.sharedEXR(), part, cancel);
+                QVERIFY(saved->counts == native->counts);
+                QVERIFY(saved->offsets == native->offsets);
+                for (const auto& channel : saved->channels) {
+                    const auto* before = native->find(channel.name);
+                    QCOMPARE(channel.type, before->type);
+                    const int bytes = int(saved->offsets.back() * channel.stride());
+                    QCOMPARE(QByteArray(static_cast<const char*>(channel.buffer()), bytes),
+                             QByteArray(static_cast<const char*>(before->buffer()), bytes));
+                }
+                QCOMPARE(saved->channels.size(), size_t(whole ? 6 : 3));
+            }
+        }
+        ImageSave::Options invalid;
+        invalid.target = ImageSave::TargetLayeredOriginal; invalid.format = ImageSave::FormatExr;
+        invalid.multipart = ImageSave::MultipartFlatten; invalid.path = fixture("deep-flatten");
+        QVERIFY(ImageSave::save(input, invalid).message.contains("Preserve multipart"));
+        QVERIFY(!QFile::exists(invalid.path));
+        invalid.target = ImageSave::TargetActiveOriginal; invalid.channelScope = ImageSave::ChannelsRgb;
+        invalid.path = fixture("deep-z-color-only"); input.activeModel = &depth;
+        QCOMPARE(ImageSave::save(input, invalid).status, ImageSave::StatusFailed);
+        QVERIFY(!QFile::exists(invalid.path));
+        input.activeModel = &red;
+        invalid.path = fixture("deep-r-color-only");
+        QCOMPARE(ImageSave::save(input, invalid).status, ImageSave::StatusSaved);
+        invalid.target = ImageSave::TargetPreview; invalid.format = ImageSave::FormatPng;
+        invalid.path = m_directory.filePath("deep-empty.png");
+        QCOMPARE(ImageSave::save(input, invalid).status, ImageSave::StatusSaved);
+        const QImage png(invalid.path);
+        QCOMPARE(png.pixelColor(2, 2).alpha(), 0);
+        invalid.format = ImageSave::FormatJpeg; invalid.jpegBackground = ImageSave::BackgroundWhite;
+        invalid.path = m_directory.filePath("deep-empty.jpg");
+        QCOMPARE(ImageSave::save(input, invalid).status, ImageSave::StatusSaved);
+        const QImage jpeg(invalid.path);
+        QVERIFY(jpeg.pixelColor(2, 2).red() >= 254);
+    }
+
+    void deepControlsStereoAndRefresh()
+    {
+        const QString path = fixture("deep-controls");
+        writeDeepFixture(path, true);
+        MainWindow window; window.resize(800, 600); window.show(); window.open(path);
+        QTRY_VERIFY(window.findChild<ImageFileWidget*>());
+        auto* document = window.findChild<ImageFileWidget*>();
+        QTRY_VERIFY(document->activeFramebufferModel() && document->activeFramebufferModel()->isPreviewReady());
+        auto* page = qobject_cast<RGBFramebufferWidget*>(document->activePreviewWidget());
+        QVERIFY(page && page->findChild<DepthRangeWidget*>());
+        auto state = page->previewState();
+        state.depth.minimum = 1.; state.depth.maximum = 2.; state.depth.full = false;
+        state.automatic = true; state.highlightNonFinite = true;
+        page->restorePreviewState(state);
+        QTRY_VERIFY(document->activeFramebufferModel()->isPreviewReady());
+        page->resetCurrentMode();
+        QVERIFY(page->previewState().depth == state.depth);
+        document->setStereoMode(ImageFileWidget::StereoAnaglyph);
+        QTRY_VERIFY(document->stereoMode() == ImageFileWidget::StereoAnaglyph);
+        const auto* model = document->activeFramebufferModel();
+        QVERIFY(model->depthRange() == state.depth);
+        QVERIFY(QString::fromStdString(model->getColorInfo(2, 1)).contains("Right: No samples"));
+        window.findChild<QAction*>("action_CopyImageFullResolution")->trigger();
+        QCOMPARE(QApplication::clipboard()->image(), PreviewImage::render(*model));
+        QVERIFY(QMetaObject::invokeMethod(&window, "toggleMinimalView"));
+        auto* control = window.centralWidget()->findChild<DepthRangeWidget*>();
+        QVERIFY(control && control->isVisible());
+        auto* slider = control->findChild<RangeSliderWidget*>();
+        QTest::mouseDClick(slider, Qt::LeftButton, Qt::NoModifier, slider->rect().center());
+        QTRY_VERIFY(model->isPreviewReady());
+        QVERIFY(model->depthRange().full);
+        QCOMPARE(model->depthRange().maximum, 14.);
+        QVERIFY(QMetaObject::invokeMethod(&window, "toggleMinimalView"));
+        document->refresh();
+        QTRY_VERIFY(!document->isRefreshInProgress());
+        QVERIFY(document->activeFramebufferModel()->depthRange().full);
+        QCOMPARE(document->activeFramebufferModel()->depthRange().maximum, 14.);
+        SaveImageDialog dialog(fixture("deep-dialog"));
+        dialog.setDeepSourceInfo(true, true); dialog.setSourceState(true, true);
+        auto* targets = dialog.findChild<QComboBox*>("targetCombo");
+        targets->setCurrentIndex(targets->findData(ImageSave::TargetLayeredOriginal));
+        QVERIFY(dialog.findChild<QComboBox*>("compressionCombo")->isHidden());
+        QVERIFY(dialog.findChild<QComboBox*>("pixelTypeCombo")->isHidden());
+        QVERIFY(!dialog.findChild<QLabel*>("deepInfoLabel")->isHidden());
+        QCOMPARE(dialog.options().multipart, ImageSave::MultipartPreserve);
+        targets->setCurrentIndex(targets->findData(ImageSave::TargetPreview));
+        QVERIFY(dialog.findChild<QLabel*>("deepInfoLabel")->isHidden());
+    }
+
+    void deepCancellationAndUnsupportedVolumes()
+    {
+        const QString path = fixture("deep-cancel"); writeDeepFixture(path);
+        OpenEXRImage source(path, nullptr);
+        const auto cancel = std::make_shared<std::atomic_bool>(true);
+        QVERIFY(!readDeepSamples(source.sharedEXR(), 0, cancel));
+        QVERIFY(source.sharedEXR()->deepParts.empty());
+        QVERIFY_EXCEPTION_THROWN(ResolutionLevels::query(source.sharedEXR(), 0, {1, 1}), std::runtime_error);
+        const QString volume = fixture("deep-zback"); writeDeepFixture(volume, false, true);
+        OpenEXRImage volumeSource(volume, nullptr);
+        YFramebufferModel depth("Z"); QSignalSpy failed(&depth, &FramebufferModel::loadFailed);
+        depth.load(volumeSource.sharedEXR(), 0);
+        QTRY_COMPARE(failed.count(), 1);
+        QVERIFY(depth.errorString().contains("ZBack"));
+        QVERIFY(!depth.isImageLoaded() && depth.getLoadedImage().isNull());
+        const QString broken = fixture("deep-missing-eye"); writeDeepFixture(broken, true, false, 1);
+        OpenEXRImage incomplete(broken, nullptr);
+        RGBFramebufferModel stereo("", RGBFramebufferModel::Layer_RGB);
+        QSignalSpy stereoFailed(&stereo, &FramebufferModel::loadFailed);
+        stereo.loadStereo(incomplete.sharedEXR(), stereoInputs());
+        QTRY_COMPARE(stereoFailed.count(), 1);
+        QVERIFY(!stereo.isImageLoaded() && stereo.getLoadedImage().isNull());
+    }
+
+    void deepConstantAndRefreshRangePolicy()
+    {
+        const QString constantPath = fixture("deep-constant");
+        writeDeepFixture(constantPath, false, false, -1, 0.f, true);
+        FileWidget constant(constantPath);
+        QTRY_VERIFY(constant.activeFramebufferModel() && constant.activeFramebufferModel()->isPreviewReady());
+        QCOMPARE(constant.activeFramebufferModel()->depthBounds().minimum, 7.);
+        QCOMPARE(constant.activeFramebufferModel()->depthBounds().maximum, 7.);
+        QVERIFY(!constant.findChild<DepthRangeWidget*>()->findChild<RangeSliderWidget*>()->isEnabled());
+        const QString invalidDepthPath = fixture("deep-no-finite-depth");
+        writeDeepFixture(invalidDepthPath, false, false, -1, std::numeric_limits<float>::quiet_NaN());
+        FileWidget invalidDepth(invalidDepthPath);
+        QTRY_VERIFY(invalidDepth.activeFramebufferModel() && invalidDepth.activeFramebufferModel()->isPreviewReady());
+        const auto* invalidModel = invalidDepth.activeFramebufferModel();
+        QVERIFY(!invalidModel->depthBounds().finite);
+        QVERIFY(!invalidDepth.findChild<DepthRangeWidget*>()->findChild<RangeSliderWidget*>()->isEnabled());
+        for (int y = 0; y < invalidModel->height(); ++y)
+            for (int x = 0; x < invalidModel->width(); ++x)
+                QCOMPARE(invalidModel->getLoadedImage().pixelColor(x, y).alpha(), 0);
+        const QString path = fixture("deep-refresh-range"); writeDeepFixture(path);
+        FileWidget widget(path);
+        QTRY_VERIFY(widget.activeFramebufferModel() && widget.activeFramebufferModel()->isPreviewReady());
+        auto* page = qobject_cast<RGBFramebufferWidget*>(widget.activePreviewWidget());
+        auto state = page->previewState();
+        state.depth.minimum = 1.; state.depth.maximum = 2.; state.depth.full = false;
+        page->restorePreviewState(state);
+        QTRY_VERIFY(widget.activeFramebufferModel()->isPreviewReady());
+        QVERIFY(QFile::rename(path, path + ".old"));
+        writeDeepFixture(path, false, false, -1, 2.f);
+        widget.refresh(); QTRY_VERIFY(!widget.isRefreshInProgress());
+        QCOMPARE(widget.activeFramebufferModel()->depthRange().minimum, 3.);
+        QCOMPARE(widget.activeFramebufferModel()->depthRange().maximum, 3.);
+        QVERIFY(!widget.activeFramebufferModel()->depthRange().full);
+        page = qobject_cast<RGBFramebufferWidget*>(widget.activePreviewWidget());
+        state = page->previewState(); state.depth.full = true; page->restorePreviewState(state);
+        QTRY_VERIFY(widget.activeFramebufferModel()->isPreviewReady());
+        QVERIFY(QFile::rename(path, path + ".second"));
+        writeDeepFixture(path, false, false, -1, 4.f);
+        widget.refresh(); QTRY_VERIFY(!widget.isRefreshInProgress());
+        QCOMPARE(widget.activeFramebufferModel()->depthRange().minimum, 5.);
+        QCOMPARE(widget.activeFramebufferModel()->depthRange().maximum, 8.);
+        const auto* committed = widget.activeFramebufferModel();
+        const QImage image = committed->getLoadedImage();
+        QVERIFY(QFile::rename(path, path + ".third"));
+        writeDeepFixture(path, false, true);
+        dismissNextError(); widget.refresh(); QTRY_VERIFY(!widget.isRefreshInProgress());
+        QCOMPARE(widget.activeFramebufferModel(), committed);
+        QCOMPARE(widget.activeFramebufferModel()->getLoadedImage(), image);
+    }
+
+    void deepTiledAndMissingDependenciesRemainUnsupported()
     {
         for (int kind = 2; kind < 4; ++kind) {
             const QString path = fixture(QString("unsupported-part-%1").arg(kind));

@@ -31,6 +31,8 @@
  */
 
 #include "YFramebufferModel.h"
+#include "DeepPreview.h"
+#include <algorithm>
 #include "PixelDiagnostics.h"
 #include "FramebufferLoader.h"
 #include "ToneMapping.h"
@@ -69,6 +71,14 @@ std::string YFramebufferModel::getColorInfo(int x, int y) const
         return "";
     std::stringstream text;
     if (resolutionLevelCount() > 1) text << "Level " << resolutionLevel().toString() << " | ";
+    const size_t index = size_t(y) * width() + x;
+    if (m_data->deep) {
+        text << "x: " << x + getDataWindow().x() << " y: " << y + getDataWindow().y() << " | ";
+        if (!m_data->covers(index)) return text.str() + "No samples";
+        text << (m_layer == "Z" ? "Nearest Z: " : "Composite " + m_layer + ": ")
+             << PixelDiagnostics::sampleText(m_data->pixels[index]);
+        return text.str();
+    }
     text << "x: " << x + getDataWindow().x()
          << " y: " << y + getDataWindow().y()
          << " | " << m_layer << ": "
@@ -94,6 +104,12 @@ void YFramebufferModel::setRange(double min, double max)
     if (m_min == min && m_max == max) return;
     m_min = min;
     m_max = max;
+    if (!m_automaticRange) updateImage();
+}
+void YFramebufferModel::setAutomaticRange(bool enabled)
+{
+    if (m_automaticRange == enabled) return;
+    m_automaticRange = enabled;
     updateImage();
 }
 void YFramebufferModel::setColormap(ColormapModule::Map map)
@@ -104,13 +120,21 @@ void YFramebufferModel::setColormap(ColormapModule::Map map)
 void YFramebufferModel::updateImage()
 {
     if (!isImageLoaded()) return;
-    const auto   data     = m_data;
+    const auto   source   = m_data;
+    const auto range = depthRange();
+    const bool automatic = m_automaticRange;
     const double minimum  = m_min;
     const double maximum  = m_max;
     const auto   colormap = m_cmap;
     requestRender(
-      [data, minimum, maximum, colormap](const Cancellation& cancel) {
-          QImage image(data->width, data->height, QImage::Format_RGB888);
+      [source, range, automatic, minimum, maximum, colormap](const Cancellation& cancel) -> RenderResult {
+          const auto data = DeepPreview::compose(source, range, cancel);
+          if (!data || cancel->load()) return {};
+          const bool finite = data->deep ? data->hasFiniteDisplay : data->hasFiniteSamples;
+          const double low = automatic && finite ? (data->deep ? data->displayMinimum : data->minimum) : minimum;
+          const double high = automatic && finite ? (data->deep ? data->displayMaximum : data->maximum) : maximum;
+          const int components = data->deep ? 4 : 3;
+          QImage image(data->width, data->height, data->deep ? QImage::Format_RGBA8888 : QImage::Format_RGB888);
           if (image.isNull()) return image;
           uchar*     bits    = image.bits();
           const auto stride  = image.bytesPerLine();
@@ -121,16 +145,21 @@ void YFramebufferModel::updateImage()
               if (cancel->load()) continue;
               uchar* line = bits + size_t(y) * stride;
               for (int x = 0; x < data->width; ++x) {
+                  uchar* output = line + components * x;
+                  if (!data->covers(size_t(y) * data->width + x)) {
+                      std::fill(output, output + components, 0); continue;
+                  }
                   float rgb[3];
                   colormap->getRGBValue(
                     data->pixels[size_t(y) * data->width + x],
-                    minimum,
-                    maximum,
+                    low,
+                    high,
                     rgb);
                   for (int c = 0; c < 3; ++c)
-                      line[3 * x + c] = ToneMapping::toByte(rgb[c]);
+                      output[c] = ToneMapping::toByte(rgb[c]);
+                  if (components == 4) output[3] = 255;
               }
           }
-          return cancel->load() ? QImage() : image;
+          return cancel->load() ? RenderResult() : RenderResult(image, data);
       });
 }

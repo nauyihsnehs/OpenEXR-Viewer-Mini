@@ -20,6 +20,7 @@ class SaveImageDialog: public QDialog
     ImageSave::Options options() const;
     void               setStatus(const QString& message, bool error);
     void setResolutionLevelInfo(ResolutionLevel level, bool multilevel);
+    void setDeepSourceInfo(bool activeDeep, bool fileDeep);
     void setSourceState(bool available, bool previewReady, const QString& error = QString(), bool derived = false);
 
   public slots:
@@ -45,6 +46,8 @@ class SaveImageDialog: public QDialog
     bool m_sourceAvailable = false;
     bool m_previewReady = false;
     bool m_derived = false;
+    bool m_activeDeep = false;
+    bool m_fileDeep = false;
     bool m_readinessStatus = true;
     QString m_previewError;
 };

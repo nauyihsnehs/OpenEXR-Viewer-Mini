@@ -38,6 +38,7 @@
 #include <QObject>
 #include <QRegion>
 #include <functional>
+#include <utility>
 #include <string>
 
 class FramebufferModel: public QObject
@@ -48,6 +49,8 @@ class FramebufferModel: public QObject
     ~FramebufferModel() override;
 
     const QImage&             getLoadedImage() const { return m_image; }
+    // Deep has no single raw value per pixel: its 2D buffer is the current composite.
+    // Lossless Deep export must read deepSamples(), including native channel types.
     const std::vector<float>& getRawPixels() const
     {
         return m_data->sourcePixels.empty() ? m_data->pixels : m_data->sourcePixels;
@@ -55,6 +58,11 @@ class FramebufferModel: public QObject
     const std::vector<float>& getDisplayPixels() const { return m_data->pixels; }
     const ViewMetadata& rawViews() const { return m_data->rawViews; }
     bool isDerivedPreview() const { return bool(m_data->stereo[0]); }
+    bool hasDeepSamples() const { return m_data->hasDeep(); }
+    const std::shared_ptr<const DeepSamples>& deepSamples() const { return m_data->deep; }
+    DepthBounds depthBounds() const;
+    DepthRange depthRange() const;
+    void setDepthRange(DepthRange range);
     QRegion pixelCoverage() const;
     const Imf::Chromaticities* rawChromaticities() const
     {
@@ -111,12 +119,20 @@ class FramebufferModel: public QObject
     void imageLoaded();
     void loadFailed(QString message);
     void readinessChanged();
+    void depthRangeChanged();
 
   protected:
     std::string sampleLocationInfo(size_t channel, int x, int y) const;
     static std::string sampleLocationInfo(const FramebufferData& data, int component, int x, int y);
     using Decoder  = std::function<DecodeResult(const Cancellation&)>;
-    using Renderer = std::function<QImage(const Cancellation&)>;
+    struct RenderResult {
+        RenderResult(QImage rendered = QImage(), std::shared_ptr<const FramebufferData> snapshot = {})
+          : image(std::move(rendered)), data(std::move(snapshot)) {}
+        QImage image;
+        std::shared_ptr<const FramebufferData> data;
+        QString error;
+    };
+    using Renderer = std::function<RenderResult(const Cancellation&)>;
     void                                   startLoading(Decoder decoder);
     void                                   requestRender(Renderer renderer);
     static int                             renderThreadCount();
@@ -124,10 +140,7 @@ class FramebufferModel: public QObject
     std::shared_ptr<const FramebufferData> m_data;
 
   private:
-    struct RenderResult {
-        QImage  image;
-        QString error;
-    };
+    DepthRange m_depthRange;
     void                         startRender();
     void                         setReady(bool ready);
     QImage                       m_image;

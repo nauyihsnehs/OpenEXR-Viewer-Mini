@@ -1,6 +1,6 @@
 # Multi-Resolution 人工核对清单
 
-本轮覆盖下表 8 张普通 EXR。LatLong／Cube 环境贴图及子目录中的 12 张 Deep 样例留待后续；
+本轮覆盖下表 8 张普通 EXR。LatLong／Cube 环境贴图留待后续；子目录中的 12 张 Deep 样例见 [Deep Scanline 清单](deep-scanline-images.md)；
 不修改或移动任何样例。仅静态审查和补充回归代码，未编译、启动查看器或运行测试。
 **8 张样例全部仍待运行验收。** 参考 JPG 只比较构图与可见内容，不作为逐像素色彩基准。
 

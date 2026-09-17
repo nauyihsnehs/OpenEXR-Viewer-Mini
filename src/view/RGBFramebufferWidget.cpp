@@ -32,6 +32,7 @@
 
 #include "RGBFramebufferWidget.h"
 #include "CropIndicator.h"
+#include "DepthRangeWidget.h"
 #include <QSignalBlocker>
 #include "ui_RGBFramebufferWidget.h"
 
@@ -92,6 +93,7 @@ RGBFramebufferWidget::RGBFramebufferWidget(QWidget* parent)
         if (m_model) m_model->setHighlightNonFinite(enabled);
     });
     wrapPreviewControls(ui->verticalLayout);
+    ui->verticalLayout->insertWidget(1, new DepthRangeWidget(this));
     connect(ui->graphicsView, &GraphicsView::minimalViewRequested,
             this, &RGBFramebufferWidget::minimalViewRequested);
     connect(ui->graphicsView, &GraphicsView::resetParametersRequested,
@@ -197,6 +199,7 @@ RGBFramebufferWidget::~RGBFramebufferWidget()
 void RGBFramebufferWidget::setModel(RGBFramebufferModel* model)
 {
     m_model = model;
+    findChild<DepthRangeWidget*>()->setModel(model);
     if (m_model) m_model->setHighlightNonFinite(ui->anomalyMarkerButton->isChecked());
     if (m_model && m_model->parent() != this) m_model->setParent(this);
     m_model->setExposure(ui->sbExposure->value());
@@ -208,6 +211,11 @@ void RGBFramebufferWidget::setModel(RGBFramebufferModel* model)
     syncFalseColorRangeToModel();
     syncToneParamsToModel();
     ui->graphicsView->setModel(m_model);
+    connect(model, &FramebufferModel::imageChanged, this, [this] {
+        if (m_falseColorAutoRange && m_model->hasFiniteLuminanceSamples())
+            setFalseColorRange(m_model->getLuminanceMin(), m_model->getLuminanceMax(), false);
+        updateFramebufferSummary();
+    });
     connect(
       m_model,
       SIGNAL(imageLoaded()),
@@ -469,6 +477,7 @@ void RGBFramebufferWidget::syncToneParamsToModel()
 void RGBFramebufferWidget::setFalseColorAutoRange(bool autoRange)
 {
     m_falseColorAutoRange = autoRange;
+    if (m_model) m_model->setFalseColorAutomatic(autoRange);
     const QSignalBlocker blocker_falseColorAutoButton(ui->falseColorAutoButton);
     ui->falseColorAutoButton->setChecked(autoRange);
 }
@@ -918,6 +927,7 @@ void RGBFramebufferWidget::on_zoomButton_clicked()
 PreviewState RGBFramebufferWidget::previewState() const
 {
     PreviewState state;
+    if (m_model) state.depth = m_model->depthRange();
     state.mode       = m_previewMode;
     state.toneMethod = ui->cbToneMappingMethod->currentIndex();
     state.exposure   = ui->sbExposure->value();
@@ -936,6 +946,7 @@ PreviewState RGBFramebufferWidget::previewState() const
 
 void RGBFramebufferWidget::restorePreviewState(const PreviewState& state)
 {
+    m_model->setDepthRange(state.depth);
     ui->anomalyMarkerButton->setChecked(state.highlightNonFinite);
     setPreviewMode(static_cast<RGBFramebufferModel::PreviewMode>(state.mode));
     ui->sbExposure->setValue(state.exposure);
@@ -951,7 +962,7 @@ void RGBFramebufferWidget::restorePreviewState(const PreviewState& state)
     ui->cbFalseColorScale->setChecked(state.scaleVisible);
     m_savedFalseColorMin = state.savedMinimum;
     m_savedFalseColorMax = state.savedMaximum;
-    setFalseColorAutoRange(state.automatic && m_model->hasFiniteLuminanceSamples());
+    setFalseColorAutoRange(state.automatic && (m_model->hasDeepSamples() || m_model->hasFiniteLuminanceSamples()));
     if (m_falseColorAutoRange)
         setFalseColorRange(
           m_model->getLuminanceMin(),

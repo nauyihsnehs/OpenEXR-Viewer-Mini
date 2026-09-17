@@ -36,6 +36,7 @@ inline QString framebufferSummaryText(const FramebufferModel* model)
     const QString level = model && model->resolutionLevelCount() > 1
       ? QString("Level %1 | ").arg(QString::fromStdString(model->resolutionLevel().toString())) : QString();
     return level + "Size " + framebufferSizeText(model)
-           + (model && model->isDerivedPreview() ? "   Two-eye source max " : "   Max ")
+           + (model && model->isDerivedPreview() ? "   Two-eye source max "
+              : model && model->hasDeepSamples() ? "   Deep source max " : "   Max ")
            + framebufferDatasetValueText(model, false);
 }

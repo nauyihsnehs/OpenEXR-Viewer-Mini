@@ -108,6 +108,7 @@ class RGBFramebufferModel: public FramebufferModel
     void setToneMappingMethod(ToneMappingMethod method);
     void setFalseColorColormap(ColormapModule::Map map);
     void setFalseColorRange(double min, double max);
+    void setFalseColorAutomatic(bool enabled);
     void setExposure(double value);
     void setToneParameters(double p0, double p1, double p2, double p3);
 
@@ -125,5 +126,6 @@ class RGBFramebufferModel: public FramebufferModel
     double                          m_toneParams[4];
     double                          m_falseColorMin;
     double                          m_falseColorMax;
+    bool m_falseColorAutomatic = false;
     std::shared_ptr<const Colormap> m_falseColorMap;
 };

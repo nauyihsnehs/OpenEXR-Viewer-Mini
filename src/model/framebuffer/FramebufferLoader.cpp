@@ -2,6 +2,7 @@
 #include <util/ResolutionLevels.h>
 #include "ToneMapping.h"
 #include "PixelDiagnostics.h"
+#include "DeepPreview.h"
 
 #include <OpenEXR/ImfChannelList.h>
 #include <OpenEXR/ImfChromaticitiesAttribute.h>
@@ -171,6 +172,11 @@ DecodeResult FramebufferLoader::decode(
       dimension(display.min.x, display.max.x),
       dimension(display.min.y, display.max.y));
 
+    if (header.hasType() && header.type() == Imf::DEEPSCANLINE) {
+        if (layout != Scalar && layout != RGB)
+            throw std::runtime_error("Deep color previews currently support RGB/RGBA only.");
+        return DeepPreview::decode(data, source, partId, names, layout == Scalar, cancel);
+    }
     std::array<Channel, 4> channels;
     Imf::FrameBuffer       buffer;
     for (size_t i = 0; i < names.size(); ++i) {

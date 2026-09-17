@@ -34,6 +34,7 @@
 #include <util/ResolutionLevels.h>
 #include "PixelDiagnostics.h"
 #include "FramebufferLoader.h"
+#include "DeepPreview.h"
 #include <util/ColorTransform.h>
 #include <cmath>
 #include <sstream>
@@ -164,7 +165,10 @@ std::string RGBFramebufferModel::getColorInfo(int x, int y) const
                 continue;
             }
             const QPoint local = position - eye.dataWindow.topLeft();
-            const auto& raw = eye.sourcePixels.empty() ? eye.pixels : eye.sourcePixels;
+            const size_t index = size_t(local.y()) * eye.width + local.x();
+            if (!eye.covers(index)) { text << " No samples"; continue; }
+            if (eye.deep) text << " Composite";
+            const auto& raw = eye.deep || eye.sourcePixels.empty() ? eye.pixels : eye.sourcePixels;
             const float* pixel = &raw[4 * (size_t(local.y()) * eye.width + local.x())];
             for (int c = 0; c < 4; ++c) {
                 const auto& name = m_data->stereoChannels[i][c];
@@ -175,11 +179,16 @@ std::string RGBFramebufferModel::getColorInfo(int x, int y) const
         }
         return text.str();
     }
-    const float*      pixel = &getRawPixels()[4 * (size_t(y) * width() + x)];
+    const size_t index = size_t(y) * width() + x;
+    const float* pixel = &(m_data->deep ? getDisplayPixels() : getRawPixels())[4 * index];
     std::stringstream text;
     if (resolutionLevelCount() > 1) text << "Level " << resolutionLevel().toString() << " | ";
     text << "x: " << x + getDataWindow().x()
          << " y: " << y + getDataWindow().y() << " |";
+    if (m_data->deep) {
+        if (!m_data->covers(index)) return text.str() + " No samples";
+        text << " Composite";
+    }
     const auto names = rawChannelNames();
     const auto components = rawChannelComponents();
     for (size_t c = 0; c < names.size(); ++c)
@@ -198,7 +207,7 @@ float RGBFramebufferModel::component(int x, int y, int channel) const
 {
     if (!isImageLoaded() || isDerivedPreview() || x < 0 || x >= width() || y < 0 || y >= height())
         return 0.f;
-    const auto& pixels = m_layerType == Layer_YC && channel < 3
+    const auto& pixels = m_data->deep || (m_layerType == Layer_YC && channel < 3)
                            ? getDisplayPixels() : getRawPixels();
     return pixels[4 * (size_t(y) * width() + x) + channel];
 }
@@ -263,6 +272,12 @@ void RGBFramebufferModel::setFalseColorRange(double min, double max)
     if (m_falseColorMin == min && m_falseColorMax == max) return;
     m_falseColorMin = min;
     m_falseColorMax = max;
+    if (!m_falseColorAutomatic) updateImage();
+}
+void RGBFramebufferModel::setFalseColorAutomatic(bool enabled)
+{
+    if (m_falseColorAutomatic == enabled) return;
+    m_falseColorAutomatic = enabled;
     updateImage();
 }
 void RGBFramebufferModel::setToneParameters(
@@ -282,7 +297,9 @@ void RGBFramebufferModel::setToneParameters(
 void RGBFramebufferModel::updateImage()
 {
     if (!isImageLoaded()) return;
-    const auto                 data     = m_data;
+    const auto                 source   = m_data;
+    const auto range = depthRange();
+    const bool automatic = m_falseColorAutomatic;
     const auto                 mode     = m_previewMode;
     const auto                 method   = m_toneMappingMethod;
     const double exposure = std::exp2(m_exposure);
@@ -292,8 +309,12 @@ void RGBFramebufferModel::updateImage()
     const double maximum  = m_falseColorMax;
     const auto   colormap = m_falseColorMap;
     requestRender(
-      [data, mode, method, exposure, params, minimum, maximum, colormap](
-        const Cancellation& cancel) {
+      [source, range, automatic, mode, method, exposure, params, minimum, maximum, colormap](
+        const Cancellation& cancel) -> RenderResult {
+          const auto data = DeepPreview::compose(source, range, cancel);
+          if (!data || cancel->load()) return {};
+          const double low = automatic && data->hasFiniteLuminance ? data->luminanceMin : minimum;
+          const double high = automatic && data->hasFiniteLuminance ? data->luminanceMax : maximum;
           QImage image(data->width, data->height, QImage::Format_RGBA8888);
           if (image.isNull()) return image;
           uchar*     bits    = image.bits();
@@ -304,7 +325,7 @@ void RGBFramebufferModel::updateImage()
               if (mode == Preview_FalseColor) {
                   float rgb[3];
                   colormap->getRGBValue(ToneMapping::luminance(pixel[0], pixel[1], pixel[2]),
-                                       minimum, maximum, rgb);
+                                       low, high, rgb);
                   for (int c = 0; c < 3; ++c) output[c] = ToneMapping::toByte(rgb[c]);
               } else {
                   for (int c = 0; c < 3; ++c) {
@@ -330,6 +351,7 @@ void RGBFramebufferModel::updateImage()
                           const auto& eye = *data->stereo[i];
                           if (!eye.dataWindow.contains(position)) continue;
                           const QPoint local = position - eye.dataWindow.topLeft();
+                          if (!eye.covers(size_t(local.y()) * eye.width + local.x())) continue;
                           mapColor(&eye.pixels[4 * (size_t(local.y()) * eye.width + local.x())], eyes[i]);
                           covered = true;
                       }
@@ -338,12 +360,15 @@ void RGBFramebufferModel::updateImage()
                       output[2] = eyes[1][2];
                       output[3] = covered ? 255 : 0;
                   } else {
+                      if (!data->covers(size_t(y) * data->width + x)) {
+                          std::fill(output, output + 4, 0); continue;
+                      }
                       mapColor(&data->pixels[4 * (size_t(y) * data->width + x)], output);
                       // Premultiplied color over black is already RGB.
                       output[3] = 255;
                   }
               }
           }
-          return cancel->load() ? QImage() : image;
+          return cancel->load() ? RenderResult() : RenderResult(image, data);
       });
 }

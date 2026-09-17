@@ -51,12 +51,16 @@ class YFramebufferModel: public FramebufferModel
 
     const std::string& getLayerName() const { return m_layer; }
     int                getPartId() const { return m_partID; }
+    double displayMinimum() const { return m_data->deep ? m_data->displayMinimum : getDatasetMin(); }
+    double displayMaximum() const { return m_data->deep ? m_data->displayMaximum : getDatasetMax(); }
+    bool hasFiniteDisplay() const { return m_data->deep ? m_data->hasFiniteDisplay : hasFiniteSamples(); }
 
     virtual std::string              getColorInfo(int x, int y) const;
     virtual std::vector<std::string> rawChannelNames() const;
 
   public slots:
     void setRange(double min, double max);
+    void setAutomaticRange(bool enabled);
     void setMinValue(double value);
     void setMaxValue(double value);
     void setColormap(ColormapModule::Map map);
@@ -70,6 +74,7 @@ class YFramebufferModel: public FramebufferModel
 
     double m_min;
     double m_max;
+    bool m_automaticRange = false;
 
     std::shared_ptr<const Colormap> m_cmap;
 };

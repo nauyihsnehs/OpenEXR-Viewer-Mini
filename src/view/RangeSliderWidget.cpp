@@ -128,6 +128,9 @@ double RangeSliderWidget::valueFromPosition(int x) const
 
 RangeSliderWidget::Handle RangeSliderWidget::nearestHandle(int x) const
 {
+    // A collapsed interval must still be expandable, including at either bound.
+    if (m_min == m_max)
+        return m_min == m_boundMax || x < positionFromValue(m_min) ? Handle_Min : Handle_Max;
     const int minDistance = std::abs(x - positionFromValue(m_min));
     const int maxDistance = std::abs(x - positionFromValue(m_max));
 

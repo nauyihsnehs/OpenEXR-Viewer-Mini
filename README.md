@@ -69,8 +69,8 @@ Viewing controls
   still requiring a running viewer.
 - Single-level tiled images use the same color and individual-channel previews as
   scanline images, including depth channels, source values, and anomaly markers.
-  Mipmap and Ripmap images also support their stored resolution levels; Deep remains
-  unsupported. Raw EXR exports use scanline storage and retain the existing channel,
+  Mipmap and Ripmap images also support their stored resolution levels. Flat raw EXR
+  exports use scanline storage and retain the existing channel,
   window, and metadata options; they do
   not preserve the source tile layout. See the [Tiles manual checklist](docs/tiled-images.md).
 - **View > Show > Resolution Level** selects a stored level for the current file. All
@@ -103,7 +103,7 @@ Viewing controls
   Multipart views come from `view`, not part names; singlepart `multiView` keeps
   its original default-view order. Basic raw EXR exports retain these attributes;
   None removes them. **Preserve multipart** keeps part order, names, windows, and
-  channels using scanline storage. Multiview multipart flattening is unsupported.
+  channels using scanline storage (Deep parts retain Deep Scanline). Multiview multipart flattening is unsupported.
   Color-only export skips noncolor parts and reports an error for an empty selection.
   Beachball is viewed one file at a time, without sequence playback.
   **View > Show > Stereo** offers **Default**, **Left eye only**, **Right eye only**,
@@ -126,6 +126,33 @@ Viewing controls
   a source layer manually returns the menu to Default. See the
   [Beachball checklist](docs/beachball-images.md), including
   frame 6 cropping and the difference between stored zeros and missing data.
+- Deep Scanline RGBA + Z point samples have a **Depth Range** bar with two handles:
+  keep `Z_min ≤ Z ≤ Z_max`, initially all finite depths. Double-click the bar to
+  restore the full range; constant-depth inputs disable dragging. RGB, individual
+  RGBA/Z, Anaglyph and the minimal-window footer share the control. Each preview
+  preserves its range across refresh and window changes; color reset leaves it alone.
+  Samples are sorted near-to-far, retaining file order at equal depth, then composited
+  with premultiplied front-to-back Over. Empty selections remain transparent; selected
+  pixels use the existing opaque black-background display, including zero-alpha emission.
+  Hover reads **Composite** linear values before display mapping, or the nearest
+  selected Z; empty pixels read **No samples**. There is no per-pixel sample inspector.
+  Source statistics include all stored samples and channels of the part (both parts
+  for Anaglyph), before filtering; Auto ranges use only current composed values.
+  Nonfinite Z never contributes to color or depth bounds, but remains in raw data,
+  source statistics and Z-page anomaly markers. Other markers follow selected samples.
+  Immutable native samples are shared by previews of the same part, with a checked
+  1 GiB cache cap per part. Dragging recomposites in the background without re-reading
+  the file; image, values and markers are committed together, only for the latest request.
+  Copy and PNG/JPEG export use the current interval; HDR/brackets use its linear colors.
+  Raw EXR always retains **all** original Deep samples and file order, using native
+  channel types and lossless ZIPS. Active-layer and color-only exports include A/Z
+  dependencies; color-only export of an independent Z still fails. Deep multipart
+  requires Preserve multipart. Basic/None retain their metadata policy; required Deep
+  structure is always written. Anaglyph export restrictions remain unchanged.
+  This path supports base R/G/B/A/Z previews at `(0,0)`; Deep Tiled, ZBack volumes and
+  cross-file compositing remain unsupported. See the
+  [Deep Scanline manual checklist](docs/deep-scanline-images.md); all 12 samples await
+  runtime acceptance.
 - RGB false-color and scalar ranges accept scientific notation, including tiny
   values and the full finite FLOAT range. Auto range is unavailable without finite
   samples. A constant range maps finite values to the bottom of the color scale.

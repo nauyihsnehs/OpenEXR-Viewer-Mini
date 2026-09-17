@@ -32,6 +32,7 @@
 
 #include "YFramebufferWidget.h"
 #include "CropIndicator.h"
+#include "DepthRangeWidget.h"
 #include "ScientificDoubleSpinBox.h"
 #include <QToolButton>
 #include <QSignalBlocker>
@@ -61,6 +62,7 @@ YFramebufferWidget::YFramebufferWidget(QWidget* parent)
         if (m_model) m_model->setHighlightNonFinite(enabled);
     });
     wrapPreviewControls(ui->verticalLayout);
+    ui->verticalLayout->insertWidget(1, new DepthRangeWidget(this));
     connect(ui->graphicsView, &GraphicsView::minimalViewRequested,
             this, &YFramebufferWidget::minimalViewRequested);
     connect(ui->graphicsView, &GraphicsView::resetParametersRequested,
@@ -103,9 +105,15 @@ YFramebufferWidget::~YFramebufferWidget()
 void YFramebufferWidget::setModel(YFramebufferModel* model)
 {
     m_model = model;
+    findChild<DepthRangeWidget*>()->setModel(model);
     if (m_model) m_model->setHighlightNonFinite(ui->anomalyMarkerButton->isChecked());
     if (m_model && m_model->parent() != this) m_model->setParent(this);
     ui->graphicsView->setModel(model);
+    connect(model, &FramebufferModel::imageChanged, this, [this] {
+        if (m_autoRange && m_model->hasFiniteDisplay())
+            setRange(m_model->displayMinimum(), m_model->displayMaximum());
+        updateFramebufferSummary();
+    });
     connect(
       model,
       &FramebufferModel::readinessChanged,
@@ -151,6 +159,7 @@ void YFramebufferWidget::onQueryPixelInfo(int x, int y)
 void YFramebufferWidget::on_sbMinValue_valueChanged(double arg1)
 {
     m_autoRange = false;
+    if (m_model) m_model->setAutomaticRange(false);
     ui->sbMaxValue->setMinimum(arg1);
     ui->scaleWidget->setMin(arg1);
     if (m_model) m_model->setMinValue(arg1);
@@ -160,6 +169,7 @@ void YFramebufferWidget::on_sbMinValue_valueChanged(double arg1)
 void YFramebufferWidget::on_sbMaxValue_valueChanged(double arg1)
 {
     m_autoRange = false;
+    if (m_model) m_model->setAutomaticRange(false);
     ui->sbMinValue->setMaximum(arg1);
     ui->scaleWidget->setMax(arg1);
     if (m_model) m_model->setMaxValue(arg1);
@@ -168,9 +178,10 @@ void YFramebufferWidget::on_sbMaxValue_valueChanged(double arg1)
 
 void YFramebufferWidget::on_buttonAuto_clicked()
 {
-    if (m_model && m_model->hasFiniteSamples()) {
+    if (m_model && m_model->hasFiniteDisplay()) {
         m_autoRange = true;
-        setRange(m_model->getDatasetMin(), m_model->getDatasetMax());
+        m_model->setAutomaticRange(true);
+        setRange(m_model->displayMinimum(), m_model->displayMaximum());
     }
 }
 
@@ -214,7 +225,7 @@ void YFramebufferWidget::updateFramebufferSummary()
     ui->framebufferSummaryLabel->setText(framebufferSummaryText(m_model));
     const bool loaded = m_model && m_model->isImageLoaded();
     ui->anomalyMarkerButton->setEnabled(loaded);
-    ui->buttonAuto->setEnabled(loaded && m_model->hasFiniteSamples());
+    ui->buttonAuto->setEnabled(loaded && m_model->hasFiniteDisplay());
 }
 
 
@@ -243,6 +254,7 @@ void YFramebufferWidget::setRange(double min, double max)
 PreviewState YFramebufferWidget::previewState() const
 {
     PreviewState state;
+    if (m_model) state.depth = m_model->depthRange();
     state.colormap     = ui->cbColormap->currentIndex();
     state.minimum      = ui->sbMinValue->value();
     state.maximum      = ui->sbMaxValue->value();
@@ -253,12 +265,14 @@ PreviewState YFramebufferWidget::previewState() const
 }
 void YFramebufferWidget::restorePreviewState(const PreviewState& state)
 {
+    m_model->setDepthRange(state.depth);
     ui->anomalyMarkerButton->setChecked(state.highlightNonFinite);
     ui->cbColormap->setCurrentIndex(state.colormap);
     ui->cbScale->setChecked(state.scaleVisible);
-    m_autoRange = state.automatic && m_model->hasFiniteSamples();
+    m_autoRange = state.automatic && (m_model->hasDeepSamples() || m_model->hasFiniteDisplay());
+    m_model->setAutomaticRange(m_autoRange);
     if (m_autoRange)
-        setRange(m_model->getDatasetMin(), m_model->getDatasetMax());
+        setRange(m_model->displayMinimum(), m_model->displayMaximum());
     else
         setRange(state.minimum, state.maximum);
 }
@@ -267,6 +281,7 @@ void YFramebufferWidget::resetCurrentMode()
 {
     if (!m_model || !m_model->isImageLoaded()) return;
     m_autoRange = false;
+    if (m_model) m_model->setAutomaticRange(false);
     ui->cbColormap->setCurrentIndex(ColormapModule::GRAYSCALE);
     setRange(0., 1.);
     ui->cbScale->setChecked(true);

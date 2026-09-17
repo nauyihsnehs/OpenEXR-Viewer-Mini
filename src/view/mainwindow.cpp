@@ -961,6 +961,7 @@ void MainWindow::toggleMinimalView()
     m_workspaceToolbar->hide();
     m_titleBar->hide();
     m_minimalPage = new MinimalImageWidget(this);
+    m_minimalPage->setSummary(QString(), model);
     setCentralWidget(m_minimalPage);
     setMinimumSize(1, m_minimalPage->footerHeight() + 1);
     setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
@@ -1187,14 +1188,17 @@ void MainWindow::on_action_Save_triggered()
     const QPointer<OpenEXRImage> guardedImage(widget ? widget->sourceImage() : nullptr);
     const ResolutionLevel savedLevel = widget ? widget->resolutionLevel() : ResolutionLevel();
     bool multilevel = false;
+    bool deepSource = false;
     if (guardedImage) {
         for (int part = 0; part < guardedImage->getEXR().parts(); ++part) {
             const auto& header = guardedImage->getEXR().header(part);
+            deepSource |= header.hasType() && header.type() == "deepscanline";
             if (header.hasTileDescription() && header.tileDescription().mode != Imf::ONE_LEVEL)
                 multilevel = true; // Also warn when another part restricts the document to level 0.
         }
     }
     dialog.setResolutionLevelInfo(savedLevel, multilevel);
+    dialog.setDeepSourceInfo(model && bool(model->deepSamples()), deepSource);
     const auto updateSource = [&dialog, guardedModel, guardedImage] {
         dialog.setSourceState(
           guardedModel && guardedImage && guardedModel->isImageLoaded(),

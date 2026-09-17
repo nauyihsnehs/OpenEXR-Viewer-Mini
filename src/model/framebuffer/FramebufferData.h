@@ -4,6 +4,7 @@
 #include <QString>
 #include <OpenEXR/ImfChromaticities.h>
 #include <util/ViewMetadata.h>
+#include <model/DeepSamples.h>
 #include <array>
 #include <atomic>
 #include <cstdint>
@@ -22,6 +23,17 @@ struct FramebufferData {
     std::vector<float> pixels;
     // Populated when YC reconstruction or RGB gamut conversion changes values.
     std::vector<float> sourcePixels;
+    std::shared_ptr<const DeepSamples> deep;
+    std::array<std::string, 4> deepChannels;
+    bool deepScalar = false;
+    DepthRange depthRange;
+    std::vector<uint8_t> deepCoverage;
+    double displayMinimum = 0., displayMaximum = 0.;
+    bool hasFiniteDisplay = false;
+    bool hasDeep() const
+    { return bool(deep) || (stereo[0] && (stereo[0]->hasDeep() || stereo[1]->hasDeep())); }
+    bool covers(size_t pixel) const
+    { return !deep || (!deepCoverage.empty() && deepCoverage[pixel]); }
     std::array<QPoint, 4> sourceSampling = {{QPoint(1, 1), QPoint(1, 1),
                                            QPoint(1, 1), QPoint(1, 1)}};
     bool               hasRawChromaticities = false;

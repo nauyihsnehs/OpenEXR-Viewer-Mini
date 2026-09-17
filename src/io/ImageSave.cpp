@@ -10,6 +10,9 @@
 #include <util/ColorTransform.h>
 
 #include <OpenEXR/ImfChannelList.h>
+#include <OpenEXR/ImfDeepFrameBuffer.h>
+#include <OpenEXR/ImfDeepScanLineOutputFile.h>
+#include <OpenEXR/ImfDeepScanLineOutputPart.h>
 #include <OpenEXR/ImfChromaticitiesAttribute.h>
 #include <OpenEXR/ImfFrameBuffer.h>
 #include <OpenEXR/ImfHeader.h>
@@ -64,6 +67,7 @@ namespace
         Imf::Chromaticities       chromaticities;
         ViewMetadata             views;
         std::vector<ChannelData> channels;
+        std::shared_ptr<const DeepSamples> deep;
     };
 
     ImageSave::Result result(
@@ -172,6 +176,26 @@ namespace
         return result;
     }
 
+    void selectDeepChannels(PartData& part, std::vector<std::string> names,
+                            ImageSave::ChannelScope scope)
+    {
+        const auto selected = selectedChannelIndexes(names, scope);
+        if (selected.empty()) return;
+        std::vector<std::string> output;
+        for (int i : selected) output.push_back(names[i]);
+        for (const std::string dependency : {std::string("Z"), std::string("A")})
+            if (std::find(output.begin(), output.end(), dependency) == output.end())
+                output.push_back(dependency);
+        for (const auto& name : output) {
+            if (!part.deep->find(name)) throw std::runtime_error("Missing deep channel: " + name);
+            ChannelData channel;
+            channel.name = channel.sourceName = name;
+            channel.xSampling = channel.ySampling = 1;
+            channel.width = part.width; channel.height = part.height;
+            part.channels.push_back(std::move(channel));
+        }
+    }
+
     PartData
     activePart(const FramebufferModel* model, ImageSave::ChannelScope scope)
     {
@@ -191,6 +215,12 @@ namespace
         }
 
         const std::vector<std::string> names = model->rawChannelNames();
+        if (model->deepSamples()) {
+            part.deep = model->deepSamples();
+            if (part.deep->header.hasName()) part.name = part.deep->header.name();
+            selectDeepChannels(part, names, scope);
+            return part;
+        }
         const std::vector<int> indexes = selectedChannelIndexes(names, scope);
         const std::vector<int> components = model->rawChannelComponents();
         const auto sampling = model->rawChannelSampling();
@@ -265,6 +295,13 @@ namespace
         }
 
         const Imf::ChannelList& channels     = header.channels();
+        if (header.type() == Imf::DEEPSCANLINE) {
+            part.deep = readDeepSamples(image->sharedEXR(), partIndex, std::make_shared<std::atomic_bool>(false));
+            std::vector<std::string> names;
+            for (auto it = channels.begin(); it != channels.end(); ++it) names.push_back(it.name());
+            selectDeepChannels(part, names, scope);
+            return part;
+        }
         int                     channelCount = 0;
 
         for (Imf::ChannelList::ConstIterator it = channels.begin();
@@ -352,6 +389,11 @@ namespace
         Imf::Header header(part.displayWindow, part.dataWindow, pixelAspect);
         if (!part.name.empty()) header.setName(part.name);
         header.compression() = exrCompression(options.compression);
+        header.setType(part.deep ? Imf::DEEPSCANLINE : Imf::SCANLINEIMAGE);
+        if (part.deep) {
+            header.compression() = Imf::ZIPS_COMPRESSION;
+            header.setVersion(1);
+        }
         if (options.metadata == ImageSave::MetadataBasic) part.views.write(header);
         if (options.metadata == ImageSave::MetadataBasic && part.hasChromaticities)
             header.insert("chromaticities", Imf::ChromaticitiesAttribute(part.chromaticities));
@@ -360,7 +402,7 @@ namespace
             header.channels().insert(
               channel.name.c_str(),
               Imf::Channel(
-                exrPixelType(options.pixelType),
+                part.deep ? part.deep->find(channel.sourceName)->type : exrPixelType(options.pixelType),
                 channel.xSampling,
                 channel.ySampling));
         }
@@ -387,6 +429,35 @@ namespace
         return framebuffer;
     }
 
+    template<class Output>
+    void writeDeepPixels(Output& output, const PartData& part)
+    {
+        const auto& deep = *part.deep;
+        std::vector<std::vector<char*>> pointers(part.channels.size(), std::vector<char*>(part.width));
+        for (int row = 0; row < part.height; ++row) {
+            Imf::DeepFrameBuffer buffer;
+            buffer.insertSampleCountSlice(Imf::Slice::Make(Imf::UINT,
+              const_cast<uint32_t*>(deep.counts.data()), part.dataWindow,
+              sizeof(uint32_t), size_t(part.width) * sizeof(uint32_t)));
+            for (size_t c = 0; c < part.channels.size(); ++c) {
+                const auto& channel = *deep.find(part.channels[c].sourceName);
+                for (int x = 0; x < part.width; ++x) {
+                    const size_t p = size_t(row) * part.width + x;
+                    pointers[c][x] = deep.counts[p]
+                      ? const_cast<char*>(static_cast<const char*>(channel.buffer())) + deep.offsets[p] * channel.stride()
+                      : nullptr;
+                }
+                const auto slice = Imf::Slice::Make(Imf::FLOAT, pointers[c].data(),
+                  Imath::V2i(part.dataWindow.min.x, 0), part.width, 1,
+                  sizeof(char*), size_t(part.width) * sizeof(char*));
+                buffer.insert(part.channels[c].name, Imf::DeepSlice(channel.type, slice.base,
+                  slice.xStride, 0, channel.stride()));
+            }
+            output.setFrameBuffer(buffer);
+            output.writePixels(1);
+        }
+    }
+
     ImageSave::Result
     writeSinglePartExr(const PartData& part, const ImageSave::Options& options)
     {
@@ -396,10 +467,15 @@ namespace
         try {
             const QByteArray filename = nativePath(options.path);
             Imf::Header      header   = exrHeader(part, options);
-            Imf::OutputFile  file(filename.constData(), header);
-            Imf::FrameBuffer framebuffer = exrFrameBuffer(part);
-            file.setFrameBuffer(framebuffer);
-            file.writePixels(part.height);
+            if (part.deep) {
+                Imf::DeepScanLineOutputFile file(filename.constData(), header);
+                writeDeepPixels(file, part);
+            } else {
+                Imf::OutputFile file(filename.constData(), header);
+                Imf::FrameBuffer framebuffer = exrFrameBuffer(part);
+                file.setFrameBuffer(framebuffer);
+                file.writePixels(part.height);
+            }
         } catch (const std::exception& e) {
             return result(
               ImageSave::StatusFailed,
@@ -429,7 +505,6 @@ namespace
 
             for (const PartData& part : parts) {
                 headers.push_back(exrHeader(part, options));
-                headers.back().setType(Imf::SCANLINEIMAGE);
             }
 
             const QByteArray         filename = nativePath(options.path);
@@ -439,6 +514,11 @@ namespace
               static_cast<int>(headers.size()));
 
             for (int i = 0; i < static_cast<int>(parts.size()); i++) {
+                if (parts[i].deep) {
+                    Imf::DeepScanLineOutputPart output(file, i);
+                    writeDeepPixels(output, parts[i]);
+                    continue;
+                }
                 Imf::OutputPart  output(file, i);
                 Imf::FrameBuffer framebuffer = exrFrameBuffer(parts[i]);
                 output.setFrameBuffer(framebuffer);
@@ -762,6 +842,8 @@ namespace
         const bool prefix = partCount > 1 && options.multipart == ImageSave::MultipartFlatten;
         if (prefix) {
             for (int i = 0; i < partCount; ++i) {
+                if (file.header(i).type() == Imf::DEEPSCANLINE)
+                    throw std::runtime_error("Deep multipart export requires Preserve multipart.");
                 if (ViewMetadata::read(file.header(i)).present())
                     throw std::runtime_error(
                       "Flattening multiview parts is not supported. Use Preserve multipart instead.");

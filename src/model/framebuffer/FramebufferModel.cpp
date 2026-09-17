@@ -31,6 +31,7 @@
  */
 
 #include "FramebufferModel.h"
+#include <cmath>
 
 #include <QThread>
 #include <QThreadPool>
@@ -38,6 +39,20 @@
 #include <exception>
 #include <algorithm>
 #include <sstream>
+#include "DeepPreview.h"
+
+DepthBounds FramebufferModel::depthBounds() const { return DeepPreview::bounds(*m_data); }
+DepthRange FramebufferModel::depthRange() const { return depthBounds().clamp(m_depthRange); }
+void FramebufferModel::setDepthRange(DepthRange range)
+{
+    if (!hasDeepSamples() || !std::isfinite(range.minimum) || !std::isfinite(range.maximum)
+        || range.minimum > range.maximum) return;
+    range = depthBounds().clamp(range);
+    if (range == depthRange()) return;
+    m_depthRange = range;
+    emit depthRangeChanged();
+    updateImage();
+}
 
 std::vector<QPoint> FramebufferModel::rawChannelSampling() const
 {
@@ -139,10 +154,15 @@ FramebufferModel::FramebufferModel(QObject* parent)
           if (m_activeGeneration == m_generation) {
               m_error = result.error;
               if (!result.image.isNull()) {
+                  if (result.data) m_data = result.data;
                   m_image = result.image;
                   setReady(true);
                   emit imageChanged();
               } else if (!m_error.isEmpty()) {
+                  if (hasDeepSamples()) {
+                      m_depthRange = m_data->depthRange;
+                      emit depthRangeChanged();
+                  }
                   emit readinessChanged();
                   emit loadFailed(m_error);
               }
@@ -222,7 +242,7 @@ void FramebufferModel::startRender()
     m_renderWatcher.setFuture(QtConcurrent::run(renderPool(), [render, cancel] {
         RenderResult result;
         try {
-            if (!cancel->load()) result.image = render(cancel);
+            if (!cancel->load()) result = render(cancel);
             if (result.image.isNull() && !cancel->load())
                 result.error = QObject::tr("Unable to allocate preview image.");
         } catch (const std::exception& error) {

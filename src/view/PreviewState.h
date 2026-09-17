@@ -1,7 +1,9 @@
 #pragma once
 #include <array>
+#include <model/DeepSamples.h>
 
 struct PreviewState {
+    DepthRange            depth;
     int                   mode           = 0;
     int                   toneMethod     = 0;
     double                exposure       = 0.;

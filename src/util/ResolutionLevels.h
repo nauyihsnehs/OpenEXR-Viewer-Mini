@@ -49,8 +49,9 @@ namespace ResolutionLevels
             throw std::runtime_error("Invalid image part.");
         const std::lock_guard<std::mutex> lock(source->mutex);
         const auto& header = source->file->header(part);
-        if (header.hasType() && header.type() != Imf::SCANLINEIMAGE && header.type() != Imf::TILEDIMAGE)
-            throw std::runtime_error("Deep image parts are not supported.");
+        if (header.hasType() && header.type() != Imf::SCANLINEIMAGE
+            && header.type() != Imf::TILEDIMAGE && header.type() != Imf::DEEPSCANLINE)
+            throw std::runtime_error("Deep Tiled image parts are not supported.");
         Geometry result;
         result.tiled = header.hasType() ? header.type() == Imf::TILEDIMAGE : header.hasTileDescription();
         result.data = header.dataWindow();
