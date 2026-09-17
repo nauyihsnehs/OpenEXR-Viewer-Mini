@@ -13,6 +13,8 @@
 
 // Published once by a decoder, then shared read-only by previews and exports.
 struct FramebufferData {
+    int envmap = -1;
+    bool completeEnvironment = false;
     ResolutionLevel resolutionLevel;
     std::vector<ResolutionLevel> resolutionLevels = {{0, 0}};
     int                width       = 0;
@@ -27,13 +29,14 @@ struct FramebufferData {
     std::array<std::string, 4> deepChannels;
     bool deepScalar = false;
     DepthRange depthRange;
+    // Present-sample mask for Deep composites and projected canvases (sphere exterior).
     std::vector<uint8_t> deepCoverage;
     double displayMinimum = 0., displayMaximum = 0.;
     bool hasFiniteDisplay = false;
     bool hasDeep() const
     { return bool(deep) || (stereo[0] && (stereo[0]->hasDeep() || stereo[1]->hasDeep())); }
     bool covers(size_t pixel) const
-    { return !deep || (!deepCoverage.empty() && deepCoverage[pixel]); }
+    { return deepCoverage.empty() ? !deep : deepCoverage[pixel] != 0; }
     std::array<QPoint, 4> sourceSampling = {{QPoint(1, 1), QPoint(1, 1),
                                            QPoint(1, 1), QPoint(1, 1)}};
     bool               hasRawChromaticities = false;

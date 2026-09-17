@@ -546,7 +546,11 @@ void ImageFileWidget::prepareDocument(ResolutionLevel level, bool reopen)
             if (!m_refresh || generation != m_preparationGeneration) return;
             auto& preview = m_refresh->prepared[i];
             auto state = m_refresh->saved.previews[i];
-            const auto canvas = PreviewImage::Geometry(*preview.model).sceneWindow();
+            auto canvas = PreviewImage::Geometry(*preview.model).sceneWindow();
+            const auto environment = preview.model->projectionSnapshot();
+            const auto projection = EnvironmentProjection::resolve(state.preview.projection, *environment.source);
+            if (preview.model->environmentSource().available() && projection.type != preview.model->rawEnvmap())
+                canvas = QRectF(QPointF(), EnvironmentProjection::defaultSize(*environment.source, projection.type));
             if (!state.view.fit && !state.canvas.isEmpty()) {
                 const QPointF relative((state.view.center.x() - state.canvas.x()) / state.canvas.width(),
                                        (state.view.center.y() - state.canvas.y()) / state.canvas.height());

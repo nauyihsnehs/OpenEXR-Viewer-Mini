@@ -117,7 +117,7 @@ void GraphicsView::onImageLoaded()
 {
     if (!_model || !_model->isImageLoaded()) return;
     const PreviewImage::Geometry geometry(*_model);
-    const qreal aspect     = _model->pixelAspectRatio();
+    const qreal aspect     = _model->previewPixelAspect();
     _imageItem->setTransform(geometry.imageToScene);
     _imageItem->setTransformationMode(
       aspect == 1. ? Qt::FastTransformation : Qt::SmoothTransformation);
@@ -128,7 +128,7 @@ void GraphicsView::onImageLoaded()
         applyImageWindowZoom(_zoomLevel);
         return;
     }
-    if (_restorePending) {
+    if (_restorePending && _model->isPreviewReady()) {
         _restorePending = false;
         restoreViewState(_pendingState);
     } else
@@ -137,8 +137,22 @@ void GraphicsView::onImageLoaded()
 
 void GraphicsView::onImageChanged()
 {
-    if (_model)
+    if (_model) {
+        const PreviewImage::Geometry geometry(*_model);
+        if (_restorePending || _displayWindow != geometry.sceneWindow() || _imageItem->transform() != geometry.imageToScene) {
+            auto state = viewState();
+            const bool pending = _restorePending;
+            if (!_displayWindow.isEmpty()) {
+                const QPointF relative((state.center.x() - _displayWindow.x()) / _displayWindow.width(),
+                                       (state.center.y() - _displayWindow.y()) / _displayWindow.height());
+                const auto next = geometry.sceneWindow();
+                state.center = next.topLeft() + QPointF(relative.x() * next.width(), relative.y() * next.height());
+            }
+            onImageLoaded();
+            if (!pending && !state.fit && !_imageWindow) restoreViewState(state);
+        }
         _imageItem->setPixmap(QPixmap::fromImage(_model->getLoadedImage()));
+    }
     refreshPixelInfo();
 }
 
@@ -209,7 +223,7 @@ GraphicsView::ViewState GraphicsView::viewState() const
 }
 void GraphicsView::restoreViewState(const ViewState& state)
 {
-    if (!_model || !_model->isImageLoaded()) {
+    if (!_model || !_model->isPreviewReady()) {
         _pendingState   = state;
         _restorePending = true;
         return;
@@ -237,7 +251,12 @@ void GraphicsView::wheelEvent(QWheelEvent* event)
     }
     if (event->modifiers() & Qt::ControlModifier)
         emit controlWheel(steps);
-    else if (_imageWindow)
+    else if (_model->environmentSource().available()
+             && _model->requestedProjectionState().type == EnvironmentProjection::Perspective) {
+        auto state = _model->requestedProjectionState();
+        state.fieldOfView -= steps * 5.;
+        const_cast<FramebufferModel*>(_model.data())->setProjectionState(state);
+    } else if (_imageWindow)
         emit imageWindowZoomRequested(_zoomLevel * std::pow(1.1, qBound(-100., steps, 100.)));
     else {
 #if QT_VERSION >= QT_VERSION_CHECK(5, 14, 0)
@@ -343,6 +362,17 @@ void GraphicsView::mouseMoveEvent(QMouseEvent* event)
                        >= QApplication::startDragDistance())
         _rightClick = false;
     if (_dragging && (event->buttons() & (Qt::LeftButton | Qt::MiddleButton))) {
+        const auto projection = _model->requestedProjectionState();
+        if ((event->buttons() & Qt::LeftButton) && _model->environmentSource().available()
+            && (projection.type == EnvironmentProjection::Perspective || projection.type == EnvironmentProjection::Sphere)) {
+            auto state = projection;
+            const QPoint delta = event->pos() - _startDrag;
+            state.yaw += delta.x() * .3;
+            state.pitch += delta.y() * .3;
+            _startDrag = event->pos();
+            const_cast<FramebufferModel*>(_model.data())->setProjectionState(state);
+            return;
+        }
         if (_imageWindow) {
 #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
             const QPoint globalPosition = event->globalPosition().toPoint();

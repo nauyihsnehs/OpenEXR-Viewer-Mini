@@ -50,6 +50,8 @@
 #include <view/mainwindow.h>
 #include <OpenEXR/ImfChannelList.h>
 #include <OpenEXR/ImfChromaticitiesAttribute.h>
+#include <OpenEXR/ImfEnvmapAttribute.h>
+#include <util/EnvironmentProjection.h>
 #include <OpenEXR/ImfOutputFile.h>
 #include <OpenEXR/ImfMultiPartOutputFile.h>
 #include <OpenEXR/ImfOutputPart.h>
@@ -420,6 +422,268 @@ class ViewerTests: public QObject
 #ifdef _WIN32
         QApplication::setFont(QFont("Segoe UI", 9));
 #endif
+    }
+
+    void environmentDirectionsSeamsAndDegenerateLevels()
+    {
+        using namespace EnvironmentProjection;
+        auto data = std::make_shared<FramebufferData>();
+        data->envmap = Cube; data->completeEnvironment = true;
+        data->width = 3; data->height = 18;
+        data->dataWindow = data->displayWindow = QRect(-4, -7, 3, 18);
+        for (int face = 0; face < 6; ++face)
+            for (int y = 0; y < 3; ++y)
+                for (int x = 0; x < 3; ++x) data->pixels.push_back(float(face * 100 + y * 10 + x));
+        Snapshot snapshot; snapshot.source = data; snapshot.stride = 1;
+        snapshot.names = {"test.value"}; snapshot.components = {0};
+        const auto original = data->pixels;
+        auto cancel = std::make_shared<std::atomic_bool>(false);
+        State state; state.type = Perspective;
+        const double angles[][3] = {{0,0,411}, {90,0,11}, {-90,0,111}, {180,0,511}, {0,90,211}, {0,-90,311}};
+        for (const auto& angle : angles) {
+            state.yaw = angle[0]; state.pitch = angle[1];
+            const auto frame = project(snapshot, state, QSize(1, 1), cancel);
+            QVERIFY(frame);
+            QVERIFY(std::abs(frame->pixels[0] - angle[2]) < .001);
+        }
+        state.yaw = state.pitch = 0.;
+        QPointF p;
+        QVERIFY(sourcePosition(*data, state, QSize(3, 3), 1, 1, p));
+        QCOMPARE(p, QPointF(-3, 6)); // +Z center, including negative source origin.
+        QVERIFY(sourcePosition(*data, state, QSize(3, 3), 0, 0, p));
+        QVERIFY(p.x() < -3 && p.y() < 6); // No horizontal or vertical mirror.
+        state.type = Cube;
+        const auto cube = project(snapshot, state, QSize(3, 18), cancel);
+        for (int face = 0; face < 6; ++face)
+            QCOMPARE(cube->pixels[size_t(face * 3 + 1) * 3 + 1], float(face * 100 + 11));
+        // The +Z upper-left corner meets +X and +Y, with all three duplicated endpoints.
+        QCOMPARE(cube->pixels[12 * 3], (400.f + 2.f + 202.f) / 3.f);
+        QVERIFY(data->pixels == original);
+        state.type = Sphere;
+        const auto sphere = project(snapshot, state, QSize(5, 5), cancel);
+        QVERIFY(!sphere->covers(0)); QVERIFY(sphere->covers(12));
+        QCOMPARE(sphere->pixels[12], 411.f);
+        QVERIFY(!sourcePosition(*data, state, QSize(5, 5), 0, 0, p));
+        state.type = Perspective; state.fieldOfView = 30.;
+        sourcePosition(*data, state, QSize(5, 5), 0, 2, p);
+        const double narrow = p.x(); state.fieldOfView = 90.;
+        sourcePosition(*data, state, QSize(5, 5), 0, 2, p);
+        QVERIFY(p.x() < narrow);
+        data->pixels[13 * 3 + 1] = std::numeric_limits<float>::quiet_NaN(); data->nanCount = 1;
+        const auto bad = project(snapshot, state, QSize(1, 1), cancel);
+        QCOMPARE(bad->anomalyRegions.size(), size_t(1));
+        QVERIFY(bad->anomalyRegions[0].flags & FramebufferData::NaN);
+        QCOMPARE(data->nanCount, uint64_t(1));
+        cancel->store(true); QVERIFY(!project(snapshot, state, QSize(5, 5), cancel)); cancel->store(false);
+        data->width = 1; data->height = 6; data->pixels = {1,2,3,4,5,6};
+        data->dataWindow = data->displayWindow = QRect(0, 0, 1, 6);
+        QCOMPARE(project(snapshot, state, QSize(1, 1), cancel)->pixels[0], 5.f);
+        data->height = 3;
+        QVERIFY(!describe(*data).available());
+        QVERIFY_EXCEPTION_THROWN(project(snapshot, state, QSize(1, 1), cancel), std::runtime_error);
+        data->envmap = LatLong; data->width = data->height = 1; data->pixels = {.25f};
+        state.type = LatLong;
+        const auto tiny = project(snapshot, state, QSize(4, 2), cancel);
+        for (float value : tiny->pixels) QCOMPARE(value, .25f);
+        // A one-row level is an equatorial strip, not a duplicated pole.
+        data->width = 5; data->pixels = {0.f, 1.f, 2.f, 3.f, 0.f};
+        state.type = Perspective; state.yaw = 90.;
+        QVERIFY(std::abs(project(snapshot, state, QSize(1, 1), cancel)->pixels[0] - 1.f) < .0001f);
+        data->width = 8; data->height = 4; data->pixels.assign(32, .5f);
+        std::fill(data->pixels.begin(), data->pixels.begin() + 8, .25f);
+        std::fill(data->pixels.end() - 8, data->pixels.end(), .75f);
+        state.type = LatLong;
+        const auto panorama = project(snapshot, state, QSize(8, 4), cancel);
+        for (int y = 0; y < 4; ++y) QCOMPARE(panorama->pixels[y * 8], panorama->pixels[y * 8 + 7]);
+        for (int x = 0; x < 8; ++x) {
+            QCOMPARE(panorama->pixels[x], .25f); QCOMPARE(panorama->pixels[24 + x], .75f);
+        }
+        QVERIFY_EXCEPTION_THROWN(validateSize(QSize(3, 3), LatLong), std::runtime_error);
+        QVERIFY_EXCEPTION_THROWN(validateSize(QSize(1000000, 6000000), Cube), std::runtime_error);
+    }
+
+    void environmentSourceIsolationExportsAndCapturedParameters()
+    {
+        using namespace EnvironmentProjection;
+        const QString path = fixture("environment-source");
+        Imf::Header header(8, 4);
+        header.insert("envmap", Imf::EnvmapAttribute(Imf::ENVMAP_LATLONG));
+        const std::map<std::string, std::vector<float>> channels = {
+          {"R", std::vector<float>(32, .25f)}, {"G", std::vector<float>(32, .5f)},
+          {"B", std::vector<float>(32, 2.f)}, {"A", std::vector<float>(32, .5f)}};
+        writeFixture(path, 8, 4, channels, 0, 0, 1.f, 1, &header);
+        OpenEXRImage source(path, nullptr);
+        RGBFramebufferModel rgb("", RGBFramebufferModel::Layer_RGB);
+        YFramebufferModel scalar("G");
+        rgb.load(source.sharedEXR(), 0, {{"R", "G", "B", "A"}}); scalar.load(source.sharedEXR(), 0);
+        QTRY_VERIFY(rgb.isPreviewReady() && scalar.isPreviewReady());
+        QVERIFY(rgb.environmentSource().available()); QCOMPARE(rgb.projectionState().type, LatLong);
+        const auto raw = rgb.getRawPixels(); const auto linear = rgb.getDisplayPixels();
+        const double minimum = scalar.getDatasetMin();
+        State state; state.type = Sphere; state.yaw = 27.;
+        rgb.setProjectionState(state); scalar.setProjectionState(state);
+        QTRY_VERIFY(rgb.isPreviewReady() && scalar.isPreviewReady());
+        QVERIFY(rgb.getRawPixels() == raw && rgb.getDisplayPixels() == linear);
+        QCOMPARE(scalar.getDatasetMin(), minimum);
+        QVERIFY(QString::fromStdString(scalar.getColorInfo(2, 2)).contains("Interpolated linear G: 0.5"));
+        QVERIFY(rgb.getColorInfo(0, 0).empty());
+        QCOMPARE(rgb.getLoadedImage().pixelColor(0, 0).alpha(), 0);
+        QCOMPARE(rgb.getLoadedImage().pixelColor(2, 2).alpha(), 255); // Source alpha still black-composited.
+        ImageSave::Source input; input.activeModel = &rgb; input.sourceImage = &source;
+        input.environment = std::make_shared<const Snapshot>(rgb.projectionSnapshot());
+        input.preview = std::make_shared<const PreviewImage::Snapshot>(PreviewImage::capture(rgb));
+        ImageSave::Options options; options.target = ImageSave::TargetProjectionConversion;
+        options.projection = state; options.projectionSize = QSize(8, 8);
+        options.format = ImageSave::FormatExr; options.pixelType = ImageSave::PixelFloat;
+        options.path = fixture("environment-linear");
+        // Change pending display parameters: saving must continue to use the completed snapshot.
+        rgb.setExposure(8.); state.yaw = 100.; rgb.setProjectionState(state);
+        QCOMPARE(ImageSave::save(input, options).status, ImageSave::StatusSaved);
+        OpenEXRImage converted(options.path, nullptr);
+        const auto& outHeader = converted.getEXR().header(0);
+        QCOMPARE(outHeader.type(), Imf::SCANLINEIMAGE);
+        QVERIFY(!outHeader.hasTileDescription());
+        QVERIFY(!outHeader.findTypedAttribute<Imf::EnvmapAttribute>("envmap"));
+        QCOMPARE(outHeader.channels().findChannel("R")->type, Imf::FLOAT);
+        QCOMPARE(outHeader.compression(), Imf::ZIP_COMPRESSION);
+        QVERIFY(outHeader.findTypedAttribute<Imf::ChromaticitiesAttribute>("chromaticities"));
+        RGBFramebufferModel output("", RGBFramebufferModel::Layer_RGB);
+        output.load(converted.sharedEXR(), 0, {{"R", "G", "B", "A"}});
+        QTRY_VERIFY(output.isPreviewReady());
+        QCOMPARE(output.getRawPixels()[0], 0.f); QCOMPARE(output.getRawPixels()[3], 0.f);
+        QCOMPARE(output.getRawPixels()[(4 * 8 + 4) * 4], .25f);
+        QCOMPARE(output.getRawPixels()[(4 * 8 + 4) * 4 + 3], .5f);
+        options.format = ImageSave::FormatPng; options.path = m_directory.filePath("environment.png");
+        QCOMPARE(ImageSave::save(input, options).status, ImageSave::StatusSaved);
+        const QImage png(options.path); QCOMPARE(png.size(), QSize(8, 8));
+        QCOMPARE(png.pixelColor(0, 0).alpha(), 0);
+        QVERIFY(png.pixelColor(4, 4).red() > 130 && png.pixelColor(4, 4).red() < 140);
+        options.format = ImageSave::FormatJpeg;
+        for (int white = 0; white < 2; ++white) {
+            options.jpegBackground = white ? ImageSave::BackgroundWhite : ImageSave::BackgroundBlack;
+            options.projectionSize = QSize(64, 64); options.quality = 100;
+            options.path = m_directory.filePath(QString("environment%1.jpg").arg(white));
+            QCOMPARE(ImageSave::save(input, options).status, ImageSave::StatusSaved);
+            const QColor corner = QImage(options.path).pixelColor(0, 0);
+            QVERIFY(white ? corner.red() > 245 : corner.red() < 10);
+        }
+        options.format = ImageSave::FormatExr; options.projection.type = Cube; options.projectionSize = QSize(2, 12);
+        options.path = fixture("environment-cube");
+        QCOMPARE(ImageSave::save(input, options).status, ImageSave::StatusSaved);
+        OpenEXRImage cube(options.path, nullptr);
+        QCOMPARE(cube.getEXR().header(0).findTypedAttribute<Imf::EnvmapAttribute>("envmap")->value(), Imf::ENVMAP_CUBE);
+        input.activeModel = &scalar; input.environment = std::make_shared<const Snapshot>(scalar.projectionSnapshot());
+        options.projection.type = Sphere; options.projectionSize = QSize(8, 8); options.path = fixture("environment-scalar");
+        QCOMPARE(ImageSave::save(input, options).status, ImageSave::StatusSaved);
+        OpenEXRImage channel(options.path, nullptr);
+        QVERIFY(channel.getEXR().header(0).channels().findChannel("G"));
+        QVERIFY(channel.getEXR().header(0).channels().findChannel("A"));
+        QVERIFY(!channel.getEXR().header(0).channels().findChannel("R"));
+        for (int whole = 0; whole < 2; ++whole) for (int basic = 0; basic < 2; ++basic) {
+            options.target = whole ? ImageSave::TargetLayeredOriginal : ImageSave::TargetActiveOriginal;
+            options.metadata = basic ? ImageSave::MetadataBasic : ImageSave::MetadataNone;
+            options.path = fixture(QString("environment-raw-%1-%2").arg(whole).arg(basic));
+            QCOMPARE(ImageSave::save(input, options).status, ImageSave::StatusSaved);
+            OpenEXRImage saved(options.path, nullptr);
+            QCOMPARE(bool(saved.getEXR().header(0).findTypedAttribute<Imf::EnvmapAttribute>("envmap")), bool(basic));
+            QCOMPARE(saved.getEXR().header(0).dataWindow(), source.getEXR().header(0).dataWindow());
+        }
+        QTRY_VERIFY(rgb.isPreviewReady());
+        QCOMPARE(rgb.projectionState().yaw, 100.);
+        // Cancel consecutive camera/projection requests; only the final canvas may commit.
+        for (int i = 0; i < 12; ++i) {
+            state.type = Type(i % 4); state.yaw = i * 7.; rgb.setProjectionState(state);
+        }
+        QTRY_VERIFY(rgb.isPreviewReady());
+        QCOMPARE(rgb.projectionState().type, Sphere); QCOMPARE(rgb.projectionState().yaw, 77.);
+        state.type = LatLong; rgb.setProjectionState(state);
+        QTRY_VERIFY(rgb.isPreviewReady()); QVERIFY(!rgb.isProjected()); QVERIFY(rgb.getRawPixels() == raw);
+    }
+
+    void environmentMenuRefreshMinimalAndSaveControls()
+    {
+        using namespace EnvironmentProjection;
+        const QString path = fixture("environment-ui");
+        Imf::Header header(8, 4); header.insert("envmap", Imf::EnvmapAttribute(Imf::ENVMAP_LATLONG));
+        writeFixture(path, 8, 4, {{"Y", std::vector<float>(32, .5f)}}, 0, 0, 1.f, 1, &header);
+        MainWindow window; window.resize(800, 600); window.show(); window.open(path);
+        QTRY_VERIFY(window.findChild<ImageFileWidget*>());
+        auto* document = window.findChild<ImageFileWidget*>();
+        QTRY_VERIFY(document->activeFramebufferModel() && document->activeFramebufferModel()->isPreviewReady());
+        auto* model = const_cast<FramebufferModel*>(document->activeFramebufferModel());
+        auto* menu = window.findChild<QMenu*>("menu_Projection"); QVERIFY(menu && menu->isEnabled());
+        auto* sphere = window.findChild<QAction*>("action_Projection3"); QVERIFY(sphere); sphere->trigger();
+        QTRY_VERIFY(model->isPreviewReady()); QCOMPARE(model->projectionState().type, Sphere); QVERIFY(sphere->isChecked());
+        auto state = model->projectionState(); state.yaw = 31.; state.pitch = -20.; state.fieldOfView = 75.;
+        model->setProjectionState(state); model->setHighlightNonFinite(true);
+        QTRY_VERIFY(model->isPreviewReady());
+        auto* page = document->findChild<YFramebufferWidget*>(); QVERIFY(page); page->resetCurrentMode();
+        QTRY_VERIFY(model->isPreviewReady()); QCOMPARE(model->projectionState().yaw, 31.);
+        QVERIFY(QMetaObject::invokeMethod(&window, "toggleMinimalView"));
+        QCOMPARE(model->projectionState().type, Sphere);
+        QVERIFY(QMetaObject::invokeMethod(&window, "toggleMinimalView"));
+        document->refresh(); QTRY_VERIFY(!document->isRefreshInProgress());
+        model = const_cast<FramebufferModel*>(document->activeFramebufferModel());
+        QVERIFY(model->isPreviewReady()); QCOMPARE(model->projectionState().yaw, 31.);
+        QVERIFY(model->highlightNonFinite()); QCOMPARE(model->previewDisplayWindow().size(), QSize(4, 4));
+        SaveImageDialog dialog(m_directory.filePath("environment-ui.png"));
+        dialog.setEnvironmentSource(model->projectionSnapshot()); dialog.setSourceState(true, true);
+        auto* targets = dialog.findChild<QComboBox*>("targetCombo");
+        targets->setCurrentIndex(targets->findData(ImageSave::TargetProjectionConversion));
+        QCOMPARE(dialog.options().projection.type, Sphere); QCOMPARE(dialog.options().projection.yaw, 31.);
+        QCOMPARE(dialog.options().pixelType, ImageSave::PixelFloat);
+        auto* type = dialog.findChild<QComboBox*>("projectionTypeCombo"); type->setCurrentIndex(type->findData(Cube));
+        QCOMPARE(dialog.options().projectionSize, QSize(2, 12));
+        QCOMPARE(model->projectionState().type, Sphere);
+        window.findChild<QAction*>("action_ResetProjectionView")->trigger();
+        QTRY_VERIFY(model->isPreviewReady()); QCOMPARE(model->projectionState().yaw, 0.);
+        QCOMPARE(model->projectionState().fieldOfView, 90.);
+        const QString ordinary = fixture("ordinary-ui"); writeFixture(ordinary, 2, 2, {{"Y", std::vector<float>(4, .5f)}});
+        window.open(ordinary); QTRY_VERIFY(!menu->isEnabled());
+    }
+
+    void environmentStoredLevelsAndIncompleteCubeTail()
+    {
+        using namespace EnvironmentProjection;
+        const QString path = fixture("environment-levels");
+        {
+            Imf::Header header(4, 24);
+            header.insert("envmap", Imf::EnvmapAttribute(Imf::ENVMAP_CUBE));
+            header.channels().insert("V", Imf::Channel(Imf::FLOAT));
+            header.setTileDescription(Imf::TileDescription(2, 3, Imf::MIPMAP_LEVELS, Imf::ROUND_DOWN));
+            Imf::TiledOutputFile file(path.toLocal8Bit().constData(), header);
+            for (int l = 0; l < file.numLevels(); ++l) {
+                const auto dw = file.dataWindowForLevel(l);
+                const int width = file.levelWidth(l), height = file.levelHeight(l);
+                std::vector<float> values(size_t(width) * height, l + .25f);
+                Imf::FrameBuffer buffer;
+                buffer.insert("V", Imf::Slice::Make(Imf::FLOAT, values.data(), dw, sizeof(float), width * sizeof(float)));
+                file.setFrameBuffer(buffer);
+                file.writeTiles(0, file.numXTiles(l) - 1, 0, file.numYTiles(l) - 1, l);
+            }
+        }
+        OpenEXRImage source(path, nullptr);
+        for (int l = 0; l < 5; ++l) {
+            YFramebufferModel model("V"); model.load(source.sharedEXR(), 0, {l, l});
+            QTRY_VERIFY(model.isPreviewReady());
+            QCOMPARE(model.getRawPixels()[0], l + .25f);
+            QCOMPARE(model.environmentSource().available(), l <= 2);
+            State state; state.type = Perspective; model.setProjectionState(state);
+            QTRY_VERIFY(model.isPreviewReady());
+            QCOMPARE(model.projectionState().type, l <= 2 ? Perspective : Cube);
+            if (l <= 2) QVERIFY(QString::fromStdString(model.getColorInfo(0, 0)).contains("Interpolated linear V:"));
+            else QVERIFY(model.environmentSource().unavailableReason.contains("six complete"));
+            ImageSave::Source input; input.activeModel = &model; input.sourceImage = &source; input.resolutionLevel = {l, l};
+            ImageSave::Options options; options.target = ImageSave::TargetLayeredOriginal;
+            options.format = ImageSave::FormatExr; options.pixelType = ImageSave::PixelFloat;
+            options.path = fixture(QString("environment-level-%1").arg(l));
+            QCOMPARE(ImageSave::save(input, options).status, ImageSave::StatusSaved);
+            OpenEXRImage output(options.path, nullptr); YFramebufferModel saved("V");
+            saved.load(output.sharedEXR(), 0); QTRY_VERIFY(saved.isPreviewReady());
+            QCOMPARE(saved.getRawPixels()[0], l + .25f);
+            QCOMPARE(saved.getDataWindow(), model.getDataWindow());
+            QCOMPARE(saved.rawEnvmap(), int(Cube));
+        }
     }
 
     void anomalyRegionsJoinDiagonalsAndKeepSourceCounts()

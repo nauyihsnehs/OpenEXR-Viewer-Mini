@@ -1,9 +1,11 @@
 #pragma once
 #include <array>
+#include <util/EnvironmentProjection.h>
 #include <model/DeepSamples.h>
 
 struct PreviewState {
     DepthRange            depth;
+    EnvironmentProjection::State projection;
     int                   mode           = 0;
     int                   toneMethod     = 0;
     double                exposure       = 0.;

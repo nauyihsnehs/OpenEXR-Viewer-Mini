@@ -4,6 +4,12 @@
 #include "ComboBoxBehavior.h"
 
 #include <QComboBox>
+#include <QSpinBox>
+#include <QDoubleSpinBox>
+#include <QFormLayout>
+#include <QLabel>
+#include <QSignalBlocker>
+#include <algorithm>
 #include <QDialogButtonBox>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -45,6 +51,10 @@ SaveImageDialog::SaveImageDialog(const QString& path, QWidget* parent)
       static_cast<void (QComboBox::*)(int)>(&QComboBox::currentIndexChanged),
       this,
       [this](int) {
+          if (target() == ImageSave::TargetProjectionConversion) {
+              setComboData(ui->pixelTypeCombo, ImageSave::PixelFloat);
+              setComboData(ui->compressionCombo, ImageSave::CompressionZip);
+          }
           updateOptions();
           updatePathExtension();
       });
@@ -99,6 +109,10 @@ ImageSave::Options SaveImageDialog::options() const
     options.bracketStepEv = ui->bracketStepSpinBox->value();
     options.bracketCenterEv = ui->bracketCenterSpinBox->value();
 
+    options.projection.type = EnvironmentProjection::Type(m_projectionType->currentData().toInt());
+    options.projection.yaw = m_yaw->value(); options.projection.pitch = m_pitch->value();
+    options.projection.fieldOfView = m_fov->value();
+    options.projectionSize = QSize(m_projectionWidth->value(), m_projectionHeight->value());
     return options;
 }
 
@@ -118,6 +132,51 @@ void SaveImageDialog::setResolutionLevelInfo(ResolutionLevel level, bool multile
     ui->resolutionLevelLabel->setText(tr("Level %1 — selected level only; scanline EXR").arg(QString::fromStdString(level.toString())));
 }
 
+
+void SaveImageDialog::setEnvironmentSource(const EnvironmentProjection::Snapshot& source)
+{
+    m_environment = source;
+    if (source.source && EnvironmentProjection::describe(*source.source).available()) {
+        setComboData(m_projectionType, int(source.state.type));
+        m_yaw->setValue(source.state.yaw); m_pitch->setValue(source.state.pitch);
+        m_fov->setValue(source.state.fieldOfView);
+        updateProjectionControls(true);
+        if (target() == ImageSave::TargetProjectionConversion) {
+            setComboData(ui->pixelTypeCombo, ImageSave::PixelFloat);
+            setComboData(ui->compressionCombo, ImageSave::CompressionZip);
+        }
+    } else if (target() == ImageSave::TargetProjectionConversion)
+        setComboData(ui->targetCombo, ImageSave::TargetPreview);
+    setSourceState(m_sourceAvailable, m_previewReady, m_previewError, m_derived);
+}
+
+void SaveImageDialog::updateProjectionControls(bool defaults)
+{
+    using namespace EnvironmentProjection;
+    const auto type = Type(m_projectionType->currentData().toInt());
+    const QSignalBlocker widthBlock(m_projectionWidth), heightBlock(m_projectionHeight);
+    if (defaults && m_environment.source) {
+        const auto size = defaultSize(*m_environment.source, type);
+        m_projectionWidth->setValue(size.width()); m_projectionHeight->setValue(size.height());
+    }
+    int width = m_projectionWidth->value();
+    if (type == LatLong) {
+        width = std::max(2, width - width % 2);
+        m_projectionWidth->setValue(width); m_projectionHeight->setValue(width / 2);
+    } else if (type == Cube) {
+        width = std::min(width, m_projectionHeight->maximum() / 6);
+        m_projectionWidth->setValue(width); m_projectionHeight->setValue(width * 6);
+    } else if (type == Sphere) m_projectionHeight->setValue(width);
+    m_projectionWidth->setSingleStep(type == LatLong ? 2 : 1);
+    m_projectionHeight->setEnabled(type == Perspective);
+    const bool camera = type == Perspective || type == Sphere;
+    for (auto* control : {m_yaw, m_pitch, m_fov}) {
+        const bool visible = control == m_fov ? type == Perspective : camera;
+        control->setVisible(visible);
+        static_cast<QFormLayout*>(m_projectionPanel->layout())->labelForField(control)->setVisible(visible);
+    }
+}
+
 void SaveImageDialog::setDeepSourceInfo(bool activeDeep, bool fileDeep)
 {
     m_activeDeep = activeDeep;
@@ -134,9 +193,14 @@ void SaveImageDialog::setSourceState(bool available, bool previewReady, const QS
     auto* items = qobject_cast<QStandardItemModel*>(ui->targetCombo->model());
     for (int i = 0; i < ui->targetCombo->count(); ++i) {
         const int value = ui->targetCombo->itemData(i).toInt();
-        const bool enabled = !derived || value == ImageSave::TargetPreview || value == ImageSave::TargetLayeredOriginal;
+        const bool enabled = (!derived || value == ImageSave::TargetPreview || value == ImageSave::TargetLayeredOriginal)
+          && (value != ImageSave::TargetProjectionConversion || (m_environment.source
+              && EnvironmentProjection::describe(*m_environment.source).available() && bool(m_environment.mapColors)));
         if (items) items->item(i)->setEnabled(enabled);
-        ui->targetCombo->setItemData(i, enabled ? QString() : tr("Anaglyph is a derived preview. Select an eye layer for source/HDR export."), Qt::ToolTipRole);
+        const QString reason = value == ImageSave::TargetProjectionConversion
+          ? tr("Requires a completed preview from a complete LatLong or Cube source at this level.")
+          : tr("Anaglyph is a derived preview. Select an eye layer for source/HDR export.");
+        ui->targetCombo->setItemData(i, enabled ? QString() : reason, Qt::ToolTipRole);
     }
     if (derived && target() != ImageSave::TargetPreview && target() != ImageSave::TargetLayeredOriginal)
         setComboData(ui->targetCombo, ImageSave::TargetPreview);
@@ -146,14 +210,20 @@ void SaveImageDialog::setSourceState(bool available, bool previewReady, const QS
 
 void SaveImageDialog::updateSaveAvailability()
 {
+    const bool conversion = target() == ImageSave::TargetProjectionConversion;
     const bool waiting = target() == ImageSave::TargetPreview && !m_previewReady;
+    const bool environmentMissing = conversion && (!m_environment.source || !m_environment.mapColors
+      || !EnvironmentProjection::describe(*m_environment.source).available());
     const bool unsupported = m_derived && target() != ImageSave::TargetPreview && target() != ImageSave::TargetLayeredOriginal;
-    ui->buttonBox->button(QDialogButtonBox::Save)->setEnabled(m_sourceAvailable && !waiting && !unsupported);
+    ui->buttonBox->button(QDialogButtonBox::Save)->setEnabled(m_sourceAvailable && !waiting && !unsupported && !environmentMissing);
     if (!m_sourceAvailable || waiting) {
         const QString message = !m_sourceAvailable ? tr("Image is no longer available.")
                                   : !m_previewError.isEmpty() ? m_previewError
                                   : tr("Updating preview...");
         setStatus(message, !m_sourceAvailable || !m_previewError.isEmpty());
+        m_readinessStatus = true;
+    } else if (environmentMissing) {
+        setStatus(tr("Projection conversion requires a completed, complete environment source at this level."), true);
         m_readinessStatus = true;
     } else if (m_readinessStatus) {
         setStatus(tr("Ready"), false);
@@ -180,6 +250,43 @@ void SaveImageDialog::setupOptions()
     ui->targetCombo->addItem(
       tr("HDR Bracketed Images"),
       ImageSave::TargetHdrBracketedImages);
+
+    ui->targetCombo->addItem(tr("Projection Conversion"), ImageSave::TargetProjectionConversion);
+    m_projectionPanel = new QWidget(this);
+    m_projectionPanel->setObjectName("projectionPanel");
+    auto* form = new QFormLayout(m_projectionPanel);
+    form->setContentsMargins(0, 0, 0, 0);
+    m_projectionType = new QComboBox(m_projectionPanel);
+    m_projectionType->setObjectName("projectionTypeCombo");
+    for (int i = EnvironmentProjection::LatLong; i <= EnvironmentProjection::Sphere; ++i)
+        m_projectionType->addItem(EnvironmentProjection::name(EnvironmentProjection::Type(i)), i);
+    form->addRow(tr("Output projection"), m_projectionType);
+    m_projectionWidth = new QSpinBox(m_projectionPanel);
+    m_projectionHeight = new QSpinBox(m_projectionPanel);
+    m_projectionWidth->setObjectName("projectionWidth");
+    m_projectionHeight->setObjectName("projectionHeight");
+    for (auto* spin : {m_projectionWidth, m_projectionHeight}) spin->setRange(1, 1000000);
+    form->addRow(tr("Width (pixels)"), m_projectionWidth);
+    form->addRow(tr("Height (pixels)"), m_projectionHeight);
+    m_projectionWidth->setToolTip(tr("Cube: width is the face edge; the strip is six faces high."));
+    m_yaw = new QDoubleSpinBox(m_projectionPanel);
+    m_pitch = new QDoubleSpinBox(m_projectionPanel);
+    m_fov = new QDoubleSpinBox(m_projectionPanel);
+    m_yaw->setObjectName("projectionYaw"); m_pitch->setObjectName("projectionPitch");
+    m_fov->setObjectName("projectionFov");
+    m_yaw->setRange(-180., 180.); m_pitch->setRange(-90., 90.);
+    m_fov->setRange(10., 150.); m_fov->setValue(90.);
+    for (auto* spin : {m_yaw, m_pitch, m_fov}) { spin->setDecimals(2); spin->setSuffix(QString::fromUtf8("°")); }
+    form->addRow(tr("Yaw (+Z = 0)"), m_yaw);
+    form->addRow(tr("Pitch (+Y up)"), m_pitch);
+    form->addRow(tr("Horizontal field of view"), m_fov);
+    auto* note = new QLabel(tr("EXR: linear values, one scanline part, selected level only.\nPNG/JPEG: current display parameters."), m_projectionPanel);
+    note->setWordWrap(true); form->addRow(note);
+    ui->verticalLayout->insertWidget(1, m_projectionPanel);
+    connect(m_projectionType, static_cast<void(QComboBox::*)(int)>(&QComboBox::currentIndexChanged),
+      this, [this] { updateProjectionControls(true); });
+    connect(m_projectionWidth, static_cast<void(QSpinBox::*)(int)>(&QSpinBox::valueChanged),
+      this, [this] { updateProjectionControls(false); });
 
     ui->sizeCombo->addItem(tr("Full"), 0);
     ui->sizeCombo->addItem(tr("2048w"), 2048);
@@ -275,7 +382,7 @@ void SaveImageDialog::updateOptions()
 
     if (
       target() == ImageSave::TargetPreview
-      || target() == ImageSave::TargetHdrBracketedImages) {
+      || target() == ImageSave::TargetHdrBracketedImages || target() == ImageSave::TargetProjectionConversion) {
         ui->formatCombo->addItem(tr("PNG"), ImageSave::FormatPng);
         ui->formatCombo->addItem(tr("JPEG"), ImageSave::FormatJpeg);
     }
@@ -285,7 +392,7 @@ void SaveImageDialog::updateOptions()
         ui->formatCombo->addItem(tr("HDR"), ImageSave::FormatHdr);
     }
 
-    if (target() == ImageSave::TargetLayeredOriginal) {
+    if (target() == ImageSave::TargetLayeredOriginal || target() == ImageSave::TargetProjectionConversion) {
         ui->formatCombo->addItem(tr("EXR"), ImageSave::FormatExr);
     }
 
@@ -294,7 +401,13 @@ void SaveImageDialog::updateOptions()
 
     ui->formatCombo->blockSignals(false);
 
-    const bool preview = target() == ImageSave::TargetPreview;
+    const bool conversion = target() == ImageSave::TargetProjectionConversion;
+    const bool preview = target() == ImageSave::TargetPreview || (conversion && format() != ImageSave::FormatExr);
+    m_projectionPanel->setVisible(conversion);
+    ui->sizeLabel->setVisible(!conversion);
+    ui->sizeCombo->setVisible(!conversion);
+    ui->channelScopeLabel->setVisible(!conversion); ui->channelScopeCombo->setVisible(!conversion);
+    ui->metadataLabel->setVisible(!conversion); ui->metadataCombo->setVisible(!conversion);
     const bool bracket = target() == ImageSave::TargetHdrBracketedImages;
     const bool jpeg = format() == ImageSave::FormatJpeg;
     const bool exr = format() == ImageSave::FormatExr;
@@ -316,7 +429,7 @@ void SaveImageDialog::updateOptions()
     ui->multipartCombo->setEnabled(layered);
     ui->multipartLabel->setVisible(layered);
     ui->multipartCombo->setVisible(layered);
-    const bool deep = exr && (layered ? m_fileDeep : m_activeDeep);
+    const bool deep = exr && !conversion && (layered ? m_fileDeep : m_activeDeep);
     ui->deepInfoLabel->setVisible(deep);
     ui->compressionCombo->setVisible(!deep);
     ui->pixelTypeCombo->setVisible(!deep);
@@ -349,6 +462,7 @@ void SaveImageDialog::updatePathExtension()
 void SaveImageDialog::requestSave()
 {
     updateSaveAvailability();
+    if (!ui->buttonBox->button(QDialogButtonBox::Save)->isEnabled()) return;
     if (!m_sourceAvailable || (target() == ImageSave::TargetPreview && !m_previewReady))
         return;
     if (m_derived && target() != ImageSave::TargetPreview && target() != ImageSave::TargetLayeredOriginal) return;

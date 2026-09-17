@@ -17,7 +17,7 @@ Viewing controls
 - View > Show toggles the Attributes and Layers panels. Data and display window
   coordinates remain available in Attributes; previews have no window outlines
   or outside-frame dimming.
-- All previews use the display window as their canvas, cropping data outside it.
+- Native previews use the display window as their canvas, cropping data outside it.
   Missing data shows the existing checkerboard and has no pixel readout. Copies
   and PNG previews keep missing areas transparent. JPEG previews offer a
   **Transparency background** choice of **Black (0)** (default) or **White (1)**,
@@ -126,6 +126,45 @@ Viewing controls
   a source layer manually returns the menu to Default. See the
   [Beachball checklist](docs/beachball-images.md), including
   frame 6 cropping and the difference between stored zeros and missing data.
+- Complete LatLong/Cube sources with `envmap` metadata support **View > Show >
+  Projection**: **LatLong**, **Cube**, **Pers-view**, and **Sphere**. New previews
+  show the source layout; the source projection is identified separately in the
+  information bar. Color layers and individual channels share projection controls.
+  Every view samples the original current resolution level, so switching or rotating
+  never discards the hidden hemisphere or repeatedly resamples a previous preview.
+  Cube uses OpenEXR's vertical +X/-X/+Y/-Y/+Z/-Z strip and face orientations.
+  LatLong uses its duplicated longitude endpoints and poles; cube interpolation
+  joins the duplicated edge/corner samples of adjacent faces.
+  Pers-view: left-drag to turn, wheel for horizontal FOV (90° initially, 10°–150°).
+  Sphere: left-drag to rotate an orthographic, unlit textured sphere; wheel zooms
+  the image. Both start toward +Z with +Y up and share yaw/pitch. Middle-drag retains
+  panning/window movement. **Reset Projection View** resets orientation and FOV;
+  color resets do not. Refresh and minimal view preserve projection state.
+  Native readouts stay exact; converted readouts label interpolated linear values
+  and source sample coordinates. Sphere's exterior is transparent with no readout.
+  Source statistics and Auto use the entire source level, independent of rotation.
+  Cube tail levels without six square faces allow native viewing/raw export only,
+  with an explanation in the information bar. Existing perspective/sphere images
+  (including WavyLinesSphere) are ordinary images, not reconstructable sources.
+- **Save > Projection Conversion** chooses output projection separately from file
+  format and displayed projection. Default scale N is the cube face width or
+  round(LatLong source width / 4), at least 1. LatLong output is 4N×2N; Cube N×6N;
+  perspective/sphere 2N×2N. Width/height and camera settings are editable subject to
+  each projection's aspect constraints. Editing these options does not alter the view.
+  PNG/JPEG apply the captured displayed color parameters, use existing transparency/
+  JPEG background rules, and draw enabled anomaly markers at final output size.
+  Conversion EXR defaults to FLOAT + ZIP, writes unexposed linear data as one scanline
+  part, and does not preserve the resolution pyramid. Color output uses canonical
+  RGB/RGBA and linear Rec.709 chromaticities; scalar output preserves the selected
+  name and values. Sphere adds coverage alpha when necessary (for a scalar named A,
+  the additional mask is `coverage.A`). LatLong/Cube conversions write the target
+  `envmap`; perspective/sphere do not. Windows start at (0,0), pixel aspect is 1,
+  and EXR conversion never includes display transforms or anomaly marks.
+  **Preview Image** and copy use the current display projection; **Active/Layered
+  Original** still retain source layout/values, with source `envmap` under Basic
+  metadata (removable under None). HDR/bracket exports keep source-linear semantics.
+  Saving captures the completed view and its color parameters, not pending rotation
+  requests. See the [environment image checklist](docs/environment-images.md).
 - Deep Scanline RGBA + Z point samples have a **Depth Range** bar with two handles:
   keep `Z_min ≤ Z ≤ Z_max`, initially all finite depths. Double-click the bar to
   restore the full range; constant-depth inputs disable dragging. RGB, individual

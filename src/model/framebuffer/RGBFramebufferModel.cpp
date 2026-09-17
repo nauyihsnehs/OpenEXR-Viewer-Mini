@@ -149,6 +149,7 @@ void RGBFramebufferModel::load(
 
 std::string RGBFramebufferModel::getColorInfo(int x, int y) const
 {
+    if (isProjected()) return projectedColorInfo(x, y);
     if (!isImageLoaded() || x < 0 || x >= width() || y < 0 || y >= height())
         return "";
     if (isDerivedPreview()) {
@@ -298,6 +299,7 @@ void RGBFramebufferModel::updateImage()
 {
     if (!isImageLoaded()) return;
     const auto                 source   = m_data;
+    const auto projection = projectionInput();
     const auto range = depthRange();
     const bool automatic = m_falseColorAutomatic;
     const auto                 mode     = m_previewMode;
@@ -309,66 +311,71 @@ void RGBFramebufferModel::updateImage()
     const double maximum  = m_falseColorMax;
     const auto   colormap = m_falseColorMap;
     requestRender(
-      [source, range, automatic, mode, method, exposure, params, minimum, maximum, colormap](
+      [source, projection, range, automatic, mode, method, exposure, params, minimum, maximum, colormap](
         const Cancellation& cancel) -> RenderResult {
           const auto data = DeepPreview::compose(source, range, cancel);
           if (!data || cancel->load()) return {};
           const double low = automatic && data->hasFiniteLuminance ? data->luminanceMin : minimum;
           const double high = automatic && data->hasFiniteLuminance ? data->luminanceMax : maximum;
-          QImage image(data->width, data->height, QImage::Format_RGBA8888);
-          if (image.isNull()) return image;
-          uchar*     bits    = image.bits();
-          const auto stride  = image.bytesPerLine();
-          const int  threads = renderThreadCount();
-          Q_UNUSED(threads);
-          const auto mapColor = [&](const float* pixel, uchar* output) {
-              if (mode == Preview_FalseColor) {
-                  float rgb[3];
-                  colormap->getRGBValue(ToneMapping::luminance(pixel[0], pixel[1], pixel[2]),
-                                       low, high, rgb);
-                  for (int c = 0; c < 3; ++c) output[c] = ToneMapping::toByte(rgb[c]);
-              } else {
-                  for (int c = 0; c < 3; ++c) {
-                      const double value = mode == Preview_ToneMapping
-                        ? ToneMapping::toSrgb(pixel[c], method, params[0], params[1], params[2], params[3])
-                        : ColorTransform::to_sRGB(exposure * pixel[c]);
-                      output[c] = ToneMapping::toByte(value);
+          const auto mapper = [mode, method, exposure, params, colormap, low, high](
+            const FramebufferData& frame, const Cancellation& cancel) -> QImage {
+              const auto* data = &frame;
+              QImage image(data->width, data->height, QImage::Format_RGBA8888);
+              if (image.isNull()) return image;
+              uchar*     bits    = image.bits();
+              const auto stride  = image.bytesPerLine();
+              const int  threads = renderThreadCount();
+              Q_UNUSED(threads);
+              const auto mapColor = [&](const float* pixel, uchar* output) {
+                  if (mode == Preview_FalseColor) {
+                      float rgb[3];
+                      colormap->getRGBValue(ToneMapping::luminance(pixel[0], pixel[1], pixel[2]),
+                                           low, high, rgb);
+                      for (int c = 0; c < 3; ++c) output[c] = ToneMapping::toByte(rgb[c]);
+                  } else {
+                      for (int c = 0; c < 3; ++c) {
+                          const double value = mode == Preview_ToneMapping
+                            ? ToneMapping::toSrgb(pixel[c], method, params[0], params[1], params[2], params[3])
+                            : ColorTransform::to_sRGB(exposure * pixel[c]);
+                          output[c] = ToneMapping::toByte(value);
+                      }
                   }
-              }
-          };
+              };
 #pragma omp parallel for num_threads(                                          \
     threads) if (size_t(data->width) * data->height >= 262144)
-          for (int y = 0; y < data->height; ++y) {
-              if (cancel->load()) continue;
-              uchar*       line = bits + size_t(y) * stride;
-              for (int x = 0; x < data->width; ++x) {
-                  uchar* output = line + 4 * x;
-                  if (data->stereo[0]) {
-                      const QPoint position = data->dataWindow.topLeft() + QPoint(x, y);
-                      uchar eyes[2][3] = {};
-                      bool covered = false;
-                      for (size_t i = 0; i < 2; ++i) {
-                          const auto& eye = *data->stereo[i];
-                          if (!eye.dataWindow.contains(position)) continue;
-                          const QPoint local = position - eye.dataWindow.topLeft();
-                          if (!eye.covers(size_t(local.y()) * eye.width + local.x())) continue;
-                          mapColor(&eye.pixels[4 * (size_t(local.y()) * eye.width + local.x())], eyes[i]);
-                          covered = true;
+              for (int y = 0; y < data->height; ++y) {
+                  if (cancel->load()) continue;
+                  uchar*       line = bits + size_t(y) * stride;
+                  for (int x = 0; x < data->width; ++x) {
+                      uchar* output = line + 4 * x;
+                      if (data->stereo[0]) {
+                          const QPoint position = data->dataWindow.topLeft() + QPoint(x, y);
+                          uchar eyes[2][3] = {};
+                          bool covered = false;
+                          for (size_t i = 0; i < 2; ++i) {
+                              const auto& eye = *data->stereo[i];
+                              if (!eye.dataWindow.contains(position)) continue;
+                              const QPoint local = position - eye.dataWindow.topLeft();
+                              if (!eye.covers(size_t(local.y()) * eye.width + local.x())) continue;
+                              mapColor(&eye.pixels[4 * (size_t(local.y()) * eye.width + local.x())], eyes[i]);
+                              covered = true;
+                          }
+                          output[0] = eyes[0][0];
+                          output[1] = eyes[1][1];
+                          output[2] = eyes[1][2];
+                          output[3] = covered ? 255 : 0;
+                      } else {
+                          if (!data->covers(size_t(y) * data->width + x)) {
+                              std::fill(output, output + 4, 0); continue;
+                          }
+                          mapColor(&data->pixels[4 * (size_t(y) * data->width + x)], output);
+                          // Premultiplied color over black is already RGB.
+                          output[3] = 255;
                       }
-                      output[0] = eyes[0][0];
-                      output[1] = eyes[1][1];
-                      output[2] = eyes[1][2];
-                      output[3] = covered ? 255 : 0;
-                  } else {
-                      if (!data->covers(size_t(y) * data->width + x)) {
-                          std::fill(output, output + 4, 0); continue;
-                      }
-                      mapColor(&data->pixels[4 * (size_t(y) * data->width + x)], output);
-                      // Premultiplied color over black is already RGB.
-                      output[3] = 255;
                   }
               }
-          }
-          return cancel->load() ? RenderResult() : RenderResult(image, data);
+              return cancel->load() ? QImage() : image;
+          };
+          return renderProjection(data, projection, mapper, cancel);
       });
 }

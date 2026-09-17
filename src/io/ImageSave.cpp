@@ -2,6 +2,9 @@
 #include <util/ResolutionLevels.h>
 #include <limits>
 #include <util/PreviewImage.h>
+#include <util/AnomalyMarkers.h>
+#include <QPainter>
+#include <OpenEXR/ImfEnvmapAttribute.h>
 
 #include <io/ImageSavePlan.h>
 #include <model/OpenEXRImage.h>
@@ -66,6 +69,7 @@ namespace
         bool                     hasChromaticities = false;
         Imf::Chromaticities       chromaticities;
         ViewMetadata             views;
+        int envmap = -1;
         std::vector<ChannelData> channels;
         std::shared_ptr<const DeepSamples> deep;
     };
@@ -202,6 +206,7 @@ namespace
         PartData part;
         part.name        = "active";
         part.views       = model->rawViews();
+        part.envmap      = model->rawEnvmap();
         part.width       = model->width();
         part.height      = model->height();
         part.pixelAspect = model->pixelAspectRatio();
@@ -278,6 +283,8 @@ namespace
             throw std::runtime_error("The selected resolution level is too large to export safely.");
         part.width = int(width);
         part.views         = ViewMetadata::read(header);
+        if (const auto* env = header.findTypedAttribute<Imf::EnvmapAttribute>("envmap"))
+            part.envmap = int(env->value());
         part.height = int(height);
         part.pixelAspect   = header.pixelAspectRatio();
         part.dataWindow    = dataWindow;
@@ -395,6 +402,8 @@ namespace
             header.setVersion(1);
         }
         if (options.metadata == ImageSave::MetadataBasic) part.views.write(header);
+        if (options.metadata == ImageSave::MetadataBasic && part.envmap >= 0)
+            header.insert("envmap", Imf::EnvmapAttribute(Imf::Envmap(part.envmap)));
         if (options.metadata == ImageSave::MetadataBasic && part.hasChromaticities)
             header.insert("chromaticities", Imf::ChromaticitiesAttribute(part.chromaticities));
 
@@ -554,6 +563,7 @@ namespace
         flattened.displayWindow = parts[0].displayWindow;
         flattened.hasChromaticities = parts[0].hasChromaticities;
         flattened.chromaticities = parts[0].chromaticities;
+        flattened.envmap = parts[0].envmap;
 
         for (const PartData& part : parts) {
             // A single output header cannot describe different source gamuts.
@@ -563,6 +573,8 @@ namespace
                   ImageSave::StatusFailed,
                   QObject::tr("Cannot flatten parts with different chromaticities. Preserve parts instead."));
             }
+            if (options.metadata == ImageSave::MetadataBasic && part.envmap != flattened.envmap)
+                return result(ImageSave::StatusFailed, QObject::tr("Cannot flatten parts with different environment projections. Preserve parts instead."));
             flattened.hasChromaticities |= part.hasChromaticities;
             if (part.dataWindow != flattened.dataWindow
                 || part.displayWindow != flattened.displayWindow
@@ -677,15 +689,16 @@ namespace
     }
 
     ImageSave::Result savePreview(
-      const FramebufferModel* model, const ImageSave::Options& options)
+      const FramebufferModel* model, const ImageSave::Options& options, const PreviewImage::Snapshot* snapshot = nullptr)
     {
-        if (!model || !model->isPreviewReady())
+        if (!snapshot && (!model || !model->isPreviewReady()))
             return result(
               ImageSave::StatusFailed,
               "The current preview is still rendering.");
         const QColor background = options.format != ImageSave::FormatJpeg ? Qt::transparent
           : options.jpegBackground == ImageSave::BackgroundWhite ? Qt::white : Qt::black;
-        QImage image = PreviewImage::render(*model, options.maxWidth, background);
+        QImage image = snapshot ? PreviewImage::render(*snapshot, options.maxWidth, background)
+                                : PreviewImage::render(*model, options.maxWidth, background);
         if (image.isNull()) {
             return result(
               ImageSave::StatusFailed,
@@ -884,16 +897,90 @@ namespace
         return writeMultipartExr(parts, options);
     }
 
+    ImageSave::Result saveProjection(const ImageSave::Source& source, const ImageSave::Options& options)
+    {
+        const auto snapshot = source.environment ? *source.environment
+          : source.activeModel ? source.activeModel->projectionSnapshot() : EnvironmentProjection::Snapshot();
+        if (!snapshot.source || !snapshot.mapColors)
+            throw std::runtime_error("A completed environment preview is required for projection conversion.");
+        auto state = options.projection;
+        if (state.type == EnvironmentProjection::Source) state = snapshot.state;
+        const auto size = options.projectionSize.isEmpty()
+          ? EnvironmentProjection::defaultSize(*snapshot.source, state.type) : options.projectionSize;
+        const auto cancel = std::make_shared<std::atomic_bool>(false);
+        const auto projected = EnvironmentProjection::project(snapshot, state, size, cancel);
+        if (options.format == ImageSave::FormatExr) {
+            PartData part;
+            part.name = "projection";
+            part.width = size.width(); part.height = size.height(); part.pixelAspect = 1.f;
+            part.dataWindow = part.displayWindow = Imath::Box2i(Imath::V2i(0, 0),
+              Imath::V2i(part.width - 1, part.height - 1));
+            if (state.type == EnvironmentProjection::LatLong || state.type == EnvironmentProjection::Cube)
+                part.envmap = int(state.type);
+            const bool color = snapshot.stride == 4;
+            part.hasChromaticities = color;
+            part.chromaticities = Imf::Chromaticities(); // Display-linear RGB is Rec.709.
+            const bool sourceAlpha = std::find(snapshot.components.begin(), snapshot.components.end(), 3) != snapshot.components.end();
+            std::vector<std::string> names = color ? std::vector<std::string>{"R", "G", "B"} : snapshot.names;
+            const bool coverageAlpha = state.type == EnvironmentProjection::Sphere;
+            if (color && (sourceAlpha || coverageAlpha)) names.push_back("A");
+            if (!color && coverageAlpha) names.push_back(names[0] == "A" ? "coverage.A" : "A");
+            const size_t count = size_t(part.width) * part.height;
+            for (size_t c = 0; c < names.size(); ++c) {
+                ChannelData channel;
+                channel.name = channel.sourceName = names[c];
+                channel.xSampling = channel.ySampling = 1;
+                channel.width = part.width; channel.height = part.height;
+                channel.pixels.resize(count);
+                for (size_t p = 0; p < count; ++p) {
+                    const bool alpha = (color && c == 3) || (!color && c == 1);
+                    channel.pixels[p] = !projected->covers(p) ? 0.f
+                      : alpha && (!color || !sourceAlpha) ? 1.f
+                      : projected->pixels[p * snapshot.stride + c];
+                }
+                part.channels.push_back(std::move(channel));
+            }
+            auto convertedOptions = options;
+            // Target projection and color encoding describe converted values, not optional source metadata.
+            convertedOptions.metadata = ImageSave::MetadataBasic;
+            return writeSinglePartExr(part, convertedOptions);
+        }
+        if (options.format != ImageSave::FormatPng && options.format != ImageSave::FormatJpeg)
+            throw std::runtime_error("Projection Conversion supports PNG, JPEG or EXR.");
+        QImage image = snapshot.mapColors(*projected, cancel);
+        if (image.isNull()) throw std::runtime_error("Unable to allocate converted preview.");
+        if (options.format == ImageSave::FormatJpeg) {
+            QImage background(image.size(), QImage::Format_RGB888);
+            if (background.isNull()) throw std::runtime_error("Unable to allocate JPEG background.");
+            background.fill(options.jpegBackground == ImageSave::BackgroundWhite ? Qt::white : Qt::black);
+            { QPainter painter(&background); painter.drawImage(0, 0, image); }
+            image = background;
+        }
+        if (snapshot.markers) {
+            QPainter painter(&image);
+            AnomalyMarkers::draw(painter, projected->anomalyRegions, image.rect(),
+              EnvironmentProjection::coverage(*projected), QTransform(), image.rect());
+        }
+        QImageWriter writer(options.path, writerFormat(options.format));
+        if (options.format == ImageSave::FormatJpeg) writer.setQuality(options.quality);
+        if (!writer.write(image)) return result(ImageSave::StatusFailed, writer.errorString());
+        return result(ImageSave::StatusSaved, QObject::tr("Saved %1").arg(options.path), {options.path});
+    }
+
     ImageSave::Result saveResolved(
       const ImageSave::Source& source, const ImageSave::Options& options)
     {
+        if (options.target == ImageSave::TargetProjectionConversion) {
+            try { return saveProjection(source, options); }
+            catch (const std::exception& error) { return result(ImageSave::StatusFailed, QString::fromUtf8(error.what())); }
+        }
         if (options.target == ImageSave::TargetPreview) {
             if (!source.activeModel) {
                 return result(
                   ImageSave::StatusFailed,
                   QObject::tr("No active image."));
             }
-            return savePreview(source.activeModel, options);
+            return savePreview(source.activeModel, options, source.preview.get());
         }
 
         if (options.target == ImageSave::TargetLayeredOriginal) {

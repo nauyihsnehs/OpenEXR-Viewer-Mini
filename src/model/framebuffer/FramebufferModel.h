@@ -33,6 +33,7 @@
 #pragma once
 
 #include "FramebufferData.h"
+#include <util/EnvironmentProjection.h>
 #include <QFutureWatcher>
 #include <QImage>
 #include <QObject>
@@ -49,6 +50,17 @@ class FramebufferModel: public QObject
     ~FramebufferModel() override;
 
     const QImage&             getLoadedImage() const { return m_image; }
+    EnvironmentProjection::SourceInfo environmentSource() const { return EnvironmentProjection::describe(*m_data); }
+    int rawEnvmap() const { return m_data->envmap; }
+    EnvironmentProjection::State projectionState() const;
+    EnvironmentProjection::State requestedProjectionState() const;
+    void setProjectionState(EnvironmentProjection::State state);
+    EnvironmentProjection::Snapshot projectionSnapshot() const;
+    QRect previewDataWindow() const { return m_projected ? m_projected->dataWindow : getDataWindow(); }
+    QRect previewDisplayWindow() const { return m_projected ? m_projected->displayWindow : getDisplayWindow(); }
+    float previewPixelAspect() const { return m_projected ? 1.f : pixelAspectRatio(); }
+    bool isProjected() const { return bool(m_projected); }
+    std::string projectedColorInfo(int x, int y) const;
     // Deep has no single raw value per pixel: its 2D buffer is the current composite.
     // Lossless Deep export must read deepSamples(), including native channel types.
     const std::vector<float>& getRawPixels() const
@@ -87,7 +99,7 @@ class FramebufferModel: public QObject
     bool highlightNonFinite() const { return m_highlightNonFinite; }
     const std::vector<FramebufferData::AnomalyRegion>& anomalyRegions() const
     {
-        return m_data->anomalyRegions;
+        return m_projected ? m_projected->anomalyRegions : m_data->anomalyRegions;
     }
     void setHighlightNonFinite(bool enabled)
     {
@@ -130,6 +142,10 @@ class FramebufferModel: public QObject
           : image(std::move(rendered)), data(std::move(snapshot)) {}
         QImage image;
         std::shared_ptr<const FramebufferData> data;
+        std::shared_ptr<const FramebufferData> projected;
+        QRegion projectedCoverage;
+        EnvironmentProjection::State projectionState;
+        EnvironmentProjection::ColorMapper mapColors;
         QString error;
     };
     using Renderer = std::function<RenderResult(const Cancellation&)>;
@@ -138,9 +154,17 @@ class FramebufferModel: public QObject
     static int                             renderThreadCount();
     virtual void                           updateImage() = 0;
     std::shared_ptr<const FramebufferData> m_data;
+    EnvironmentProjection::Snapshot projectionInput() const;
+    static RenderResult renderProjection(const std::shared_ptr<const FramebufferData>& data,
+      EnvironmentProjection::Snapshot snapshot, EnvironmentProjection::ColorMapper mapper,
+      const Cancellation& cancel);
 
   private:
     DepthRange m_depthRange;
+    EnvironmentProjection::State m_requestedProjection, m_committedProjection;
+    EnvironmentProjection::ColorMapper m_colorMapper;
+    std::shared_ptr<const FramebufferData> m_projected;
+    QRegion m_projectedCoverage;
     void                         startRender();
     void                         setReady(bool ready);
     QImage                       m_image;

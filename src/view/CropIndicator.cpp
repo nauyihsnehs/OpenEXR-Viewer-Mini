@@ -16,7 +16,7 @@ CropIndicator::CropIndicator(QWidget* parent) : QWidget(parent)
 void CropIndicator::setModel(const FramebufferModel* model)
 {
     QString text;
-    if (model && model->isImageLoaded()) {
+    if (model && model->isImageLoaded() && !model->isProjected()) {
         const QRect data = model->getDataWindow();
         const QRect display = model->getDisplayWindow();
         QStringList directions;

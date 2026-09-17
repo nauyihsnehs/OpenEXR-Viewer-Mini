@@ -42,7 +42,7 @@ namespace
         return QColor(255, 255, 0);
     }
 
-    std::vector<Marker> layout(const FramebufferModel& model,
+    std::vector<Marker> layout(const std::vector<FramebufferData::AnomalyRegion>& regions, const QRectF& visible,
                               const QTransform& transform, const QRectF& clip)
     {
         std::vector<Marker> markers;
@@ -50,8 +50,7 @@ namespace
         // Bound the grid to at most 33 x 33 cells, including boundary cells.
         // All marker sizes use the same path, even for full-resolution exports.
         const double cellSize = std::max({32., clip.width() / 32., clip.height() / 32.});
-        const QRectF visible = PreviewImage::Geometry(model).visiblePixels;
-        for (const auto& region : model.anomalyRegions()) {
+        for (const auto& region : regions) {
             const QRectF bounds = QRectF(region.bounds).intersected(visible);
             if (bounds.isEmpty()) continue;
             const QRectF mapped = transform.mapRect(bounds);
@@ -104,12 +103,21 @@ void AnomalyMarkers::draw(QPainter& painter, const FramebufferModel& model,
                          const QTransform& imageToTarget, const QRectF& clip)
 {
     if (!model.isImageLoaded() || !model.highlightNonFinite() || clip.isEmpty()) return;
-    const auto markers = layout(model, imageToTarget, clip);
+    draw(painter, model.anomalyRegions(), PreviewImage::Geometry(model).visiblePixels,
+         model.pixelCoverage(), imageToTarget, clip);
+}
+
+void AnomalyMarkers::draw(QPainter& painter, const std::vector<FramebufferData::AnomalyRegion>& regions,
+                         const QRectF& visible, const QRegion& covered,
+                         const QTransform& imageToTarget, const QRectF& clip)
+{
+    if (clip.isEmpty() || covered.isEmpty() || regions.empty()) return;
+    const auto markers = layout(regions, visible, imageToTarget, clip);
     painter.save();
     painter.setClipRect(clip, Qt::IntersectClip);
-    if (model.isDerivedPreview()) {
+    {
         QPainterPath coverage;
-        coverage.addRegion(model.pixelCoverage());
+        coverage.addRegion(covered);
         painter.setClipPath(imageToTarget.map(coverage), Qt::IntersectClip);
     }
     painter.setRenderHint(QPainter::Antialiasing);

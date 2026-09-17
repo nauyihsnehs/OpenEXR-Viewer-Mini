@@ -14,7 +14,7 @@ PreviewImage::Geometry::Geometry(const QRect& data, const QRect& display, double
 {}
 
 PreviewImage::Geometry::Geometry(const FramebufferModel& model)
-    : Geometry(model.getDataWindow(), model.getDisplayWindow(), model.pixelAspectRatio())
+    : Geometry(model.previewDataWindow(), model.previewDisplayWindow(), model.previewPixelAspect())
 {}
 
 QRectF PreviewImage::Geometry::sceneWindow() const
@@ -48,9 +48,24 @@ QTransform PreviewImage::Geometry::imageToOutput(const QSize& size) const
 QImage PreviewImage::render(const FramebufferModel& model, int maxWidth, const QColor& background)
 {
     if (!model.isPreviewReady()) return {};
-    const QImage source = model.getLoadedImage();
+    return render(capture(model), maxWidth, background);
+}
+
+PreviewImage::Snapshot PreviewImage::capture(const FramebufferModel& model)
+{
+    Snapshot snapshot;
+    snapshot.image = model.getLoadedImage();
+    snapshot.geometry = Geometry(model);
+    snapshot.coverage = model.pixelCoverage();
+    if (model.highlightNonFinite()) snapshot.anomalies = model.anomalyRegions();
+    return snapshot;
+}
+
+QImage PreviewImage::render(const Snapshot& snapshot, int maxWidth, const QColor& background)
+{
+    const QImage& source = snapshot.image;
     if (source.isNull()) return {};
-    const Geometry geometry(model);
+    const Geometry& geometry = snapshot.geometry;
     const QSize size = geometry.outputSize(maxWidth);
     if (size.isEmpty()) return {};
     QImage output(size, QImage::Format_ARGB32_Premultiplied);
@@ -63,6 +78,11 @@ QImage PreviewImage::render(const FramebufferModel& model, int maxWidth, const Q
         painter.setClipRect(geometry.visiblePixels);
         painter.drawImage(geometry.visiblePixels, source, geometry.visiblePixels);
     }
-    AnomalyMarkers::composite(output, model);
+    {
+        QPainter painter(&output);
+        const auto transform = geometry.imageToOutput(size);
+        AnomalyMarkers::draw(painter, snapshot.anomalies, geometry.visiblePixels,
+          snapshot.coverage, transform, transform.mapRect(geometry.visiblePixels).intersected(output.rect()));
+    }
     return output;
 }

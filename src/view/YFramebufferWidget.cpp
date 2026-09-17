@@ -254,7 +254,7 @@ void YFramebufferWidget::setRange(double min, double max)
 PreviewState YFramebufferWidget::previewState() const
 {
     PreviewState state;
-    if (m_model) state.depth = m_model->depthRange();
+    if (m_model) { state.depth = m_model->depthRange(); state.projection = m_model->projectionState(); }
     state.colormap     = ui->cbColormap->currentIndex();
     state.minimum      = ui->sbMinValue->value();
     state.maximum      = ui->sbMaxValue->value();
@@ -266,6 +266,7 @@ PreviewState YFramebufferWidget::previewState() const
 void YFramebufferWidget::restorePreviewState(const PreviewState& state)
 {
     m_model->setDepthRange(state.depth);
+    m_model->setProjectionState(state.projection);
     ui->anomalyMarkerButton->setChecked(state.highlightNonFinite);
     ui->cbColormap->setCurrentIndex(state.colormap);
     ui->cbScale->setChecked(state.scaleVisible);

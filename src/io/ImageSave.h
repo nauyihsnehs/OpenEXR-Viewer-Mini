@@ -3,6 +3,8 @@
 #include <QString>
 #include <util/ResolutionLevel.h>
 #include <QStringList>
+#include <util/EnvironmentProjection.h>
+#include <util/PreviewImage.h>
 
 class FramebufferModel;
 class OpenEXRImage;
@@ -15,6 +17,7 @@ namespace ImageSave
         TargetActiveOriginal,
         TargetLayeredOriginal,
         TargetHdrBracketedImages,
+        TargetProjectionConversion,
     };
 
     enum Format
@@ -81,6 +84,8 @@ namespace ImageSave
         Target  target = TargetPreview;
         Format  format = FormatPng;
         QString path;
+        EnvironmentProjection::State projection;
+        QSize projectionSize; // Empty selects defaults from the captured source level.
 
         int maxWidth = 0;
         int quality  = 90;
@@ -102,6 +107,8 @@ namespace ImageSave
         const FramebufferModel* activeModel = nullptr;
         OpenEXRImage*           sourceImage = nullptr;
         ResolutionLevel resolutionLevel;
+        std::shared_ptr<const EnvironmentProjection::Snapshot> environment;
+        std::shared_ptr<const PreviewImage::Snapshot> preview;
     };
 
     struct Result {

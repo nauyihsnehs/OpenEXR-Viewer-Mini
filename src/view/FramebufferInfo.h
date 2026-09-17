@@ -35,7 +35,15 @@ inline QString framebufferSummaryText(const FramebufferModel* model)
     }
     const QString level = model && model->resolutionLevelCount() > 1
       ? QString("Level %1 | ").arg(QString::fromStdString(model->resolutionLevel().toString())) : QString();
-    return level + "Size " + framebufferSizeText(model)
+    QString environment;
+    if (model && model->rawEnvmap() >= 0) {
+        environment = QString("Source %1 | Display %2 %3×%4 | ")
+          .arg(EnvironmentProjection::name(EnvironmentProjection::Type(model->rawEnvmap())))
+          .arg(EnvironmentProjection::name(model->projectionState().type))
+          .arg(model->previewDisplayWindow().width()).arg(model->previewDisplayWindow().height());
+        if (!model->environmentSource().available()) environment += model->environmentSource().unavailableReason + " | ";
+    }
+    return environment + level + "Size " + framebufferSizeText(model)
            + (model && model->isDerivedPreview() ? "   Two-eye source max "
               : model && model->hasDeepSamples() ? "   Deep source max " : "   Max ")
            + framebufferDatasetValueText(model, false);

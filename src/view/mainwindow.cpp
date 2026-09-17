@@ -280,6 +280,38 @@ MainWindow::MainWindow(QWidget* parent)
     setupTitleBar();
     setupPreviewModeActions();
     setupStereoActions();
+    m_projectionMenu = ui->menu_Show->addMenu(tr("Projection"));
+    m_projectionMenu->setObjectName("menu_Projection");
+    m_projectionMenu->setToolTipsVisible(true);
+    m_projectionActions = new QActionGroup(this);
+    m_projectionActions->setExclusive(true);
+    for (int i = EnvironmentProjection::LatLong; i <= EnvironmentProjection::Sphere; ++i) {
+        auto* action = m_projectionMenu->addAction(EnvironmentProjection::name(EnvironmentProjection::Type(i)));
+        action->setCheckable(true);
+        action->setData(i);
+        action->setObjectName(QString("action_Projection%1").arg(i));
+        m_projectionActions->addAction(action);
+    }
+    connect(m_projectionActions, &QActionGroup::triggered, this, [this](QAction* action) {
+        auto* document = currentFileWidget();
+        auto* model = document ? const_cast<FramebufferModel*>(document->activeFramebufferModel()) : nullptr;
+        if (!model) return;
+        auto state = model->requestedProjectionState();
+        state.type = EnvironmentProjection::Type(action->data().toInt());
+        model->setProjectionState(state);
+        updateShowActions();
+    });
+    m_projectionMenu->addSeparator();
+    m_resetProjection = m_projectionMenu->addAction(tr("Reset Projection View"));
+    m_resetProjection->setObjectName("action_ResetProjectionView");
+    connect(m_resetProjection, &QAction::triggered, this, [this] {
+        auto* document = currentFileWidget();
+        auto* model = document ? const_cast<FramebufferModel*>(document->activeFramebufferModel()) : nullptr;
+        if (!model) return;
+        auto state = model->requestedProjectionState();
+        state.yaw = state.pitch = 0.; state.fieldOfView = 90.;
+        model->setProjectionState(state);
+    });
     m_resolutionMenu = ui->menu_Show->addMenu(tr("Resolution Level"));
     m_resolutionMenu->setObjectName("menu_ResolutionLevel");
     m_resolutionActions = new QActionGroup(this);
@@ -726,9 +758,16 @@ void MainWindow::updateShowActions()
       = widget ? widget->activeFramebufferModel() : nullptr;
     const bool copyEnabled = model && model->isPreviewReady();
 
-    ui->action_Save->setEnabled(model && model->isImageLoaded());
+    ui->action_Save->setEnabled(model && !model->getLoadedImage().isNull());
     ui->action_CopyImage->setEnabled(copyEnabled);
     ui->action_CopyImageFullResolution->setEnabled(copyEnabled);
+    if (m_projectionMenu) {
+        const bool enabled = model && model->isImageLoaded() && model->environmentSource().available();
+        m_projectionMenu->setEnabled(enabled);
+        m_projectionMenu->setToolTip(model ? model->environmentSource().unavailableReason : tr("No image."));
+        for (auto* action : m_projectionActions->actions())
+            action->setChecked(model && model->rawEnvmap() >= 0 && action->data().toInt() == model->projectionState().type);
+    }
     if (m_resolutionMenu) {
         const auto levels = widget ? widget->resolutionLevels() : std::vector<ResolutionLevel>();
         const bool ripmap = widget && widget->hasRipmapLevels();
@@ -996,6 +1035,13 @@ void MainWindow::toggleMinimalView()
         if (!m_minimalModel || !m_minimalModel->isImageLoaded()) leaveMinimalView();
         else updateMinimalSummary();
     }));
+    const auto projectionCanvasSize = std::make_shared<QSize>(PreviewImage::Geometry(*model).outputSize());
+    m_minimalConnections.append(connect(model, &FramebufferModel::imageChanged, this,
+      [this, projectionCanvasSize] {
+          if (!m_minimalView || !m_minimalModel) return;
+          const auto next = PreviewImage::Geometry(*m_minimalModel).outputSize();
+          if (next != *projectionCanvasSize) { *projectionCanvasSize = next; resizeMinimalView(m_minimalPage->view()->viewState().zoom); }
+      }));
     m_minimalConnections.append(connect(model, &FramebufferModel::imageLoaded,
                                         this, [this] {
         if (m_minimalView) resizeMinimalView(m_minimalPage->view()->viewState().zoom);
@@ -1086,7 +1132,14 @@ void MainWindow::updateMinimalSummary()
     const QString layer = document && document->sourceImage()
                             && (document->sourceImage()->getLayerModel()->hasViews() || m_minimalModel->resolutionLevelCount() > 1)
                             ? document->activeLayerTitleText() : QString();
-    const QSize displaySize = m_minimalModel->getDisplayWindow().size();
+    if (m_minimalModel->rawEnvmap() >= 0) {
+        parameter += tr(" | Source %1 → %2")
+          .arg(EnvironmentProjection::name(EnvironmentProjection::Type(m_minimalModel->rawEnvmap())))
+          .arg(EnvironmentProjection::name(m_minimalModel->projectionState().type));
+        if (!m_minimalModel->environmentSource().available())
+            parameter += " | " + m_minimalModel->environmentSource().unavailableReason;
+    }
+    const QSize displaySize = m_minimalModel->previewDisplayWindow().size();
     m_minimalPage->setSummary(tr("%1 | Display %2 x %3 | %4% | %5")
       .arg(layer.isEmpty() ? file : file + " | " + layer)
       .arg(displaySize.width()).arg(displaySize.height())
@@ -1197,12 +1250,15 @@ void MainWindow::on_action_Save_triggered()
                 multilevel = true; // Also warn when another part restricts the document to level 0.
         }
     }
+    const auto environment = std::make_shared<const EnvironmentProjection::Snapshot>(model->projectionSnapshot());
+    const auto preview = std::make_shared<const PreviewImage::Snapshot>(PreviewImage::capture(*model));
+    dialog.setEnvironmentSource(*environment);
     dialog.setResolutionLevelInfo(savedLevel, multilevel);
     dialog.setDeepSourceInfo(model && bool(model->deepSamples()), deepSource);
-    const auto updateSource = [&dialog, guardedModel, guardedImage] {
+    const auto updateSource = [&dialog, guardedModel, guardedImage, preview] {
         dialog.setSourceState(
           guardedModel && guardedImage && guardedModel->isImageLoaded(),
-          guardedModel && guardedModel->isPreviewReady(),
+          guardedModel && !preview->image.isNull(),
           guardedModel ? guardedModel->errorString() : QString(),
           guardedModel && guardedModel->isDerivedPreview());
     };
@@ -1221,15 +1277,17 @@ void MainWindow::on_action_Save_triggered()
       &dialog,
       &SaveImageDialog::saveRequested,
       &dialog,
-      [this, &dialog, guardedModel, guardedImage, updateSource, savedLevel]() {
+      [this, &dialog, guardedModel, guardedImage, updateSource, savedLevel, environment, preview]() {
           updateSource();
           if (!guardedModel || !guardedImage || !guardedModel->isImageLoaded()) return;
           ImageSave::Source source;
           source.activeModel = guardedModel.data();
           source.sourceImage = guardedImage.data();
           source.resolutionLevel = savedLevel;
+          source.environment = environment;
+          source.preview = preview;
           ImageSave::Options options    = dialog.options();
-          if (options.target == ImageSave::TargetPreview && !guardedModel->isPreviewReady())
+          if (options.target == ImageSave::TargetPreview && preview->image.isNull())
               return;
           ImageSave::Result  saveResult = ImageSave::save(source, options);
 
@@ -1237,7 +1295,7 @@ void MainWindow::on_action_Save_triggered()
               options.conflict = conflictChoice(this, saveResult.paths);
               updateSource();
               if (!guardedModel || !guardedImage || !guardedModel->isImageLoaded()) return;
-              if (options.target == ImageSave::TargetPreview && !guardedModel->isPreviewReady())
+              if (options.target == ImageSave::TargetPreview && preview->image.isNull())
                   return;
               saveResult       = ImageSave::save(source, options);
           }

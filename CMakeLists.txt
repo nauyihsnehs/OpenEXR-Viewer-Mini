@@ -196,6 +196,8 @@ set(PROJECT_SOURCES
     src/util/ColorTransform.cpp
     src/util/AnomalyMarkers.h
     src/util/AnomalyMarkers.cpp
+    src/util/EnvironmentProjection.h
+    src/util/EnvironmentProjection.cpp
     src/util/PreviewImage.h
     src/util/PreviewImage.cpp
     src/util/ResolutionLevel.h

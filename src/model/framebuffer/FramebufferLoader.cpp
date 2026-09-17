@@ -1,4 +1,5 @@
 #include "FramebufferLoader.h"
+#include <OpenEXR/ImfEnvmapAttribute.h>
 #include <util/ResolutionLevels.h>
 #include "ToneMapping.h"
 #include "PixelDiagnostics.h"
@@ -155,6 +156,15 @@ DecodeResult FramebufferLoader::decode(
     data->resolutionLevel = level;
     data->resolutionLevels = geometry.levels;
     data->rawViews             = ViewMetadata::read(header);
+    if (const auto* env = header.findTypedAttribute<Imf::EnvmapAttribute>("envmap")) {
+        data->envmap = int(env->value());
+        const auto base = header.dataWindow();
+        const int64_t w = int64_t(base.max.x) - base.min.x + 1;
+        const int64_t h = int64_t(base.max.y) - base.min.y + 1;
+        data->completeEnvironment = w > 0 && h > 0 &&
+          ((data->envmap == Imf::ENVMAP_LATLONG && w == 2 * h)
+           || (data->envmap == Imf::ENVMAP_CUBE && h == 6 * w));
+    }
     data->width                = dimension(window.min.x, window.max.x);
     data->height               = dimension(window.min.y, window.max.y);
     data->pixelAspect          = header.pixelAspectRatio();

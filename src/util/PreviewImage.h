@@ -4,6 +4,8 @@
 #include <QColor>
 #include <QRectF>
 #include <QTransform>
+#include <QRegion>
+#include <model/framebuffer/FramebufferData.h>
 
 class FramebufferModel;
 
@@ -21,6 +23,16 @@ namespace PreviewImage
         QSize outputSize(int maxWidth = 0) const;
         QTransform imageToOutput(const QSize& size) const;
     };
+
+    struct Snapshot {
+        QImage image;
+        Geometry geometry {QRect(), QRect(), 1.};
+        std::vector<FramebufferData::AnomalyRegion> anomalies;
+        QRegion coverage;
+    };
+    Snapshot capture(const FramebufferModel& model);
+    QImage render(const Snapshot& snapshot, int maxWidth = 0,
+                  const QColor& background = Qt::transparent);
 
     // Allocate only the final output size. Null means unavailable or too large.
     QImage render(const FramebufferModel& model, int maxWidth = 0,

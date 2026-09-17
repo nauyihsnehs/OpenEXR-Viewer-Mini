@@ -927,7 +927,7 @@ void RGBFramebufferWidget::on_zoomButton_clicked()
 PreviewState RGBFramebufferWidget::previewState() const
 {
     PreviewState state;
-    if (m_model) state.depth = m_model->depthRange();
+    if (m_model) { state.depth = m_model->depthRange(); state.projection = m_model->projectionState(); }
     state.mode       = m_previewMode;
     state.toneMethod = ui->cbToneMappingMethod->currentIndex();
     state.exposure   = ui->sbExposure->value();
@@ -947,6 +947,7 @@ PreviewState RGBFramebufferWidget::previewState() const
 void RGBFramebufferWidget::restorePreviewState(const PreviewState& state)
 {
     m_model->setDepthRange(state.depth);
+    m_model->setProjectionState(state.projection);
     ui->anomalyMarkerButton->setChecked(state.highlightNonFinite);
     setPreviewMode(static_cast<RGBFramebufferModel::PreviewMode>(state.mode));
     ui->sbExposure->setValue(state.exposure);

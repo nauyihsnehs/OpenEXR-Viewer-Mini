@@ -40,6 +40,84 @@
 #include <algorithm>
 #include <sstream>
 #include "DeepPreview.h"
+#include "PixelDiagnostics.h"
+
+EnvironmentProjection::State FramebufferModel::projectionState() const
+{ return EnvironmentProjection::resolve(m_committedProjection, *m_data); }
+EnvironmentProjection::State FramebufferModel::requestedProjectionState() const
+{ return EnvironmentProjection::resolve(m_requestedProjection, *m_data); }
+
+void FramebufferModel::setProjectionState(EnvironmentProjection::State state)
+{
+    if (!isImageLoaded() || !std::isfinite(state.yaw) || !std::isfinite(state.pitch)
+        || !std::isfinite(state.fieldOfView)) return;
+    state = EnvironmentProjection::resolve(state, *m_data);
+    if (state.type < EnvironmentProjection::LatLong || state.type > EnvironmentProjection::Sphere) return;
+    // Invalid cube tail levels may retain the native plane, but cannot reproject.
+    if (!environmentSource().available() && state.type != m_data->envmap) return;
+    state.yaw = std::remainder(state.yaw, 360.);
+    state.pitch = std::max(-90., std::min(90., state.pitch));
+    state.fieldOfView = std::max(10., std::min(150., state.fieldOfView));
+    if (state == requestedProjectionState()) return;
+    m_requestedProjection = state;
+    updateImage();
+}
+
+EnvironmentProjection::Snapshot FramebufferModel::projectionInput() const
+{
+    EnvironmentProjection::Snapshot snapshot;
+    snapshot.source = m_data;
+    snapshot.state = requestedProjectionState();
+    snapshot.stride = rawPixelStride();
+    snapshot.names = rawChannelNames();
+    snapshot.components = rawChannelComponents();
+    return snapshot;
+}
+
+EnvironmentProjection::Snapshot FramebufferModel::projectionSnapshot() const
+{
+    auto snapshot = projectionInput();
+    snapshot.state = projectionState();
+    snapshot.mapColors = m_colorMapper;
+    snapshot.markers = highlightNonFinite();
+    return snapshot;
+}
+
+FramebufferModel::RenderResult FramebufferModel::renderProjection(
+  const std::shared_ptr<const FramebufferData>& data, EnvironmentProjection::Snapshot snapshot,
+  EnvironmentProjection::ColorMapper mapper, const Cancellation& cancel)
+{
+    RenderResult result;
+    result.data = data;
+    result.projectionState = snapshot.state;
+    result.mapColors = mapper;
+    if (data->envmap >= 0 && snapshot.state.type != data->envmap) {
+        snapshot.source = data;
+        result.projected = EnvironmentProjection::project(snapshot, snapshot.state,
+          EnvironmentProjection::defaultSize(*data, snapshot.state.type), cancel);
+        if (!result.projected) return {};
+        result.projectedCoverage = EnvironmentProjection::coverage(*result.projected);
+    }
+    result.image = mapper(result.projected ? *result.projected : *data, cancel);
+    return cancel->load() ? RenderResult() : result;
+}
+
+std::string FramebufferModel::projectedColorInfo(int x, int y) const
+{
+    if (!m_projected || x < 0 || y < 0 || x >= m_projected->width || y >= m_projected->height) return "";
+    const size_t p = size_t(y) * m_projected->width + x;
+    if (!m_projected->covers(p)) return "";
+    QPointF position;
+    if (!EnvironmentProjection::sourcePosition(*m_data, projectionState(),
+        QSize(m_projected->width, m_projected->height), x, y, position)) return "";
+    std::ostringstream text;
+    text << "Level " << resolutionLevel().toString() << " | Source sample ("
+         << std::setprecision(9) << position.x() << ", " << position.y() << ") | Interpolated linear";
+    const auto names = rawPixelStride() == 1 ? rawChannelNames() : std::vector<std::string>{"R", "G", "B", "A"};
+    for (size_t c = 0; c < names.size(); ++c)
+        text << " " << names[c] << ": " << PixelDiagnostics::sampleText(m_projected->pixels[p * rawPixelStride() + c]);
+    return text.str();
+}
 
 DepthBounds FramebufferModel::depthBounds() const { return DeepPreview::bounds(*m_data); }
 DepthRange FramebufferModel::depthRange() const { return depthBounds().clamp(m_depthRange); }
@@ -69,6 +147,7 @@ std::string FramebufferModel::sampleLocationInfo(size_t channel, int x, int y) c
 
 QRegion FramebufferModel::pixelCoverage() const
 {
+    if (m_projected) return m_projectedCoverage;
     if (!isDerivedPreview()) return QRect(0, 0, width(), height());
     QRegion coverage;
     for (const auto& eye : m_data->stereo)
@@ -155,10 +234,15 @@ FramebufferModel::FramebufferModel(QObject* parent)
               m_error = result.error;
               if (!result.image.isNull()) {
                   if (result.data) m_data = result.data;
+                  m_projected = result.projected;
+                  m_projectedCoverage = result.projectedCoverage;
+                  m_committedProjection = result.projectionState;
+                  m_colorMapper = result.mapColors;
                   m_image = result.image;
                   setReady(true);
                   emit imageChanged();
               } else if (!m_error.isEmpty()) {
+                  m_requestedProjection = m_committedProjection;
                   if (hasDeepSamples()) {
                       m_depthRange = m_data->depthRange;
                       emit depthRangeChanged();

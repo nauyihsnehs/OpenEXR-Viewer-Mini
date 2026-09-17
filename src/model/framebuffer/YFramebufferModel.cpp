@@ -67,6 +67,7 @@ void YFramebufferModel::load(
 
 std::string YFramebufferModel::getColorInfo(int x, int y) const
 {
+    if (isProjected()) return projectedColorInfo(x, y);
     if (!isImageLoaded() || x < 0 || x >= width() || y < 0 || y >= height())
         return "";
     std::stringstream text;
@@ -121,45 +122,51 @@ void YFramebufferModel::updateImage()
 {
     if (!isImageLoaded()) return;
     const auto   source   = m_data;
+    const auto projection = projectionInput();
     const auto range = depthRange();
     const bool automatic = m_automaticRange;
     const double minimum  = m_min;
     const double maximum  = m_max;
     const auto   colormap = m_cmap;
     requestRender(
-      [source, range, automatic, minimum, maximum, colormap](const Cancellation& cancel) -> RenderResult {
+      [source, projection, range, automatic, minimum, maximum, colormap](const Cancellation& cancel) -> RenderResult {
           const auto data = DeepPreview::compose(source, range, cancel);
           if (!data || cancel->load()) return {};
           const bool finite = data->deep ? data->hasFiniteDisplay : data->hasFiniteSamples;
           const double low = automatic && finite ? (data->deep ? data->displayMinimum : data->minimum) : minimum;
           const double high = automatic && finite ? (data->deep ? data->displayMaximum : data->maximum) : maximum;
-          const int components = data->deep ? 4 : 3;
-          QImage image(data->width, data->height, data->deep ? QImage::Format_RGBA8888 : QImage::Format_RGB888);
-          if (image.isNull()) return image;
-          uchar*     bits    = image.bits();
-          const auto stride  = image.bytesPerLine();
-          const int  threads = renderThreadCount();
-          Q_UNUSED(threads);
+          const auto mapper = [colormap, low, high](
+            const FramebufferData& frame, const Cancellation& cancel) -> QImage {
+              const auto* data = &frame;
+              const int components = data->deep || !data->deepCoverage.empty() ? 4 : 3;
+              QImage image(data->width, data->height, components == 4 ? QImage::Format_RGBA8888 : QImage::Format_RGB888);
+              if (image.isNull()) return image;
+              uchar*     bits    = image.bits();
+              const auto stride  = image.bytesPerLine();
+              const int  threads = renderThreadCount();
+              Q_UNUSED(threads);
 #pragma omp parallel for num_threads(threads) if (data->pixels.size() >= 262144)
-          for (int y = 0; y < data->height; ++y) {
-              if (cancel->load()) continue;
-              uchar* line = bits + size_t(y) * stride;
-              for (int x = 0; x < data->width; ++x) {
-                  uchar* output = line + components * x;
-                  if (!data->covers(size_t(y) * data->width + x)) {
-                      std::fill(output, output + components, 0); continue;
+              for (int y = 0; y < data->height; ++y) {
+                  if (cancel->load()) continue;
+                  uchar* line = bits + size_t(y) * stride;
+                  for (int x = 0; x < data->width; ++x) {
+                      uchar* output = line + components * x;
+                      if (!data->covers(size_t(y) * data->width + x)) {
+                          std::fill(output, output + components, 0); continue;
+                      }
+                      float rgb[3];
+                      colormap->getRGBValue(
+                        data->pixels[size_t(y) * data->width + x],
+                        low,
+                        high,
+                        rgb);
+                      for (int c = 0; c < 3; ++c)
+                          output[c] = ToneMapping::toByte(rgb[c]);
+                      if (components == 4) output[3] = 255;
                   }
-                  float rgb[3];
-                  colormap->getRGBValue(
-                    data->pixels[size_t(y) * data->width + x],
-                    low,
-                    high,
-                    rgb);
-                  for (int c = 0; c < 3; ++c)
-                      output[c] = ToneMapping::toByte(rgb[c]);
-                  if (components == 4) output[3] = 255;
               }
-          }
-          return cancel->load() ? RenderResult() : RenderResult(image, data);
+              return cancel->load() ? QImage() : image;
+          };
+          return renderProjection(data, projection, mapper, cancel);
       });
 }
