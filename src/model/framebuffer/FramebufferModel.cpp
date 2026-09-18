@@ -47,20 +47,72 @@ EnvironmentProjection::State FramebufferModel::projectionState() const
 EnvironmentProjection::State FramebufferModel::requestedProjectionState() const
 { return EnvironmentProjection::resolve(m_requestedProjection, *m_data); }
 
-void FramebufferModel::setProjectionState(EnvironmentProjection::State state)
+bool FramebufferModel::assignProjectionState(EnvironmentProjection::State state)
 {
     if (!isImageLoaded() || !std::isfinite(state.yaw) || !std::isfinite(state.pitch)
-        || !std::isfinite(state.fieldOfView)) return;
+        || !std::isfinite(state.fieldOfView)) return false;
     state = EnvironmentProjection::resolve(state, *m_data);
-    if (state.type < EnvironmentProjection::LatLong || state.type > EnvironmentProjection::Sphere) return;
-    // Invalid cube tail levels may retain the native plane, but cannot reproject.
-    if (!environmentSource().available() && state.type != m_data->envmap) return;
+    if (state.type < EnvironmentProjection::LatLong || state.type > EnvironmentProjection::Sphere) return false;
+    if (!environmentSource().available() && state.type != m_data->envmap) return false;
     state.yaw = std::remainder(state.yaw, 360.);
     state.pitch = std::max(-90., std::min(90., state.pitch));
     state.fieldOfView = std::max(10., std::min(150., state.fieldOfView));
-    if (state == requestedProjectionState()) return;
+    if (state == requestedProjectionState()) return false;
     m_requestedProjection = state;
-    updateImage();
+    return true;
+}
+
+void FramebufferModel::setProjectionState(EnvironmentProjection::State state)
+{
+    const bool finish = m_projectionInteracting || m_interactiveFrame;
+    m_projectionTimer.stop();
+    m_projectionInteracting = m_projectionDirty = false;
+    if (assignProjectionState(state) || finish) updateImage();
+    emit readinessChanged();
+}
+
+void FramebufferModel::resetProjectionView()
+{
+    auto state = requestedProjectionState();
+    state.yaw = state.pitch = 0.; state.fieldOfView = 90.;
+    setProjectionState(state);
+}
+
+void FramebufferModel::beginProjectionInteraction()
+{
+    const auto type = requestedProjectionState().type;
+    if (m_projectionInteracting || !environmentSource().available()
+        || (type != EnvironmentProjection::Perspective && type != EnvironmentProjection::Sphere)) return;
+    m_projectionInteracting = true;
+    emit readinessChanged();
+}
+
+void FramebufferModel::updateProjectionInteraction(EnvironmentProjection::State state)
+{
+    if (state.type != requestedProjectionState().type) return;
+    beginProjectionInteraction();
+    if (!m_projectionInteracting || !assignProjectionState(state)) return;
+    m_projectionDirty = true;
+    scheduleProjectionInteraction();
+}
+
+void FramebufferModel::scheduleProjectionInteraction()
+{
+    if (!m_projectionInteracting || !m_projectionDirty || m_renderActive || m_pendingRender) return;
+    const qint64 elapsed = m_projectionSubmission.isValid() ? m_projectionSubmission.elapsed() : 34;
+    if (elapsed < 34) { m_projectionTimer.start(int(34 - elapsed)); return; }
+    updateImage(); // Capture only the newest input; do not invalidate a running interaction frame.
+}
+
+void FramebufferModel::endProjectionInteraction()
+{
+    if (!m_projectionInteracting) return;
+    m_projectionTimer.stop();
+    m_projectionInteracting = m_projectionDirty = false;
+    // A click without movement does not need a render (including double-click to minimal view).
+    if (m_interactiveFrame || m_renderActive || !(requestedProjectionState() == projectionState()))
+        updateImage(); // Supersede every unfinished interaction generation with a full frame.
+    emit readinessChanged();
 }
 
 EnvironmentProjection::Snapshot FramebufferModel::projectionInput() const
@@ -71,6 +123,11 @@ EnvironmentProjection::Snapshot FramebufferModel::projectionInput() const
     snapshot.stride = rawPixelStride();
     snapshot.names = rawChannelNames();
     snapshot.components = rawChannelComponents();
+    snapshot.interactive = m_projectionInteracting;
+    if (m_projectedSource == m_data) {
+        snapshot.cachedProjection = m_projected;
+        snapshot.cachedState = m_committedProjection;
+    }
     return snapshot;
 }
 
@@ -80,6 +137,9 @@ EnvironmentProjection::Snapshot FramebufferModel::projectionSnapshot() const
     snapshot.state = projectionState();
     snapshot.mapColors = m_colorMapper;
     snapshot.markers = highlightNonFinite();
+    snapshot.complete = isFullPreviewReady();
+    snapshot.interactive = false;
+    snapshot.cachedProjection.reset();
     return snapshot;
 }
 
@@ -91,10 +151,19 @@ FramebufferModel::RenderResult FramebufferModel::renderProjection(
     result.data = data;
     result.projectionState = snapshot.state;
     result.mapColors = mapper;
+    result.interactive = snapshot.interactive;
     if (data->envmap >= 0 && snapshot.state.type != data->envmap) {
         snapshot.source = data;
-        result.projected = EnvironmentProjection::project(snapshot, snapshot.state,
-          EnvironmentProjection::defaultSize(*data, snapshot.state.type), cancel);
+        result.projectionCanvas = EnvironmentProjection::defaultSize(*data, snapshot.state.type);
+        QSize raster = result.projectionCanvas;
+        if (snapshot.interactive && std::max(raster.width(), raster.height()) > 512)
+            raster.scale(512, 512, Qt::KeepAspectRatio);
+        const auto cached = snapshot.cachedProjection;
+        if (cached && snapshot.cachedState == snapshot.state
+            && QSize(cached->width, cached->height) == raster)
+            result.projected = cached;
+        else
+            result.projected = EnvironmentProjection::project(snapshot, snapshot.state, raster, cancel, renderThreadCount());
         if (!result.projected) return {};
         result.projectedCoverage = EnvironmentProjection::coverage(*result.projected);
     }
@@ -205,6 +274,9 @@ FramebufferModel::FramebufferModel(QObject* parent)
   : QObject(parent)
   , m_data(std::make_shared<FramebufferData>())
 {
+    m_projectionTimer.setSingleShot(true);
+    m_projectionTimer.setTimerType(Qt::PreciseTimer);
+    connect(&m_projectionTimer, &QTimer::timeout, this, &FramebufferModel::scheduleProjectionInteraction);
     connect(
       &m_loadWatcher,
       &QFutureWatcher<DecodeResult>::finished,
@@ -235,6 +307,9 @@ FramebufferModel::FramebufferModel(QObject* parent)
               if (!result.image.isNull()) {
                   if (result.data) m_data = result.data;
                   m_projected = result.projected;
+                  m_projectedSource = result.projected ? result.data : nullptr;
+                  m_projectionCanvas = result.projectionCanvas;
+                  m_interactiveFrame = result.interactive;
                   m_projectedCoverage = result.projectedCoverage;
                   m_committedProjection = result.projectionState;
                   m_colorMapper = result.mapColors;
@@ -242,6 +317,8 @@ FramebufferModel::FramebufferModel(QObject* parent)
                   setReady(true);
                   emit imageChanged();
               } else if (!m_error.isEmpty()) {
+                  m_projectionTimer.stop();
+                  m_projectionInteracting = m_projectionDirty = false;
                   m_requestedProjection = m_committedProjection;
                   if (hasDeepSamples()) {
                       m_depthRange = m_data->depthRange;
@@ -252,6 +329,7 @@ FramebufferModel::FramebufferModel(QObject* parent)
               }
           }
           startRender();
+          scheduleProjectionInteraction();
       });
 }
 
@@ -279,6 +357,8 @@ void FramebufferModel::startLoading(Decoder decoder)
 {
     Q_ASSERT(QThread::currentThread() == thread());
     if (m_loading) return;
+    m_projectionTimer.stop();
+    m_projectionInteracting = m_projectionDirty = false;
     ++m_generation;
     if (m_renderCancel) m_renderCancel->store(true);
     m_pendingRender = Renderer();
@@ -307,6 +387,10 @@ void FramebufferModel::requestRender(Renderer renderer)
     Q_ASSERT(QThread::currentThread() == thread());
     if (!m_loaded) return;
     ++m_generation;
+    if (m_projectionInteracting) {
+        m_projectionDirty = false;
+        m_projectionSubmission.restart();
+    }
     m_error.clear();
     setReady(false);
     if (m_renderCancel) m_renderCancel->store(true);

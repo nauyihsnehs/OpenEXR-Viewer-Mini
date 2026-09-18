@@ -15,7 +15,13 @@ PreviewImage::Geometry::Geometry(const QRect& data, const QRect& display, double
 
 PreviewImage::Geometry::Geometry(const FramebufferModel& model)
     : Geometry(model.previewDataWindow(), model.previewDisplayWindow(), model.previewPixelAspect())
-{}
+{
+    if (model.isProjected() && !displayPixels.isEmpty()) {
+        const QSize canvas = model.projectionCanvasSize();
+        imageToScene = QTransform::fromScale(canvas.width() / displayPixels.width(),
+                                            canvas.height() / displayPixels.height());
+    }
+}
 
 QRectF PreviewImage::Geometry::sceneWindow() const
 {
@@ -27,7 +33,7 @@ QSize PreviewImage::Geometry::outputSize(int maxWidth) const
     const double aspect = imageToScene.m11();
     if (displayPixels.isEmpty() || !std::isfinite(aspect) || aspect <= 0.) return {};
     double width = std::max(1., std::round(displayPixels.width() * aspect));
-    double height = displayPixels.height();
+    double height = std::max(1., std::round(displayPixels.height() * imageToScene.m22()));
     if (!std::isfinite(width)) return {};
     if (maxWidth > 0 && width > maxWidth) {
         height = std::max(1., std::round(height * (maxWidth / width)));
@@ -47,14 +53,14 @@ QTransform PreviewImage::Geometry::imageToOutput(const QSize& size) const
 
 QImage PreviewImage::render(const FramebufferModel& model, int maxWidth, const QColor& background)
 {
-    if (!model.isPreviewReady()) return {};
+    if (!model.isFullPreviewReady()) return {};
     return render(capture(model), maxWidth, background);
 }
 
 PreviewImage::Snapshot PreviewImage::capture(const FramebufferModel& model)
 {
     Snapshot snapshot;
-    snapshot.image = model.getLoadedImage();
+    if (model.isFullPreviewReady()) snapshot.image = model.getLoadedImage();
     snapshot.geometry = Geometry(model);
     snapshot.coverage = model.pixelCoverage();
     if (model.highlightNonFinite()) snapshot.anomalies = model.anomalyRegions();

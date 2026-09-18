@@ -23,7 +23,7 @@ struct SourceInfo {
     bool available() const { return envmap >= 0 && unavailableReason.isEmpty(); }
 };
 using ColorMapper = std::function<QImage(const FramebufferData&, const Cancellation&)>;
-// Immutable inputs captured with the successfully displayed render, also used by saving.
+// Immutable render inputs; export snapshots use the committed state and complete flag.
 struct Snapshot {
     std::shared_ptr<const FramebufferData> source;
     State state;
@@ -32,6 +32,11 @@ struct Snapshot {
     std::vector<int> components;
     ColorMapper mapColors;
     bool markers = false;
+    bool complete = true;
+    // Transient rendering hints, never persisted in PreviewState or export snapshots.
+    bool interactive = false;
+    std::shared_ptr<const FramebufferData> cachedProjection;
+    State cachedState;
 };
 QString name(Type type);
 SourceInfo describe(const FramebufferData& source);
@@ -43,5 +48,5 @@ QRegion coverage(const FramebufferData& frame);
 bool sourcePosition(const FramebufferData& source, State state, QSize size,
                     int x, int y, QPointF& position);
 std::shared_ptr<const FramebufferData> project(const Snapshot& snapshot, State state,
-                                             QSize size, const Cancellation& cancel);
+                                             QSize size, const Cancellation& cancel, int threads = 1);
 }

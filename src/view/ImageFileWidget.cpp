@@ -499,6 +499,7 @@ void ImageFileWidget::setResolutionLevel(ResolutionLevel level)
 
 void ImageFileWidget::prepareDocument(ResolutionLevel level, bool reopen)
 {
+    for (auto* model : findChildren<FramebufferModel*>()) model->endProjectionInteraction();
     cancelStereoPreview();
     const unsigned generation = ++m_preparationGeneration;
     m_refresh.reset();

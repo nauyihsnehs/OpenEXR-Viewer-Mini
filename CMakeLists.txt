@@ -131,6 +131,8 @@ set(PROJECT_SOURCES
     src/view/ScaleWidget.h
     src/view/RangeSliderWidget.cpp
     src/view/RangeSliderWidget.h
+    src/view/ProjectionControls.cpp
+    src/view/ProjectionControls.h
     src/view/DepthRangeWidget.cpp
     src/view/DepthRangeWidget.h
     src/view/ScientificDoubleSpinBox.h

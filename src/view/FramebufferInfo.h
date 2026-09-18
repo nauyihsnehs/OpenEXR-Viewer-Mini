@@ -37,10 +37,11 @@ inline QString framebufferSummaryText(const FramebufferModel* model)
       ? QString("Level %1 | ").arg(QString::fromStdString(model->resolutionLevel().toString())) : QString();
     QString environment;
     if (model && model->rawEnvmap() >= 0) {
+        const QSize canvas = model->isProjected() ? model->projectionCanvasSize() : model->previewDisplayWindow().size();
         environment = QString("Source %1 | Display %2 %3×%4 | ")
           .arg(EnvironmentProjection::name(EnvironmentProjection::Type(model->rawEnvmap())))
           .arg(EnvironmentProjection::name(model->projectionState().type))
-          .arg(model->previewDisplayWindow().width()).arg(model->previewDisplayWindow().height());
+          .arg(canvas.width()).arg(canvas.height());
         if (!model->environmentSource().available()) environment += model->environmentSource().unavailableReason + " | ";
     }
     return environment + level + "Size " + framebufferSizeText(model)

@@ -17,6 +17,10 @@
 #include <QPainter>
 #include <QPointer>
 #include <QPushButton>
+#include <QToolButton>
+#include <QLabel>
+#include <view/ProjectionControls.h>
+#include <view/MinimalImageWidget.h>
 #include <QSemaphore>
 #include <QSettings>
 #include <QTemporaryDir>
@@ -640,6 +644,136 @@ class ViewerTests: public QObject
         QCOMPARE(model->projectionState().fieldOfView, 90.);
         const QString ordinary = fixture("ordinary-ui"); writeFixture(ordinary, 2, 2, {{"Y", std::vector<float>(4, .5f)}});
         window.open(ordinary); QTRY_VERIFY(!menu->isEnabled());
+    }
+
+    void environmentProgressiveFramesCacheAndOutputReadiness()
+    {
+        using namespace EnvironmentProjection;
+        class InspectableScalar : public YFramebufferModel {
+        public:
+            InspectableScalar() : YFramebufferModel("Y") {}
+            std::shared_ptr<const FramebufferData> projected() const { return projectionInput().cachedProjection; }
+        } model;
+        const QString path = fixture("environment-progressive");
+        Imf::Header header(1200, 600);
+        header.insert("envmap", Imf::EnvmapAttribute(Imf::ENVMAP_LATLONG));
+        writeFixture(path, 1200, 600, {{"Y", std::vector<float>(720000, .5f)}}, 0, 0, 1.f, 1, &header);
+        OpenEXRImage source(path, nullptr);
+        model.load(source.sharedEXR(), 0);
+        QTRY_VERIFY(model.isFullPreviewReady());
+        const auto raw = model.getRawPixels();
+        const auto level = model.resolutionLevel();
+        const double minimum = model.getDatasetMin();
+        State state; state.type = Sphere;
+        model.setProjectionState(state);
+        QTRY_VERIFY(model.isFullPreviewReady());
+        GraphicsView view; view.resize(800, 740); view.setModel(&model); view.show();
+        view.setZoomLevel(.75);
+        const auto canvas = PreviewImage::Geometry(model).sceneWindow();
+        const auto viewState = view.viewState();
+        ProjectionControls controls; controls.setModel(&model);
+        auto* angles = controls.findChild<QLabel*>("projectionAngles"); QVERIFY(angles);
+        const QString previousAngles = angles->text();
+        std::vector<double> committed;
+        connect(&model, &FramebufferModel::imageChanged, &model, [&] { committed.push_back(model.projectionState().yaw); });
+        model.beginProjectionInteraction();
+        state.yaw = 1.; model.updateProjectionInteraction(state);
+        for (int i = 2; i <= 60; ++i) { state.yaw = i; model.updateProjectionInteraction(state); }
+        QCOMPARE(angles->text(), previousAngles); // Pending input must not lead the displayed frame.
+        QVERIFY(!model.isFullPreviewReady());
+        QVERIFY(PreviewImage::capture(model).image.isNull());
+        QVERIFY(!model.projectionSnapshot().complete);
+        QTRY_VERIFY(model.isPreviewReady() && model.projectionState().yaw == 60.);
+        QVERIFY(!committed.empty()); QCOMPARE(committed.front(), 1.); // An in-flight frame was not repeatedly cancelled.
+        QCOMPARE(model.getLoadedImage().size(), QSize(512, 512));
+        QCOMPARE(PreviewImage::Geometry(model).sceneWindow(), canvas);
+        QCOMPARE(view.viewState().zoom, viewState.zoom);
+        QVERIFY(QLineF(view.viewState().center, viewState.center).length() < 1.5);
+        QCOMPARE(model.getLoadedImage().pixelColor(0, 0).alpha(), 0);
+        QVERIFY(model.getColorInfo(0, 0).empty());
+        QVERIFY(QString::fromStdString(model.getColorInfo(256, 256)).contains("Interpolated linear Y: 0.5"));
+        QVERIFY(model.pixelCoverage().contains(QPoint(256, 256)));
+        QVERIFY(model.anomalyRegions().empty());
+        QVERIFY(angles->text().contains("60.0"));
+        ImageSave::Source input; input.activeModel = &model; input.sourceImage = &source;
+        ImageSave::Options options; options.target = ImageSave::TargetPreview;
+        options.format = ImageSave::FormatPng; options.path = m_directory.filePath("temporary.png");
+        QVERIFY(ImageSave::save(input, options).status != ImageSave::StatusSaved);
+        options.target = ImageSave::TargetProjectionConversion; options.projection = state; options.projectionSize = QSize(8, 8);
+        QVERIFY(ImageSave::save(input, options).status != ImageSave::StatusSaved);
+        options.target = ImageSave::TargetActiveOriginal; options.format = ImageSave::FormatExr;
+        options.path = fixture("raw-during-interaction");
+        QCOMPARE(ImageSave::save(input, options).status, ImageSave::StatusSaved);
+        state.yaw = 75.; model.updateProjectionInteraction(state);
+        model.endProjectionInteraction();
+        QTRY_VERIFY(model.isFullPreviewReady());
+        QCOMPARE(model.projectionState().yaw, 75.);
+        QCOMPARE(model.getLoadedImage().size(), QSize(600, 600));
+        QCOMPARE(PreviewImage::Geometry(model).sceneWindow(), canvas);
+        QCOMPARE(view.viewState().zoom, viewState.zoom);
+        QCOMPARE(PreviewImage::render(model).size(), QSize(600, 600));
+        const auto cached = model.projected(); QVERIFY(cached);
+        model.setRange(0., 2.);
+        QTRY_VERIFY(model.isFullPreviewReady());
+        QVERIFY(model.projected() == cached); // Color mapping reuses immutable linear projection.
+        QVERIFY(model.getRawPixels() == raw);
+        QCOMPARE(model.getDatasetMin(), minimum); QVERIFY(model.resolutionLevel() == level);
+        model.beginProjectionInteraction(); state.yaw = 120.; model.updateProjectionInteraction(state);
+        auto native = state; native.type = LatLong; model.setProjectionState(native);
+        QTRY_VERIFY(model.isFullPreviewReady());
+        QVERIFY(!model.isProjected()); QCOMPARE(model.projectionState().type, LatLong);
+        model.setProjectionState(state); QTRY_VERIFY(model.isFullPreviewReady());
+        auto* reset = controls.findChild<QToolButton*>("projectionResetButton"); QVERIFY(reset);
+        QCOMPARE(reset->size(), QSize(28, 28)); QCOMPARE(reset->focusPolicy(), Qt::StrongFocus);
+        reset->click(); QTRY_VERIFY(model.isFullPreviewReady());
+        QCOMPARE(model.projectionState().yaw, 0.); QCOMPARE(model.projectionState().fieldOfView, 90.);
+        QCOMPARE(model.projectionState().type, Sphere); QCOMPARE(view.viewState().zoom, viewState.zoom);
+    }
+
+    void environmentRegionWheelFooterAndFovLimits()
+    {
+        using namespace EnvironmentProjection;
+        const QString path = fixture("environment-wheel");
+        Imf::Header header(8, 4); header.insert("envmap", Imf::EnvmapAttribute(Imf::ENVMAP_LATLONG));
+        writeFixture(path, 8, 4, {{"Y", std::vector<float>(32, .5f)}}, 0, 0, 1.f, 1, &header);
+        OpenEXRImage source(path, nullptr); YFramebufferModel model("Y");
+        model.load(source.sharedEXR(), 0); QTRY_VERIFY(model.isFullPreviewReady());
+        State state; state.type = Perspective; model.setProjectionState(state);
+        QTRY_VERIFY(model.isFullPreviewReady());
+        GraphicsView view; view.resize(400, 300); view.setModel(&model); view.show(); view.setZoomLevel(16.);
+        const auto wheel = [](QWidget* target, QPoint point, int delta, Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+            QWheelEvent event(QPointF(point), QPointF(target->mapToGlobal(point)), QPoint(), QPoint(0, delta),
+                              Qt::NoButton, modifiers, Qt::NoScrollPhase, false);
+            QApplication::sendEvent(target, &event);
+        };
+        const QPoint center = view.mapFromScene(QPointF(2., 2.));
+        wheel(view.viewport(), center, 120);
+        QCOMPARE(model.requestedProjectionState().fieldOfView, 85.); QCOMPARE(view.viewState().zoom, 16.);
+        QTRY_VERIFY(model.isFullPreviewReady()); // Wheel inactivity restores a full frame.
+        wheel(view.viewport(), QPoint(2, 2), 120);
+        QVERIFY(view.viewState().zoom > 16.); QCOMPARE(model.projectionState().fieldOfView, 85.);
+        QSignalSpy colorWheel(&view, &GraphicsView::controlWheel);
+        wheel(view.viewport(), center, 120, Qt::ControlModifier); QCOMPARE(colorWheel.count(), 1);
+        QCOMPARE(model.requestedProjectionState().fieldOfView, 85.);
+        wheel(view.viewport(), center, 12000); QTRY_VERIFY(model.isFullPreviewReady());
+        QCOMPARE(model.projectionState().fieldOfView, 10.);
+        wheel(view.viewport(), center, -12000); QTRY_VERIFY(model.isFullPreviewReady());
+        QCOMPARE(model.projectionState().fieldOfView, 150.);
+        QTest::keyClick(&view, Qt::Key_1); QCOMPARE(view.viewState().zoom, 1.);
+        QTest::keyClick(&view, Qt::Key_0); QVERIFY(view.viewState().fit);
+        QLabel info("Preview information"); info.resize(240, 28); info.show();
+        view.watchOutsideZoom(&info); const double before = view.viewState().zoom;
+        wheel(&info, QPoint(5, 5), 120); QVERIFY(view.viewState().zoom > before);
+        QCOMPARE(model.projectionState().fieldOfView, 150.);
+        MinimalImageWidget minimal; minimal.resize(500, 360); minimal.view()->setModel(&model);
+        minimal.setSummary("Environment", &model); minimal.show();
+        auto* footer = minimal.findChild<QWidget*>("minimalImageFooter"); QVERIFY(footer);
+        QSignalSpy zoom(minimal.view(), &GraphicsView::imageWindowZoomRequested);
+        wheel(footer, QPoint(footer->width() - 2, 2), 120); QCOMPARE(zoom.count(), 1);
+        auto* reset = minimal.findChild<QToolButton*>("projectionResetButton"); QVERIFY(reset);
+        wheel(reset, reset->rect().center(), 120); QCOMPARE(zoom.count(), 1);
+        reset->click(); QTRY_VERIFY(model.isFullPreviewReady());
+        QCOMPARE(model.projectionState().fieldOfView, 90.);
     }
 
     void environmentStoredLevelsAndIncompleteCubeTail()

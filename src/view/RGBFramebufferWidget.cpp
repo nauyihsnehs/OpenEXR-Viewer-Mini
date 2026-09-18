@@ -33,6 +33,7 @@
 #include "RGBFramebufferWidget.h"
 #include "CropIndicator.h"
 #include "DepthRangeWidget.h"
+#include "ProjectionControls.h"
 #include <QSignalBlocker>
 #include "ui_RGBFramebufferWidget.h"
 
@@ -92,7 +93,9 @@ RGBFramebufferWidget::RGBFramebufferWidget(QWidget* parent)
     connect(ui->anomalyMarkerButton, &QToolButton::toggled, this, [this](bool enabled) {
         if (m_model) m_model->setHighlightNonFinite(enabled);
     });
+    ui->horizontalLayout->addWidget(new ProjectionControls(this));
     wrapPreviewControls(ui->verticalLayout);
+    ui->graphicsView->watchOutsideZoom(this, ui->horizontalLayout_2);
     ui->verticalLayout->insertWidget(1, new DepthRangeWidget(this));
     connect(ui->graphicsView, &GraphicsView::minimalViewRequested,
             this, &RGBFramebufferWidget::minimalViewRequested);
@@ -200,6 +203,7 @@ void RGBFramebufferWidget::setModel(RGBFramebufferModel* model)
 {
     m_model = model;
     findChild<DepthRangeWidget*>()->setModel(model);
+    findChild<ProjectionControls*>()->setModel(model);
     if (m_model) m_model->setHighlightNonFinite(ui->anomalyMarkerButton->isChecked());
     if (m_model && m_model->parent() != this) m_model->setParent(this);
     m_model->setExposure(ui->sbExposure->value());

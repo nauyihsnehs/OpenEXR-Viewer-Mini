@@ -36,6 +36,7 @@
 #include <model/framebuffer/FramebufferModel.h>
 
 class QGraphicsRectItem;
+class QLayout;
 
 class GraphicsView: public QGraphicsView
 {
@@ -51,6 +52,7 @@ class GraphicsView: public QGraphicsView
     void      restoreViewState(const ViewState& state);
     void setImageWindowMode();
     void applyImageWindowZoom(double zoom);
+    void watchOutsideZoom(QWidget* area, QLayout* region = nullptr);
 
   public slots:
     void setModel(const FramebufferModel* model);
@@ -73,6 +75,9 @@ class GraphicsView: public QGraphicsView
     void imageWindowMoveRequested(const QPoint& position);
 
   protected:
+    bool eventFilter(QObject* object, QEvent* event) override;
+    void focusOutEvent(QFocusEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
     void changeEvent(QEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
@@ -94,6 +99,12 @@ class GraphicsView: public QGraphicsView
     void updateCheckerboard();
     bool imageContains(const QPoint& position) const;
     void queryPixelAt(const QPoint& position);
+    void zoomWheel(double steps, const QPoint& anchor);
+    void endProjectionGesture();
+    QPointer<QWidget> _wheelArea;
+    QPointer<QLayout> _wheelRegion;
+    QTimer _fovTimer;
+    bool _projectionDragging = false;
     QPointer<const FramebufferModel> _model;
     QGraphicsPixmapItem*             _imageItem;
     QGraphicsRectItem*               _displayClip;

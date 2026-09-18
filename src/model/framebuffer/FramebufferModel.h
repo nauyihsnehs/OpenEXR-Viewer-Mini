@@ -38,6 +38,8 @@
 #include <QImage>
 #include <QObject>
 #include <QRegion>
+#include <QTimer>
+#include <QElapsedTimer>
 #include <functional>
 #include <utility>
 #include <string>
@@ -55,6 +57,13 @@ class FramebufferModel: public QObject
     EnvironmentProjection::State projectionState() const;
     EnvironmentProjection::State requestedProjectionState() const;
     void setProjectionState(EnvironmentProjection::State state);
+    void beginProjectionInteraction();
+    void updateProjectionInteraction(EnvironmentProjection::State state);
+    void endProjectionInteraction();
+    void resetProjectionView();
+    bool projectionInteracting() const { return m_projectionInteracting; }
+    bool isFullPreviewReady() const { return m_ready && !m_projectionInteracting && !m_interactiveFrame; }
+    QSize projectionCanvasSize() const { return m_projectionCanvas; }
     EnvironmentProjection::Snapshot projectionSnapshot() const;
     QRect previewDataWindow() const { return m_projected ? m_projected->dataWindow : getDataWindow(); }
     QRect previewDisplayWindow() const { return m_projected ? m_projected->displayWindow : getDisplayWindow(); }
@@ -144,6 +153,8 @@ class FramebufferModel: public QObject
         std::shared_ptr<const FramebufferData> data;
         std::shared_ptr<const FramebufferData> projected;
         QRegion projectedCoverage;
+        QSize projectionCanvas;
+        bool interactive = false;
         EnvironmentProjection::State projectionState;
         EnvironmentProjection::ColorMapper mapColors;
         QString error;
@@ -165,6 +176,13 @@ class FramebufferModel: public QObject
     EnvironmentProjection::ColorMapper m_colorMapper;
     std::shared_ptr<const FramebufferData> m_projected;
     QRegion m_projectedCoverage;
+    QSize m_projectionCanvas;
+    std::shared_ptr<const FramebufferData> m_projectedSource;
+    bool m_projectionInteracting = false, m_projectionDirty = false, m_interactiveFrame = false;
+    QTimer m_projectionTimer;
+    QElapsedTimer m_projectionSubmission;
+    bool assignProjectionState(EnvironmentProjection::State state);
+    void scheduleProjectionInteraction();
     void                         startRender();
     void                         setReady(bool ready);
     QImage                       m_image;

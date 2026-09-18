@@ -195,7 +195,7 @@ void SaveImageDialog::setSourceState(bool available, bool previewReady, const QS
         const int value = ui->targetCombo->itemData(i).toInt();
         const bool enabled = (!derived || value == ImageSave::TargetPreview || value == ImageSave::TargetLayeredOriginal)
           && (value != ImageSave::TargetProjectionConversion || (m_environment.source
-              && EnvironmentProjection::describe(*m_environment.source).available() && bool(m_environment.mapColors)));
+              && EnvironmentProjection::describe(*m_environment.source).available() && bool(m_environment.mapColors) && m_environment.complete));
         if (items) items->item(i)->setEnabled(enabled);
         const QString reason = value == ImageSave::TargetProjectionConversion
           ? tr("Requires a completed preview from a complete LatLong or Cube source at this level.")
@@ -212,7 +212,7 @@ void SaveImageDialog::updateSaveAvailability()
 {
     const bool conversion = target() == ImageSave::TargetProjectionConversion;
     const bool waiting = target() == ImageSave::TargetPreview && !m_previewReady;
-    const bool environmentMissing = conversion && (!m_environment.source || !m_environment.mapColors
+    const bool environmentMissing = conversion && (!m_environment.complete || !m_environment.source || !m_environment.mapColors
       || !EnvironmentProjection::describe(*m_environment.source).available());
     const bool unsupported = m_derived && target() != ImageSave::TargetPreview && target() != ImageSave::TargetLayeredOriginal;
     ui->buttonBox->button(QDialogButtonBox::Save)->setEnabled(m_sourceAvailable && !waiting && !unsupported && !environmentMissing);

@@ -691,7 +691,7 @@ namespace
     ImageSave::Result savePreview(
       const FramebufferModel* model, const ImageSave::Options& options, const PreviewImage::Snapshot* snapshot = nullptr)
     {
-        if (!snapshot && (!model || !model->isPreviewReady()))
+        if (!snapshot && (!model || !model->isFullPreviewReady()))
             return result(
               ImageSave::StatusFailed,
               "The current preview is still rendering.");
@@ -901,7 +901,7 @@ namespace
     {
         const auto snapshot = source.environment ? *source.environment
           : source.activeModel ? source.activeModel->projectionSnapshot() : EnvironmentProjection::Snapshot();
-        if (!snapshot.source || !snapshot.mapColors)
+        if (!snapshot.complete || !snapshot.source || !snapshot.mapColors)
             throw std::runtime_error("A completed environment preview is required for projection conversion.");
         auto state = options.projection;
         if (state.type == EnvironmentProjection::Source) state = snapshot.state;

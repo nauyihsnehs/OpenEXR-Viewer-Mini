@@ -2,6 +2,7 @@
 #include "GraphicsView.h"
 #include "CropIndicator.h"
 #include "DepthRangeWidget.h"
+#include "ProjectionControls.h"
 
 #include <QLabel>
 #include <QFontMetrics>
@@ -30,6 +31,8 @@ MinimalImageWidget::MinimalImageWidget(QWidget* parent) : QWidget(parent)
     m_pixelLabel->setTextFormat(Qt::PlainText);
     m_pixelLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     m_depthRange = new DepthRangeWidget(m_footer);
+    m_projection = new ProjectionControls(m_footer);
+    m_view->watchOutsideZoom(m_footer);
     items->addWidget(m_footer);
 }
 
@@ -43,8 +46,10 @@ void MinimalImageWidget::setSummary(const QString& text, const FramebufferModel*
     m_cropIndicator->setModel(model);
     // The preview owns a mutable model; the minimal window edits the same range.
     m_depthRange->setModel(const_cast<FramebufferModel*>(model));
+    m_projection->setModel(model);
     m_footer->setFixedHeight(fontMetrics().height() + 12
-      + (model && model->hasDeepSamples() ? m_depthRange->sizeHint().height() : 0));
+      + (model && model->hasDeepSamples() ? m_depthRange->sizeHint().height() : 0)
+      + (m_projection->isHidden() ? 0 : 28));
     m_summary = text;
     m_summaryLabel->setToolTip(text);
     updateSummary();
@@ -66,7 +71,8 @@ void MinimalImageWidget::resizeEvent(QResizeEvent* event)
 void MinimalImageWidget::updateSummary()
 {
     const int rowHeight = fontMetrics().height() + 12;
-    m_depthRange->setGeometry(0, rowHeight, width(), qMax(0, footerHeight() - rowHeight));
+    m_depthRange->setGeometry(0, rowHeight, width(), m_depthRange->isHidden() ? 0 : m_depthRange->sizeHint().height());
+    m_projection->setGeometry(8, rowHeight, qMax(0, width() - 16), 28);
     const int left = m_cropIndicator->isHidden() ? 8 : 32;
     m_cropIndicator->move(8, (rowHeight - m_cropIndicator->height()) / 2);
     const int available = qMax(0, width() - left - 8);

@@ -3,6 +3,7 @@
 #include <QWidget>
 
 class DepthRangeWidget;
+class ProjectionControls;
 class GraphicsView;
 class QLabel;
 class CropIndicator;
@@ -25,6 +26,7 @@ class MinimalImageWidget : public QWidget
     GraphicsView* m_view;
     QWidget* m_footer;
     DepthRangeWidget* m_depthRange;
+    ProjectionControls* m_projection;
     CropIndicator* m_cropIndicator;
     QLabel* m_summaryLabel;
     QLabel* m_pixelLabel;

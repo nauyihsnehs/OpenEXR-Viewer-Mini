@@ -33,6 +33,7 @@
 #include "YFramebufferWidget.h"
 #include "CropIndicator.h"
 #include "DepthRangeWidget.h"
+#include "ProjectionControls.h"
 #include "ScientificDoubleSpinBox.h"
 #include <QToolButton>
 #include <QSignalBlocker>
@@ -61,7 +62,9 @@ YFramebufferWidget::YFramebufferWidget(QWidget* parent)
     connect(ui->anomalyMarkerButton, &QToolButton::toggled, this, [this](bool enabled) {
         if (m_model) m_model->setHighlightNonFinite(enabled);
     });
+    ui->horizontalLayout->addWidget(new ProjectionControls(this));
     wrapPreviewControls(ui->verticalLayout);
+    ui->graphicsView->watchOutsideZoom(this, ui->horizontalLayout_3);
     ui->verticalLayout->insertWidget(1, new DepthRangeWidget(this));
     connect(ui->graphicsView, &GraphicsView::minimalViewRequested,
             this, &YFramebufferWidget::minimalViewRequested);
@@ -106,6 +109,7 @@ void YFramebufferWidget::setModel(YFramebufferModel* model)
 {
     m_model = model;
     findChild<DepthRangeWidget*>()->setModel(model);
+    findChild<ProjectionControls*>()->setModel(model);
     if (m_model) m_model->setHighlightNonFinite(ui->anomalyMarkerButton->isChecked());
     if (m_model && m_model->parent() != this) m_model->setParent(this);
     ui->graphicsView->setModel(model);

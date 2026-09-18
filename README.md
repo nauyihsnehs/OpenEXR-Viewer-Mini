@@ -135,11 +135,23 @@ Viewing controls
   Cube uses OpenEXR's vertical +X/-X/+Y/-Y/+Z/-Z strip and face orientations.
   LatLong uses its duplicated longitude endpoints and poles; cube interpolation
   joins the duplicated edge/corner samples of adjacent faces.
-  Pers-view: left-drag to turn, wheel for horizontal FOV (90° initially, 10°–150°).
+  Pers-view: left-drag to turn; wheel inside the displayed canvas changes horizontal
+  FOV (90° initially, 10°–150°), while wheel outside it zooms the image.
   Sphere: left-drag to rotate an orthographic, unlit textured sphere; wheel zooms
   the image. Both start toward +Z with +Y up and share yaw/pitch. Middle-drag retains
   panning/window movement. **Reset Projection View** resets orientation and FOV;
-  color resets do not. Refresh and minimal view preserve projection state.
+  color resets do not. A shared icon button and read-only yaw/pitch (plus perspective
+  FOV) show the committed frame in both normal and minimal views. Information bars
+  and non-button areas of the minimal footer also accept wheel zoom. Ctrl+wheel
+  retains color adjustment; + / − / 0 / 1 retain zoom controls.
+  Refresh and minimal view preserve projection state.
+  Dragging and FOV scrolling use a temporary raster capped at 512 pixels on the
+  longest edge, on the same logical canvas and source resolution level. Requests
+  are coalesced to at most 30 per second with one in-flight render per model.
+  Release restores full quality; FOV scrolling restores it after 150 ms idle.
+  Copy and preview/conversion saving wait for full quality; raw exports remain
+  available. Color changes reuse the completed linear projection when possible.
+  These CPU optimizations have not been benchmarked.
   Native readouts stay exact; converted readouts label interpolated linear values
   and source sample coordinates. Sphere's exterior is transparent with no readout.
   Source statistics and Auto use the entire source level, independent of rotation.

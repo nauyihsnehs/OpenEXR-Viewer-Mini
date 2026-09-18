@@ -308,9 +308,7 @@ MainWindow::MainWindow(QWidget* parent)
         auto* document = currentFileWidget();
         auto* model = document ? const_cast<FramebufferModel*>(document->activeFramebufferModel()) : nullptr;
         if (!model) return;
-        auto state = model->requestedProjectionState();
-        state.yaw = state.pitch = 0.; state.fieldOfView = 90.;
-        model->setProjectionState(state);
+        model->resetProjectionView();
     });
     m_resolutionMenu = ui->menu_Show->addMenu(tr("Resolution Level"));
     m_resolutionMenu->setObjectName("menu_ResolutionLevel");
@@ -711,7 +709,7 @@ void MainWindow::copyActiveImage(bool fullResolution)
     const FramebufferModel* model
       = widget ? widget->activeFramebufferModel() : nullptr;
 
-    if (!model || !model->isPreviewReady()) return;
+    if (!model || !model->isFullPreviewReady()) return;
 
     const QImage image = PreviewImage::render(*model, fullResolution ? 0 : s_clipboardMaxWidth);
     if (image.isNull()) {
@@ -756,7 +754,7 @@ void MainWindow::updateShowActions()
     ImageFileWidget*        widget = currentFileWidget();
     const FramebufferModel* model
       = widget ? widget->activeFramebufferModel() : nullptr;
-    const bool copyEnabled = model && model->isPreviewReady();
+    const bool copyEnabled = model && model->isFullPreviewReady();
 
     ui->action_Save->setEnabled(model && !model->getLoadedImage().isNull());
     ui->action_CopyImage->setEnabled(copyEnabled);
@@ -1036,11 +1034,16 @@ void MainWindow::toggleMinimalView()
         else updateMinimalSummary();
     }));
     const auto projectionCanvasSize = std::make_shared<QSize>(PreviewImage::Geometry(*model).outputSize());
+    const auto projectionFooterHeight = std::make_shared<int>(m_minimalPage->footerHeight());
     m_minimalConnections.append(connect(model, &FramebufferModel::imageChanged, this,
-      [this, projectionCanvasSize] {
+      [this, projectionCanvasSize, projectionFooterHeight] {
           if (!m_minimalView || !m_minimalModel) return;
           const auto next = PreviewImage::Geometry(*m_minimalModel).outputSize();
-          if (next != *projectionCanvasSize) { *projectionCanvasSize = next; resizeMinimalView(m_minimalPage->view()->viewState().zoom); }
+          const int footer = m_minimalPage->footerHeight();
+          if (next != *projectionCanvasSize || footer != *projectionFooterHeight) {
+              *projectionCanvasSize = next; *projectionFooterHeight = footer;
+              resizeMinimalView(m_minimalPage->view()->viewState().zoom);
+          }
       }));
     m_minimalConnections.append(connect(model, &FramebufferModel::imageLoaded,
                                         this, [this] {
@@ -1139,7 +1142,8 @@ void MainWindow::updateMinimalSummary()
         if (!m_minimalModel->environmentSource().available())
             parameter += " | " + m_minimalModel->environmentSource().unavailableReason;
     }
-    const QSize displaySize = m_minimalModel->previewDisplayWindow().size();
+    const QSize displaySize = m_minimalModel->isProjected() ? m_minimalModel->projectionCanvasSize()
+      : m_minimalModel->previewDisplayWindow().size();
     m_minimalPage->setSummary(tr("%1 | Display %2 x %3 | %4% | %5")
       .arg(layer.isEmpty() ? file : file + " | " + layer)
       .arg(displaySize.width()).arg(displaySize.height())
@@ -1250,12 +1254,17 @@ void MainWindow::on_action_Save_triggered()
                 multilevel = true; // Also warn when another part restricts the document to level 0.
         }
     }
-    const auto environment = std::make_shared<const EnvironmentProjection::Snapshot>(model->projectionSnapshot());
-    const auto preview = std::make_shared<const PreviewImage::Snapshot>(PreviewImage::capture(*model));
+    const auto environment = std::make_shared<EnvironmentProjection::Snapshot>(model->projectionSnapshot());
+    const auto preview = std::make_shared<PreviewImage::Snapshot>(PreviewImage::capture(*model));
     dialog.setEnvironmentSource(*environment);
     dialog.setResolutionLevelInfo(savedLevel, multilevel);
     dialog.setDeepSourceInfo(model && bool(model->deepSamples()), deepSource);
-    const auto updateSource = [&dialog, guardedModel, guardedImage, preview] {
+    const auto updateSource = [&dialog, guardedModel, guardedImage, preview, environment] {
+        if (guardedModel && guardedModel->isFullPreviewReady() && preview->image.isNull()) {
+            *preview = PreviewImage::capture(*guardedModel);
+            *environment = guardedModel->projectionSnapshot();
+            dialog.setEnvironmentSource(*environment);
+        }
         dialog.setSourceState(
           guardedModel && guardedImage && guardedModel->isImageLoaded(),
           guardedModel && !preview->image.isNull(),

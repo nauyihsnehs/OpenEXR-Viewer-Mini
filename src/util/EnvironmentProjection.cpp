@@ -23,40 +23,50 @@ Imath::V2f inFace(Imf::CubeMapFace face, int n, double x, double y)
     }
 }
 
-bool direction(EnvironmentProjection::State state, QSize size, int x, int y, Imath::V3f& dir)
-{
-    using namespace EnvironmentProjection;
-    if (state.type == LatLong) {
-        dir = Imf::LatLongMap::direction(window(size), Imath::V2f(float(x), float(y)));
+struct DirectionMapper {
+    EnvironmentProjection::State state;
+    QSize size;
+    Imath::Box2i targetWindow;
+    double dxScale, dyScale, lens, verticalLens, cp, sp, cy, sy;
+    DirectionMapper(EnvironmentProjection::State parameters, QSize dimensions)
+      : state(parameters), size(dimensions), targetWindow(window(dimensions)),
+        dxScale(2. / dimensions.width()), dyScale(2. / dimensions.height()),
+        lens(std::tan(parameters.fieldOfView * pi / 360.)),
+        verticalLens(lens * dimensions.height() / dimensions.width()),
+        cp(std::cos(parameters.pitch * pi / 180.)), sp(std::sin(parameters.pitch * pi / 180.)),
+        cy(std::cos(parameters.yaw * pi / 180.)), sy(std::sin(parameters.yaw * pi / 180.)) {}
+    bool operator()(int x, int y, Imath::V3f& dir) const {
+        using namespace EnvironmentProjection;
+        if (state.type == LatLong) {
+            dir = Imf::LatLongMap::direction(targetWindow, Imath::V2f(float(x), float(y)));
+            return true;
+        }
+        if (state.type == Cube) {
+            const int n = size.width();
+            const auto face = Imf::CubeMapFace(y / n);
+            dir = Imf::CubeMap::direction(face, targetWindow, inFace(face, n, x, y % n));
+            return true;
+        }
+        // Screen right is -X when looking toward +Z with +Y up (OpenEXR convention).
+        double dx = 1. - dxScale * (x + .5);
+        double dy = 1. - dyScale * (y + .5);
+        double dz;
+        if (state.type == Sphere) {
+            const double r2 = dx * dx + dy * dy;
+            if (r2 > 1.) return false;
+            dz = std::sqrt(std::max(0., 1. - r2));
+        } else {
+            dx *= lens;
+            dy *= verticalLens;
+            dz = 1.;
+        }
+        const double py = dy * cp + dz * sp;
+        const double pz = dz * cp - dy * sp;
+        dir = Imath::V3f(float(dx * cy + pz * sy), float(py),
+                         float(pz * cy - dx * sy));
         return true;
     }
-    if (state.type == Cube) {
-        const int n = size.width();
-        const auto face = Imf::CubeMapFace(y / n);
-        dir = Imf::CubeMap::direction(face, window(size), inFace(face, n, x, y % n));
-        return true;
-    }
-    // Screen right is -X when looking toward +Z with +Y up (OpenEXR convention).
-    double dx = 1. - 2. * (x + .5) / size.width();
-    double dy = 1. - 2. * (y + .5) / size.height();
-    double dz;
-    if (state.type == Sphere) {
-        const double r2 = dx * dx + dy * dy;
-        if (r2 > 1.) return false;
-        dz = std::sqrt(std::max(0., 1. - r2));
-    } else {
-        const double scale = std::tan(state.fieldOfView * pi / 360.);
-        dx *= scale;
-        dy *= scale * size.height() / size.width();
-        dz = 1.;
-    }
-    const double pitch = state.pitch * pi / 180., yaw = state.yaw * pi / 180.;
-    const double py = dy * std::cos(pitch) + dz * std::sin(pitch);
-    const double pz = dz * std::cos(pitch) - dy * std::sin(pitch);
-    dir = Imath::V3f(float(dx * std::cos(yaw) + pz * std::sin(yaw)), float(py),
-                     float(pz * std::cos(yaw) - dx * std::sin(yaw)));
-    return true;
-}
+};
 
 Imath::V2f location(const FramebufferData& source, const Imath::V3f& dir)
 {
@@ -77,8 +87,9 @@ struct Sampler {
     const FramebufferData& source;
     double values[4] = {};
     uint8_t flags = 0;
-    Sampler(const EnvironmentProjection::Snapshot& s, const FramebufferData& data)
-      : snapshot(s), source(data) {}
+    bool classify;
+    Sampler(const EnvironmentProjection::Snapshot& s, const FramebufferData& data, bool diagnostics)
+      : snapshot(s), source(data), classify(diagnostics) {}
 
     void tap(int x, int y, double weight) {
         if (weight <= 0.) return;
@@ -86,7 +97,7 @@ struct Sampler {
         const auto& raw = source.sourcePixels.empty() ? source.pixels : source.sourcePixels;
         for (int c = 0; c < snapshot.stride; ++c)
             values[c] += weight * source.pixels[p * snapshot.stride + c];
-        for (int c : snapshot.components)
+        if (classify) for (int c : snapshot.components)
             flags |= PixelDiagnostics::classify(raw[p * snapshot.stride + c]);
     }
     void endpoint(int x, int y, double weight) {
@@ -187,7 +198,7 @@ bool EnvironmentProjection::sourcePosition(const FramebufferData& source, State 
                                             int x, int y, QPointF& position)
 {
     Imath::V3f dir;
-    if (!direction(state, size, x, y, dir)) return false;
+    if (!DirectionMapper(state, size)(x, y, dir)) return false;
     const auto p = location(source, dir);
     position = QPointF(p.x + source.dataWindow.x(), p.y + source.dataWindow.y());
     return true;
@@ -195,6 +206,7 @@ bool EnvironmentProjection::sourcePosition(const FramebufferData& source, State 
 
 QRegion EnvironmentProjection::coverage(const FramebufferData& frame)
 {
+    if (frame.deepCoverage.empty()) return QRect(0, 0, frame.width, frame.height);
     QRegion covered;
     for (int y = 0; y < frame.height; ++y) {
         int first = 0;
@@ -207,7 +219,7 @@ QRegion EnvironmentProjection::coverage(const FramebufferData& frame)
 }
 
 std::shared_ptr<const FramebufferData> EnvironmentProjection::project(
-  const Snapshot& snapshot, State state, QSize size, const Cancellation& cancel)
+  const Snapshot& snapshot, State state, QSize size, const Cancellation& cancel, int threads)
 {
     if (!snapshot.source) throw std::runtime_error("No environment source.");
     if (cancel->load()) return {};
@@ -233,15 +245,21 @@ std::shared_ptr<const FramebufferData> EnvironmentProjection::project(
     output->dataWindow = output->displayWindow = QRect(QPoint(), size);
     const size_t count = size_t(size.width()) * size.height();
     output->pixels.resize(count * snapshot.stride);
-    output->deepCoverage.resize(count, 0);
-    std::vector<uint8_t> flags(count, 0);
+    const bool sphere = state.type == Sphere;
+    if (sphere) output->deepCoverage.resize(count, 0);
+    const bool diagnostics = source.nanCount || source.infCount || source.positiveInfCount || source.negativeInfCount;
+    std::vector<uint8_t> flags(diagnostics ? count : 0, 0);
+    const DirectionMapper direction(state, size);
+    threads = std::max(1, std::min(4, threads));
+    Q_UNUSED(threads);
+#pragma omp parallel for num_threads(threads) if (count >= 65536)
     for (int y = 0; y < size.height(); ++y) {
-        if (cancel->load()) return {};
+        if (cancel->load()) continue;
         for (int x = 0; x < size.width(); ++x) {
-            if ((x & 4095) == 0 && cancel->load()) return {};
+            if ((x & 4095) == 0 && cancel->load()) break;
             Imath::V3f dir;
-            if (!direction(state, size, x, y, dir)) continue;
-            Sampler sampler {snapshot, source};
+            if (!direction(x, y, dir)) continue;
+            Sampler sampler(snapshot, source, diagnostics);
             sampler.sample(dir);
             const size_t p = size_t(y) * size.width() + x;
             for (int c = 0; c < snapshot.stride; ++c) {
@@ -252,10 +270,11 @@ std::shared_ptr<const FramebufferData> EnvironmentProjection::project(
                 }
                 output->pixels[p * snapshot.stride + c] = float(value);
             }
-            output->deepCoverage[p] = 1;
-            flags[p] = sampler.flags;
+            if (sphere) output->deepCoverage[p] = 1;
+            if (diagnostics) flags[p] = sampler.flags;
         }
     }
-    output->anomalyRegions = PixelDiagnostics::connectedRegions(flags, output->width, output->height, cancel);
+    if (diagnostics && !cancel->load())
+        output->anomalyRegions = PixelDiagnostics::connectedRegions(flags, output->width, output->height, cancel);
     return cancel->load() ? nullptr : output;
 }
