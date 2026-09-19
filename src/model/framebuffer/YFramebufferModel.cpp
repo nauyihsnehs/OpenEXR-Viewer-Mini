@@ -55,13 +55,13 @@ void YFramebufferModel::load(
 {
     m_partID                                  = partId;
     const std::array<std::string, 4> channels = {{m_layer, "", "", ""}};
-    startLoading([file, partId, channels, level](const Cancellation& cancel) {
+    startLoading([file, partId, channels, level](const Cancellation& cancel, const Progress& progress) {
         return FramebufferLoader::decode(
           file,
           partId,
           FramebufferLoader::Scalar,
           channels,
-          cancel, level);
+          cancel, level, progress);
     });
 }
 
@@ -139,15 +139,16 @@ void YFramebufferModel::updateImage()
     const double maximum  = m_max;
     const auto   colormap = m_cmap;
     requestRender(
-      [source, projection, range, automatic, minimum, maximum, colormap](const Cancellation& cancel) -> RenderResult {
-          const auto data = DeepPreview::compose(source, range, cancel);
+      [source, projection, range, automatic, minimum, maximum, colormap](const Cancellation& cancel, const Progress& progress) -> RenderResult {
+          const auto data = DeepPreview::compose(source, range, cancel, progress);
           if (!data || cancel->load()) return {};
           const bool finite = data->deep ? data->hasFiniteDisplay : data->hasFiniteSamples;
           const double low = automatic && finite ? (data->deep ? data->displayMinimum : data->minimum) : minimum;
           const double high = automatic && finite ? (data->deep ? data->displayMaximum : data->maximum) : maximum;
-          const auto mapper = [colormap, low, high](
+          const auto mapper = [colormap, low, high, progress](
             const FramebufferData& frame, const Cancellation& cancel) -> QImage {
               const auto* data = &frame;
+              if (progress) progress->begin(LoadProgress::Rendering, data->height);
               const int components = data->deep || !data->deepCoverage.empty() ? 4 : 3;
               QImage image(data->width, data->height, components == 4 ? QImage::Format_RGBA8888 : QImage::Format_RGB888);
               if (image.isNull()) return image;
@@ -174,9 +175,10 @@ void YFramebufferModel::updateImage()
                           output[c] = ToneMapping::toByte(rgb[c]);
                       if (components == 4) output[3] = 255;
                   }
+                  if (progress) progress->advance();
               }
               return cancel->load() ? QImage() : image;
           };
-          return renderProjection(data, projection, mapper, cancel);
+          return renderProjection(data, projection, mapper, cancel, progress);
       });
 }

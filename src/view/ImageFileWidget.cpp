@@ -31,7 +31,10 @@
  */
 
 #include "ImageFileWidget.h"
+#include "LoadProgressWidget.h"
+#include <QtConcurrent/QtConcurrentRun>
 #include <util/ResolutionLevels.h>
+#include "ResolutionLevelWidget.h"
 #include <util/PreviewImage.h>
 
 #include <QAbstractItemModel>
@@ -295,7 +298,7 @@ void configureFramebuffer(
 }
 
 
-ImageFileWidget::ImageFileWidget(const QString& filename, QWidget* parent)
+ImageFileWidget::ImageFileWidget(const QString& filename, QWidget* parent, bool asynchronous)
   : QWidget(parent)
   , m_img(nullptr)
   , m_openedFolder(QDir::homePath())
@@ -313,7 +316,11 @@ ImageFileWidget::ImageFileWidget(const QString& filename, QWidget* parent)
     // clang-format on
 
     // Open the file
-    open(filename);
+    if (asynchronous) {
+        m_openedFilename = filename;
+        m_openedFolder = QFileInfo(filename).absolutePath();
+        startInputOpen(false, {});
+    } else open(filename);
 }
 
 
@@ -342,6 +349,7 @@ ImageFileWidget::ImageFileWidget(std::istream& stream, QWidget* parent)
 
 ImageFileWidget::~ImageFileWidget()
 {
+    cancelInputOpen();
     m_refresh.reset();
     disconnect(m_mdiArea, nullptr, this, nullptr);
     clearImage();
@@ -363,6 +371,81 @@ bool ImageFileWidget::hasDocumentLoadFailed() const
 bool ImageFileWidget::isRefreshInProgress() const
 {
     return bool(m_refresh);
+}
+
+bool ImageFileWidget::loadingProgress(LoadProgress::Snapshot& snapshot) const
+{
+    if (m_opening && m_openProgress) {
+        snapshot = m_openProgress->snapshot();
+        return true;
+    }
+    const FramebufferModel* model = nullptr;
+    if (m_refresh) {
+        for (const auto& preview : m_refresh->prepared)
+            if (!preview.model->isPreviewReady()) { model = preview.model; break; }
+    } else if (m_documentState == DocumentPending) model = m_initialPreview;
+    else if (m_pendingStereo) model = m_pendingStereo->model;
+    else model = activeFramebufferModel();
+    if (!model || model->isPreviewReady() || !model->errorString().isEmpty()) return false;
+    const auto progress = model->loadProgress();
+    if (!progress) return false;
+    snapshot = progress->snapshot();
+    return true;
+}
+
+void ImageFileWidget::cancelInputOpen()
+{
+    ++m_inputGeneration;
+    if (m_openCancel) m_openCancel->store(true);
+    if (m_openProgress) m_openProgress->stop();
+    m_opening = false;
+    m_openProgress.reset();
+}
+
+void ImageFileWidget::startInputOpen(bool reopen, ResolutionLevel level)
+{
+    cancelInputOpen();
+    m_openError.clear();
+    m_opening = true;
+    const unsigned generation = m_inputGeneration;
+    const unsigned preparation = m_preparationGeneration;
+    m_openCancel = std::make_shared<std::atomic_bool>(false);
+    m_openProgress = std::make_shared<LoadProgress>(generation);
+    struct InputResult { std::shared_ptr<ExrInput> input; QString error; };
+    auto* watcher = new QFutureWatcher<InputResult>(this);
+    connect(watcher, &QFutureWatcher<InputResult>::finished, this,
+      [this, watcher, generation, preparation, reopen, level] {
+        const auto result = watcher->result();
+        watcher->deleteLater();
+        if (generation != m_inputGeneration || preparation != m_preparationGeneration) return;
+        m_opening = false;
+        m_openProgress->stop();
+        try {
+            if (!result.error.isEmpty()) throw std::runtime_error(result.error.toStdString());
+            if (!result.input) return;
+            if (reopen) prepareDocument(level, true, result.input);
+            else {
+                m_img = new OpenEXRImage(m_openedFilename, result.input, this);
+                afterOpen();
+            }
+        } catch (const std::exception& error) {
+            if (reopen) abortRefresh(QString::fromUtf8(error.what()));
+            else onLoadFailed(QString::fromUtf8(error.what()));
+        }
+      });
+    const QString filename = m_openedFilename;
+    const auto cancel = m_openCancel;
+    watcher->setFuture(QtConcurrent::run(imageLoadPool(), [filename, cancel] {
+        InputResult result;
+        try {
+            if (!cancel->load()) result.input = OpenEXRImage::prepareInput(filename);
+            if (cancel->load()) result.input.reset();
+        } catch (const std::exception& error) {
+            result.error = QString::fromUtf8(error.what());
+        } catch (...) { result.error = QObject::tr("Unable to open image."); }
+        return result;
+    }));
+    emit activeFramebufferChanged();
 }
 
 
@@ -460,6 +543,11 @@ void ImageFileWidget::refresh()
     prepareDocument(m_resolutionLevel, true);
 }
 
+ResolutionLevel ImageFileWidget::requestedResolutionLevel() const
+{
+    return m_refresh ? m_refresh->saved.level : m_resolutionLevel;
+}
+
 bool ImageFileWidget::hasRipmapLevels() const
 {
     if (!m_img) return false;
@@ -491,6 +579,7 @@ void ImageFileWidget::setResolutionLevel(ResolutionLevel level)
     if (!isDocumentReady() || !std::binary_search(m_resolutionLevels.begin(), m_resolutionLevels.end(), level)) return;
     if (level == m_resolutionLevel) {
         ++m_preparationGeneration;
+        cancelInputOpen();
         m_refresh.reset();
         emit refreshInProgressChanged(false);
         return;
@@ -498,15 +587,24 @@ void ImageFileWidget::setResolutionLevel(ResolutionLevel level)
     prepareDocument(level, false);
 }
 
-void ImageFileWidget::prepareDocument(ResolutionLevel level, bool reopen)
+void ImageFileWidget::prepareDocument(ResolutionLevel level, bool reopen, std::shared_ptr<ExrInput> input)
 {
+    cancelInputOpen();
     for (auto* model : findChildren<FramebufferModel*>()) model->endProjectionInteraction();
     cancelStereoPreview();
     const unsigned generation = ++m_preparationGeneration;
     m_refresh.reset();
     std::unique_ptr<RefreshTransaction> transaction(new RefreshTransaction);
     try {
-        if (reopen) transaction->image.reset(new OpenEXRImage(m_openedFilename, nullptr));
+        if (reopen && !input) {
+            transaction->saved = captureDocumentState();
+            transaction->saved.level = level;
+            m_refresh = std::move(transaction);
+            startInputOpen(true, level);
+            emit refreshInProgressChanged(true);
+            return;
+        }
+        if (reopen) transaction->image.reset(new OpenEXRImage(m_openedFilename, std::move(input), nullptr));
         auto* source = reopen ? transaction->image.get() : m_img;
         transaction->levels = ResolutionLevels::commonLevels(source->sharedEXR());
         if (!std::binary_search(transaction->levels.begin(), transaction->levels.end(), level))
@@ -582,6 +680,7 @@ void ImageFileWidget::prepareDocument(ResolutionLevel level, bool reopen)
 void ImageFileWidget::commitRefresh()
 {
     if (!m_refresh) return;
+    emit previewsAboutToBeReplaced();
     auto transaction = std::move(m_refresh);
     clearImage(!transaction->image);
     if (transaction->image) {
@@ -605,6 +704,7 @@ void ImageFileWidget::commitRefresh()
     syncActiveLayerSelection();
     emit activeFramebufferChanged();
     emit refreshInProgressChanged(false);
+    emit previewsReplaced();
 }
 
 
@@ -653,6 +753,7 @@ void ImageFileWidget::setupLayout()
     m_attributesTreeView->setIndentation(16);
 
     m_layersTreeView = new QTreeView(m_layersPanel);
+    m_layersTreeView->setEnabled(false);
     m_layersPanel->layout()->addWidget(m_layersTreeView);
     m_layersTreeView->setUniformRowHeights(true);
     m_layersTreeView->installEventFilter(this);
@@ -666,6 +767,8 @@ void ImageFileWidget::setupLayout()
     m_mdiArea->setTabsClosable(true);
     m_mdiArea->setDocumentMode(true);
     m_mdiArea->setBackground(palette().brush(QPalette::Window));
+    auto* loading = new LoadProgressWidget(m_mdiArea->viewport());
+    loading->setDocument(this);
     syncTabbedPreviewPresentation();
 
     connect(
@@ -973,6 +1076,7 @@ QMdiSubWindow* ImageFileWidget::installPreview(PreparedPreview& preview)
 {
     if (!preview.widget || !preview.model) return nullptr;
     QWidget*       widget    = preview.widget;
+    widget->findChild<ResolutionLevelWidget*>()->setDocument(this);
     QMdiSubWindow* subWindow = m_mdiArea->addSubWindow(widget);
     preview.widget           = nullptr;
     m_previewOrder.removeAll(preview.key);
@@ -1511,13 +1615,16 @@ void ImageFileWidget::trackInitialPreview(FramebufferModel* model)
           m_initialPrepared.reset();
           m_initialPreview.clear();
           m_documentState = DocumentReady;
+          m_layersTreeView->setEnabled(true);
           emit documentReady();
+          emit activeFramebufferChanged();
       });
 }
 
 
 void ImageFileWidget::onAttributeDoubleClicked(const QModelIndex& index)
 {
+    if (!isDocumentReady() || !index.isValid()) return;
     HeaderItem* item = static_cast<HeaderItem*>(index.internalPointer());
     openAttribute(item);
 }
@@ -1525,6 +1632,7 @@ void ImageFileWidget::onAttributeDoubleClicked(const QModelIndex& index)
 
 void ImageFileWidget::onLayerDoubleClicked(const QModelIndex& index)
 {
+    if (!isDocumentReady() || !index.isValid()) return;
     LayerItem* item = static_cast<LayerItem*>(index.internalPointer());
     openLayer(item);
 }
@@ -1546,12 +1654,14 @@ void ImageFileWidget::onLoadFailed(const QString& msg)
         });
         return;
     }
-    showLoadError(msg);
+    if (m_documentState != DocumentPending) showLoadError(msg);
     if (
       m_documentState == DocumentPending
       && (!failedModel || m_initialPreview == failedModel)) {
         m_initialPreview.clear();
+        m_openError = msg;
         m_documentState = DocumentFailed;
+        emit activeFramebufferChanged();
         emit documentLoadFailed(msg);
     }
 }

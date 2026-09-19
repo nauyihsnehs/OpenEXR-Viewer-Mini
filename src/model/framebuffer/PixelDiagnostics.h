@@ -1,6 +1,7 @@
 #pragma once
 
 #include "FramebufferData.h"
+#include <model/LoadProgress.h>
 #include <cmath>
 #include <iomanip>
 #include <limits>
@@ -22,7 +23,7 @@ namespace PixelDiagnostics
 
     std::vector<FramebufferData::AnomalyRegion> connectedRegions(
       const std::vector<uint8_t>& flags, int width, int height,
-      const Cancellation& cancel);
+      const Cancellation& cancel, const Progress& progress = {});
 
     inline std::string compactSampleText(double value)
     {

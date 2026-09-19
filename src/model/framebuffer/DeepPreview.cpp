@@ -57,9 +57,9 @@ DepthBounds DeepPreview::bounds(const FramebufferData& data)
 
 DecodeResult DeepPreview::decode(std::shared_ptr<FramebufferData> data,
   const std::shared_ptr<ExrInput>& source, int part,
-  const std::array<std::string, 4>& names, bool scalar, const Cancellation& cancel)
+  const std::array<std::string, 4>& names, bool scalar, const Cancellation& cancel, const Progress& progress)
 {
-    data->deep = readDeepSamples(source, part, cancel);
+    data->deep = readDeepSamples(source, part, cancel, progress);
     if (!data->deep) return {};
     data->deepChannels = names; data->deepScalar = scalar;
     for (const auto& name : names) {
@@ -69,6 +69,7 @@ DecodeResult DeepPreview::decode(std::shared_ptr<FramebufferData> data,
         const auto* channel = data->deep->find(name);
         if (!channel) throw std::runtime_error("Missing deep channel: " + name);
     }
+    if (progress) progress->begin(LoadProgress::Processing, data->deep->channels.size(), QObject::tr("Deep statistics"));
     // Source statistics describe every stored channel sample, including invalid Z.
     for (const auto& channel : data->deep->channels) {
         for (size_t s = 0; s < data->deep->offsets.back(); ++s) {
@@ -80,17 +81,18 @@ DecodeResult DeepPreview::decode(std::shared_ptr<FramebufferData> data,
                 if (value > 0) ++data->positiveInfCount; else ++data->negativeInfCount;
             } else collect(value, data->minimum, data->maximum, data->hasFiniteSamples);
         }
+        if (progress) progress->advance();
     }
     if (const auto* chroma = data->deep->header.findTypedAttribute<Imf::ChromaticitiesAttribute>("chromaticities")) {
         data->hasRawChromaticities = true; data->rawChromaticities = chroma->value();
     }
     DecodeResult result;
-    result.data = compose(data, bounds(*data).clamp({}), cancel);
+    result.data = compose(data, bounds(*data).clamp({}), cancel, progress);
     return result;
 }
 
 std::shared_ptr<const FramebufferData> DeepPreview::compose(
-  const std::shared_ptr<const FramebufferData>& source, DepthRange range, const Cancellation& cancel)
+  const std::shared_ptr<const FramebufferData>& source, DepthRange range, const Cancellation& cancel, const Progress& progress)
 {
     if (!source->hasDeep()) return source;
     if (source->depthRange == range && (!source->pixels.empty() || source->stereo[0])) return source;
@@ -98,7 +100,8 @@ std::shared_ptr<const FramebufferData> DeepPreview::compose(
     data->depthRange = range;
     if (source->stereo[0]) {
         for (size_t i = 0; i < 2; ++i) {
-            data->stereo[i] = compose(source->stereo[i], range, cancel);
+            if (progress) progress->setContext(i == 0 ? "L" : "R");
+            data->stereo[i] = compose(source->stereo[i], range, cancel, progress);
             if (!data->stereo[i] || cancel->load()) return {};
             const auto& eye = *data->stereo[i];
             if (eye.hasFiniteLuminance) {
@@ -110,6 +113,7 @@ std::shared_ptr<const FramebufferData> DeepPreview::compose(
                 data->anomalyRegions.push_back(region);
             }
         }
+        if (progress) progress->setContext(QString());
         return data;
     }
     const auto& deep = *data->deep;
@@ -137,7 +141,9 @@ std::shared_ptr<const FramebufferData> DeepPreview::compose(
     const Imath::M44d conversion = convert
       ? Imath::M44d(Imf::RGBtoXYZ(chroma, 1.f)) * Imath::M44d(Imf::XYZtoRGB(standard, 1.f))
       : Imath::M44d();
+    if (progress) progress->begin(LoadProgress::Processing, data->height, QObject::tr("Deep composition"));
     for (size_t p = 0; p < pixels; ++p) {
+        if (progress && p % size_t(data->width) == 0 && p) progress->advance();
         if (p % size_t(data->width) == 0 && cancel->load()) return {};
         double sum[4] = {}, accumulatedAlpha = 0.;
         for (size_t j = 0; j < deep.counts[p]; ++j) {
@@ -173,6 +179,8 @@ std::shared_ptr<const FramebufferData> DeepPreview::compose(
             collect(ToneMapping::luminance(data->pixels[4 * p], data->pixels[4 * p + 1], data->pixels[4 * p + 2]),
               data->luminanceMin, data->luminanceMax, data->hasFiniteLuminance);
     }
-    data->anomalyRegions = PixelDiagnostics::connectedRegions(flags, data->width, data->height, cancel);
+    if (progress) progress->advance();
+    if (progress) progress->begin(LoadProgress::Processing, 0, QObject::tr("Anomaly regions"));
+    data->anomalyRegions = PixelDiagnostics::connectedRegions(flags, data->width, data->height, cancel, progress);
     return cancel->load() ? nullptr : data;
 }

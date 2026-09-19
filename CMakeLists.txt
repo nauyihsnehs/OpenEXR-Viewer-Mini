@@ -137,6 +137,11 @@ set(PROJECT_SOURCES
     src/view/ScaleWidget.h
     src/view/RangeSliderWidget.cpp
     src/view/RangeSliderWidget.h
+    src/model/LoadProgress.h
+    src/view/LoadProgressWidget.cpp
+    src/view/LoadProgressWidget.h
+    src/view/ResolutionLevelWidget.cpp
+    src/view/ResolutionLevelWidget.h
     src/view/ProjectionControls.cpp
     src/view/ProjectionControls.h
     src/view/DepthRangeWidget.cpp

@@ -70,18 +70,23 @@ void RGBFramebufferModel::loadStereo(const std::shared_ptr<ExrInput>& file,
                                      const std::array<Input, 2>& eyes, ResolutionLevel level)
 {
     m_channels = {};
-    startLoading([file, eyes, level](const Cancellation& cancel) -> DecodeResult {
+    startLoading([file, eyes, level](const Cancellation& cancel, const Progress& progress) -> DecodeResult {
         if (!file || !file->file) throw std::runtime_error("No source image.");
         if (!ViewMetadata::stereoGeometryMatches(file->file->header(eyes[0].part), file->file->header(eyes[1].part), level))
             throw std::runtime_error("Stereo views require identical display windows and pixel aspect ratios.");
         auto data = std::make_shared<FramebufferData>();
         for (size_t i = 0; i < eyes.size(); ++i) {
             if (cancel->load()) return DecodeResult();
+            if (progress) progress->setContext(i == 0 ? "L" : "R");
             auto decoded = FramebufferLoader::decode(file, eyes[i].part,
-              decodeLayout(eyes[i].layout), eyes[i].channels, cancel, level);
+              decodeLayout(eyes[i].layout), eyes[i].channels, cancel, level, progress);
             if (!decoded.data) return decoded;
             data->stereo[i] = decoded.data;
             data->stereoChannels[i] = eyes[i].channels;
+        }
+        if (progress) {
+            progress->setContext(QString());
+            progress->begin(LoadProgress::Processing, 0, QObject::tr("Stereo"));
         }
         const auto& left = *data->stereo[0];
         const auto& right = *data->stereo[1];
@@ -137,13 +142,13 @@ void RGBFramebufferModel::load(
 {
     m_channels = channels;
     const auto layout = decodeLayout(m_layerType);
-    startLoading([file, partId, channels, layout, level](const Cancellation& cancel) {
+    startLoading([file, partId, channels, layout, level](const Cancellation& cancel, const Progress& progress) {
         return FramebufferLoader::decode(
           file,
           partId,
           layout,
           channels,
-          cancel, level);
+          cancel, level, progress);
     });
 }
 
@@ -338,14 +343,15 @@ void RGBFramebufferModel::updateImage()
     const auto   colormap = m_falseColorMap;
     requestRender(
       [source, projection, range, automatic, mode, method, exposure, params, minimum, maximum, colormap](
-        const Cancellation& cancel) -> RenderResult {
-          const auto data = DeepPreview::compose(source, range, cancel);
+        const Cancellation& cancel, const Progress& progress) -> RenderResult {
+          const auto data = DeepPreview::compose(source, range, cancel, progress);
           if (!data || cancel->load()) return {};
           const double low = automatic && data->hasFiniteLuminance ? data->luminanceMin : minimum;
           const double high = automatic && data->hasFiniteLuminance ? data->luminanceMax : maximum;
-          const auto mapper = [mode, method, exposure, params, colormap, low, high](
+          const auto mapper = [mode, method, exposure, params, colormap, low, high, progress](
             const FramebufferData& frame, const Cancellation& cancel) -> QImage {
               const auto* data = &frame;
+              if (progress) progress->begin(LoadProgress::Rendering, data->height);
               QImage image(data->width, data->height, QImage::Format_RGBA8888);
               if (image.isNull()) return image;
               uchar*     bits    = image.bits();
@@ -399,9 +405,10 @@ void RGBFramebufferModel::updateImage()
                           output[3] = 255;
                       }
                   }
+                  if (progress) progress->advance();
               }
               return cancel->load() ? QImage() : image;
           };
-          return renderProjection(data, projection, mapper, cancel);
+          return renderProjection(data, projection, mapper, cancel, progress);
       });
 }

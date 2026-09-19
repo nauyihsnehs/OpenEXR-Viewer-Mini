@@ -21,12 +21,18 @@
 #include <QLabel>
 #include <view/ProjectionControls.h>
 #include <view/MinimalImageWidget.h>
+#include <view/LoadProgressWidget.h>
 #include <QSemaphore>
 #include <QSettings>
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QWheelEvent>
+#include <QSlider>
+#include <view/ResolutionLevelWidget.h>
 #include <QTabBar>
+#include <QPlainTextEdit>
+#include <QProgressBar>
+#include <QtConcurrent/QtConcurrentRun>
 #include <QtEndian>
 #include <model/OpenEXRImage.h>
 #include <io/ImageSave.h>
@@ -395,14 +401,51 @@ namespace
         void updateImage() override {}
     };
 
+    // The error may now arrive after asynchronous header I/O.
     void dismissNextError()
     {
-        QTimer::singleShot(0, [] {
-            for (QWidget* widget : QApplication::topLevelWidgets())
-                if (auto* message = qobject_cast<QMessageBox*>(widget))
+        auto* timer = new QTimer(qApp);
+        QObject::connect(timer, &QTimer::timeout, timer, [timer] {
+            for (QWidget* widget : QApplication::topLevelWidgets()) {
+                if (auto* message = qobject_cast<QMessageBox*>(widget)) {
                     message->accept();
+                    timer->stop();
+                    timer->deleteLater();
+                    return;
+                }
+            }
         });
+        QTimer::singleShot(10000, timer, &QObject::deleteLater);
+        timer->start(10);
     }
+
+    class ShowCounter : public QObject {
+      public:
+        int count = 0;
+      protected:
+        bool eventFilter(QObject*, QEvent* event) override
+        {
+            if (event->type() == QEvent::Show) ++count;
+            return false;
+        }
+    };
+
+    struct LoadPoolBlock {
+        struct Gate { QSemaphore entered, resume; };
+        std::shared_ptr<Gate> gate = std::make_shared<Gate>();
+        LoadPoolBlock()
+        {
+            const auto shared = gate;
+            for (int i = 0; i < 2; ++i)
+                QtConcurrent::run(imageLoadPool(), [shared] {
+                    shared->entered.release();
+                    shared->resume.acquire();
+                });
+        }
+        ~LoadPoolBlock() { release(); }
+        void release() { if (gate) { gate->resume.release(2); gate.reset(); } }
+    };
+
 }   // namespace
 
 class ViewerTests: public QObject
@@ -939,14 +982,18 @@ class ViewerTests: public QObject
         auto started = std::make_shared<QSemaphore>();
         auto release = std::make_shared<QSemaphore>();
         // This job deliberately ignores cancellation to verify generation checks.
-        model.requestRender([started, release](const Cancellation&) {
+        model.requestRender([started, release](const Cancellation&, const Progress& progress) {
+            progress->begin(LoadProgress::Rendering, 10);
+            progress->advance(3);
             started->release();
             release->acquire();
+            progress->advance(7); // Must not change a superseding job's progress.
             QImage image(1, 1, QImage::Format_RGB32);
             image.fill(Qt::red);
             return image;
         });
         QTRY_VERIFY(started->available());
+        const auto oldProgress = model.loadProgress();
         QSignalSpy changes(&model, &FramebufferModel::imageChanged);
         bool       guiThread = false;
         connect(&model, &FramebufferModel::imageChanged, &model, [&] {
@@ -956,9 +1003,11 @@ class ViewerTests: public QObject
         QElapsedTimer timer;
         timer.start();
         for (int i = 0; i < 100; ++i) {
-            model.requestRender([i](const Cancellation&) {
+            model.requestRender([i](const Cancellation&, const Progress& progress) {
+                progress->begin(LoadProgress::Rendering, 1);
                 QImage image(1, 1, QImage::Format_RGB32);
                 image.fill(QColor(i, 0, 0));
+                progress->advance();
                 return image;
             });
         }
@@ -971,6 +1020,9 @@ class ViewerTests: public QObject
         QTRY_VERIFY(model.isPreviewReady());
         QCOMPARE(changes.count(), 1);
         QCOMPARE(model.getLoadedImage().pixelColor(0, 0), QColor(99, 0, 0));
+        QCOMPARE(oldProgress->snapshot().completed, uint64_t(3));
+        QCOMPARE(model.loadProgress()->snapshot().completed, uint64_t(1));
+        QVERIFY(model.loadProgress()->snapshot().generation > oldProgress->snapshot().generation);
         QVERIFY(guiThread);
     }
 
@@ -1776,9 +1828,132 @@ class ViewerTests: public QObject
         else writeFixture(path, 1, 1, {{"Y", {1.f}}});
         dismissNextError();
         widget.refresh();
+        QTRY_VERIFY(!widget.isRefreshInProgress());
         QCOMPARE(widget.sourceImage(), oldSource);
         QCOMPARE(widget.activeFramebufferModel(), oldPreview);
         QCOMPARE(widget.resolutionLevel(), selected);
+    }
+
+    void resolutionSlidersDeferReadsAndSynchronize_data()
+    {
+        QTest::addColumn<bool>("ripmap");
+        QTest::newRow("mipmap") << false;
+        QTest::newRow("ripmap") << true;
+    }
+
+    void resolutionSlidersDeferReadsAndSynchronize()
+    {
+        QFETCH(bool, ripmap);
+        const QString path = fixture(ripmap ? "rip-sliders" : "mip-sliders");
+        if (ripmap) writeRipFixture(path); else writeMipFixture(path);
+        MainWindow window; window.resize(900, 650); window.show(); window.open(path);
+        auto* document = window.findChild<ImageFileWidget*>();
+        QTRY_VERIFY(document && document->isDocumentReady());
+        FileWidget other(path); QTRY_VERIFY(other.isDocumentReady());
+        auto* controls = document->activePreviewWidget()->findChild<ResolutionLevelWidget*>();
+        QVERIFY(controls && !controls->isHidden());
+        auto* x = controls->findChild<QSlider*>("resolutionXSlider");
+        auto* y = controls->findChild<QSlider*>("resolutionYSlider");
+        QCOMPARE(y->isHidden(), !ripmap);
+        const auto* old = document->activeFramebufferModel();
+        const auto image = PreviewImage::render(*old);
+        QSignalSpy requests(document, &ImageFileWidget::refreshInProgressChanged);
+        x->setSliderDown(true); x->setSliderPosition(1); x->setSliderPosition(2);
+        QCOMPARE(requests.count(), 0); QVERIFY(!document->isRefreshInProgress());
+        QCOMPARE(document->resolutionLevel(), ResolutionLevel());
+        QCOMPARE(document->activeFramebufferModel(), old);
+        QCOMPARE(PreviewImage::render(*old), image); // Copy/export still sees the committed level.
+        QVERIFY(controls->findChild<QLabel*>("resolutionLevelStatus")->text().startsWith("Target"));
+        const ResolutionLevel target(2, ripmap ? 0 : 2);
+        x->setSliderDown(false);
+        QCOMPARE(requests.count(), 1); QVERIFY(document->isRefreshInProgress());
+        QCOMPARE(document->requestedResolutionLevel(), target);
+        QVERIFY(!controls->isEnabled());
+        QVERIFY(controls->findChild<QLabel*>("resolutionLevelStatus")->text().contains("Loading"));
+        QCOMPARE(document->activeFramebufferModel(), old);
+        QTRY_VERIFY(!document->isRefreshInProgress());
+        QCOMPARE(document->resolutionLevel(), target);
+        QCOMPARE(other.resolutionLevel(), ResolutionLevel());
+        controls = document->activePreviewWidget()->findChild<ResolutionLevelWidget*>();
+        QVERIFY(controls->isEnabled());
+        x = controls->findChild<QSlider*>("resolutionXSlider");
+        QCOMPARE(x->value(), 2);
+        auto* selected = window.findChild<QAction*>(QString("action_ResolutionLevel%1_%2").arg(target.x).arg(target.y));
+        QVERIFY(selected && selected->isChecked());
+        if (ripmap) {
+            y = controls->findChild<QSlider*>("resolutionYSlider");
+            y->setSliderDown(true); y->setSliderPosition(1); y->setSliderDown(false);
+            QTRY_VERIFY(!document->isRefreshInProgress());
+            QCOMPARE(document->resolutionLevel(), ResolutionLevel(2, 1));
+        }
+        controls = document->activePreviewWidget()->findChild<ResolutionLevelWidget*>();
+        x = controls->findChild<QSlider*>("resolutionXSlider");
+        const int previousY = document->resolutionLevel().y;
+        QTest::keyClick(x, Qt::Key_Home);
+        QTRY_VERIFY(!document->isRefreshInProgress());
+        QCOMPARE(document->resolutionLevel(), ResolutionLevel(0, ripmap ? previousY : 0));
+        // Native slider wheel handling must neither change layers nor zoom the image.
+        x = document->activePreviewWidget()->findChild<QSlider*>("resolutionXSlider");
+        const double zoom = document->activeGraphicsView()->viewState().zoom;
+        QWheelEvent wheel(QPointF(4, 4), QPointF(x->mapToGlobal(QPoint(4, 4))), QPoint(), QPoint(0, 120),
+                          Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+        QApplication::sendEvent(x, &wheel);
+        QVERIFY(!document->isRefreshInProgress());
+        QCOMPARE(document->activeGraphicsView()->viewState().zoom, zoom);
+        const int last = x->maximum();
+        QTest::keyClick(x, Qt::Key_End);
+        QTRY_VERIFY(!document->isRefreshInProgress());
+        QCOMPARE(document->resolutionLevel(), ResolutionLevel(last, ripmap ? previousY : last));
+        x = document->activePreviewWidget()->findChild<QSlider*>("resolutionXSlider");
+        QTest::keyClick(x, Qt::Key_Left);
+        QTRY_VERIFY(!document->isRefreshInProgress());
+        QCOMPARE(document->resolutionLevel(), ResolutionLevel(last - 1, ripmap ? previousY : last - 1));
+    }
+
+    void resolutionSliderMinimalRebindAndFailure()
+    {
+        const QString path = fixture("slider-minimal");
+        writeRipFixture(path, Imf::ROUND_UP, {1, 0});
+        MainWindow window; window.resize(900, 650); window.show(); window.open(path);
+        auto* document = window.findChild<ImageFileWidget*>();
+        QTRY_VERIFY(document && document->isDocumentReady());
+        document->activeGraphicsView()->setZoomLevel(8.);
+        QVERIFY(QMetaObject::invokeMethod(&window, "toggleMinimalView"));
+        QWidget* minimal = window.centralWidget();
+        auto* view = minimal->findChild<GraphicsView*>(); QVERIFY(view);
+        auto* controls = minimal->findChild<ResolutionLevelWidget*>(); QVERIFY(controls && !controls->isHidden());
+        auto* x = controls->findChild<QSlider*>("resolutionXSlider");
+        const auto* old = document->activeFramebufferModel();
+        QTimer closeError;
+        connect(&closeError, &QTimer::timeout, &window, [] {
+            for (auto* top : QApplication::topLevelWidgets())
+                if (auto* message = qobject_cast<QMessageBox*>(top)) message->accept();
+        });
+        closeError.start(10);
+        x->setSliderDown(true); x->setSliderPosition(1); x->setSliderDown(false);
+        QTRY_VERIFY(!document->isRefreshInProgress());
+        closeError.stop();
+        QCOMPARE(document->activeFramebufferModel(), old);
+        QCOMPARE(window.centralWidget(), minimal); QCOMPARE(x->value(), 0);
+        QVERIFY(controls->isEnabled()); QCOMPARE(view->viewState().zoom, 8.);
+        QPointer<const FramebufferModel> previous(old);
+        auto* y = controls->findChild<QSlider*>("resolutionYSlider");
+        y->setSliderDown(true); y->setSliderPosition(1); y->setSliderDown(false);
+        QTRY_VERIFY(!document->isRefreshInProgress());
+        QVERIFY(previous.isNull()); QCOMPARE(window.centralWidget(), minimal);
+        QCOMPARE(document->resolutionLevel(), ResolutionLevel(0, 1));
+        QCOMPARE(view->viewState().zoom, 8.); QCOMPARE(y->value(), 1);
+        QVERIFY(window.width() >= 320); // Small stored levels retain usable controls without changing pixel zoom.
+        document->refresh(); QTRY_VERIFY(!document->isRefreshInProgress());
+        QCOMPARE(window.centralWidget(), minimal); QCOMPARE(view->viewState().zoom, 8.);
+        QCOMPARE(document->resolutionLevel(), ResolutionLevel(0, 1));
+        QVERIFY(QMetaObject::invokeMethod(&window, "toggleMinimalView"));
+        QCOMPARE(document->activeGraphicsView()->viewState().zoom, 8.);
+        const QString ordinary = fixture("slider-ordinary"); writeFixture(ordinary, 1, 1, {{"Y", {1.f}}});
+        window.open(ordinary);
+        QTRY_VERIFY(window.findChildren<ImageFileWidget*>().size() == 2);
+        FileWidget single(ordinary); QTRY_VERIFY(single.isDocumentReady());
+        QVERIFY(single.activePreviewWidget()->findChild<ResolutionLevelWidget*>()->isHidden());
     }
 
     void mipMenuMinimalAndSaveNotice()
@@ -2103,6 +2278,11 @@ class ViewerTests: public QObject
             FileWidget widget(path);
             QTRY_VERIFY(widget.isDocumentReady());
             QVERIFY(widget.resolutionLevels() == levels);
+            auto* controls = widget.activePreviewWidget()->findChild<ResolutionLevelWidget*>();
+            QVERIFY(controls);
+            QCOMPARE(controls->isHidden(), secondMode == Imf::ONE_LEVEL);
+            if (secondMode != Imf::ONE_LEVEL)
+                QCOMPARE(controls->findChild<QSlider*>("resolutionYSlider")->isHidden(), secondMode == Imf::MIPMAP_LEVELS);
             if (secondMode != Imf::RIPMAP_LEVELS) {
                 widget.setResolutionLevel({1, 0});
                 QVERIFY(!widget.isRefreshInProgress());
@@ -2534,6 +2714,203 @@ class ViewerTests: public QObject
         QCOMPARE(model.getLoadedImage().pixelColor(0, 0), QColor(Qt::black));
     }
 
+    void batchedDecodePreservesSamplesAndStatistics()
+    {
+        // Cross both 256-row boundaries, with a nonzero source origin.
+        const QString path = fixture("batched-rgb");
+        const int width = 3, height = 513;
+        const size_t count = size_t(width) * height;
+        std::vector<float> r(count, .25f), g(count, .5f), b(count, .75f);
+        r[0] = std::numeric_limits<float>::quiet_NaN();
+        g[256 * width] = std::numeric_limits<float>::infinity();
+        b[257 * width] = -std::numeric_limits<float>::infinity();
+        r.back() = 10.f;
+        writeFixture(path, width, height, {{"R", r}, {"G", g}, {"B", b}}, -5, -7);
+        OpenEXRImage source(path, nullptr);
+        const auto cancel = std::make_shared<std::atomic_bool>(false);
+        const auto progress = std::make_shared<LoadProgress>(7);
+        const auto result = FramebufferLoader::decode(source.sharedEXR(), 0,
+          FramebufferLoader::RGB, {{"R", "G", "B", ""}}, cancel, {}, progress);
+        QVERIFY(result.data);
+        QCOMPARE(result.data->dataWindow, QRect(-5, -7, width, height));
+        QCOMPARE(result.data->nanCount, uint64_t(1));
+        QCOMPARE(result.data->positiveInfCount, uint64_t(1));
+        QCOMPARE(result.data->negativeInfCount, uint64_t(1));
+        QCOMPARE(result.data->maximum, 10.);
+        const std::array<const std::vector<float>*, 3> channels = {{&r, &g, &b}};
+        for (size_t p = 0; p < count; ++p) {
+            for (size_t c = 0; c < channels.size(); ++c) {
+                const float expected = (*channels[c])[p];
+                const float actual = result.data->pixels[4 * p + c];
+                if (std::isnan(expected)) QVERIFY(std::isnan(actual));
+                else QVERIFY(actual == expected);
+            }
+            QCOMPARE(result.data->pixels[4 * p + 3], 1.f);
+        }
+        // The optional reporting path must preserve the exact source statistics.
+        const auto plain = FramebufferLoader::decode(source.sharedEXR(), 0,
+          FramebufferLoader::RGB, {{"R", "G", "B", ""}}, cancel);
+        QVERIFY(plain.data);
+        QCOMPARE(plain.data->luminanceMin, result.data->luminanceMin);
+        QCOMPARE(plain.data->luminanceMax, result.data->luminanceMax);
+    }
+
+    void pendingTabsAreVisibleAndClosingCancelsQueuedOpen()
+    {
+        const QString first = fixture("pending-first"), second = fixture("pending-second");
+        writeFixture(first, 2, 2, {{"Y", std::vector<float>(4, .25f)}});
+        writeFixture(second, 2, 2, {{"Y", std::vector<float>(4, .5f)}});
+        LoadPoolBlock block;
+        QTRY_COMPARE(block.gate->entered.available(), 2);
+        MainWindow window;
+        window.resize(800, 600); window.show();
+        QElapsedTimer elapsed;
+        elapsed.start();
+        window.open(first); window.open(second);
+        auto* tabs = window.findChild<QTabWidget*>("fileTabs");
+        QVERIFY(tabs);
+        QCOMPARE(tabs->count(), 2);
+        QCOMPARE(tabs->tabToolTip(0), first);
+        QCOMPARE(tabs->tabToolTip(1), second);
+        QPointer<ImageFileWidget> closing = qobject_cast<ImageFileWidget*>(tabs->widget(0));
+        auto* surviving = qobject_cast<ImageFileWidget*>(tabs->widget(1));
+        QVERIFY(closing && surviving);
+        QCOMPARE(tabs->currentWidget(), static_cast<QWidget*>(surviving));
+        QVERIFY(!surviving->sourceImage());
+        LoadProgress::Snapshot progress;
+        QVERIFY(surviving->loadingProgress(progress));
+        QCOMPARE(progress.phase, LoadProgress::Opening);
+        auto* overlay = surviving->findChild<QWidget*>("loadProgressOverlay");
+        QVERIFY(overlay && overlay->isHidden());
+        ShowCounter shown;
+        overlay->installEventFilter(&shown);
+        QVERIFY(!window.findChild<QAction*>("action_Save")->isEnabled());
+        QVERIFY(QMetaObject::invokeMethod(&window, "onTabCloseRequested", Q_ARG(int, 0)));
+        QVERIFY(closing.isNull());
+        block.release();
+        QTRY_VERIFY(surviving->isDocumentReady());
+        // A heavily loaded runner can legitimately take longer than the delay.
+        // When this tiny fixture completes quickly, it must never flash a panel.
+        if (elapsed.elapsed() < 1000) QCOMPARE(shown.count, 0);
+        QCOMPARE(tabs->count(), 1);
+        QCOMPARE(tabs->currentWidget(), static_cast<QWidget*>(surviving));
+        QTRY_VERIFY(overlay->isHidden());
+        QCOMPARE(surviving->activeFramebufferModel()->getDatasetMax(), .5);
+    }
+
+    void progressDelayContinuesAcrossHeaderAndDecode()
+    {
+        const QString path = fixture("progress-handoff");
+        writeFixture(path, 2, 2, {{"Y", std::vector<float>(4, .5f)}});
+        LoadPoolBlock opening;
+        QTRY_COMPARE(opening.gate->entered.available(), 2);
+        std::unique_ptr<LoadPoolBlock> decoding;
+        MainWindow window;
+        window.resize(800, 600); window.show();
+        QElapsedTimer elapsed;
+        elapsed.start();
+        window.open(path);
+        auto* document = window.findChild<ImageFileWidget*>();
+        QVERIFY(document);
+        auto* overlay = static_cast<LoadProgressWidget*>(document->findChild<QWidget*>("loadProgressOverlay"));
+        QVERIFY(overlay && overlay->isHidden());
+        // Loading signals briefly report no model during afterOpen(). Occupy
+        // both workers before the pixel decoder is submitted, to observe this
+        // handoff without depending on image size or machine decode speed.
+        connect(document, &ImageFileWidget::activeFramebufferChanged, &window, [&] {
+            if (document->sourceImage() && !decoding)
+                decoding.reset(new LoadPoolBlock);
+        });
+        QTest::qWait(650);
+        opening.release();
+        QTRY_VERIFY(decoding && decoding->gate->entered.available() == 2);
+        LoadProgress::Snapshot snapshot;
+        QVERIFY(document->loadingProgress(snapshot));
+        QCOMPARE(snapshot.phase, LoadProgress::Decoding);
+        overlay->setDocument(document); // Rebinding the same document is not a new operation.
+        QTest::qWait(qMax(0, 1200 - int(elapsed.elapsed())));
+        QVERIFY(!overlay->isHidden()); // Uses the original start, not the decoder start.
+        decoding->release();
+        QTRY_VERIFY(document->isDocumentReady());
+        QVERIFY(overlay->isHidden());
+    }
+
+    void progressDelayResetsAfterCancellationAndDocumentChange()
+    {
+        const QString path = fixture("progress-cancel");
+        writeMipFixture(path);
+        FileWidget document(path);
+        QTRY_VERIFY(document.isDocumentReady());
+        LoadPoolBlock blocked;
+        QTRY_COMPARE(blocked.gate->entered.available(), 2);
+        auto* overlay = document.findChild<QWidget*>("loadProgressOverlay");
+        QVERIFY(overlay);
+        document.refresh();
+        QVERIFY(overlay->isHidden());
+        document.setResolutionLevel(document.resolutionLevel()); // Cancel within the delay.
+        QTest::qWait(1200);
+        QVERIFY(overlay->isHidden());
+        document.refresh();
+        QVERIFY(overlay->isHidden()); // Previous elapsed time must not carry over.
+        QTRY_VERIFY(!overlay->isHidden());
+        document.setResolutionLevel(document.resolutionLevel());
+        QVERIFY(overlay->isHidden());
+
+        QWidget host;
+        LoadProgressWidget shared(&host);
+        document.refresh();
+        shared.setDocument(&document);
+        QTRY_VERIFY(!shared.isHidden());
+        auto* next = new ImageFileWidget(path, nullptr, true);
+        shared.setDocument(next);
+        QVERIFY(shared.isHidden());
+        delete next; // Clear both elapsed time and any deferred idle check.
+        QTest::qWait(1200);
+        QVERIFY(shared.isHidden());
+        document.setResolutionLevel(document.resolutionLevel());
+    }
+
+    void loadingErrorsBypassProgressDelay()
+    {
+        LoadPoolBlock blocked;
+        QTRY_COMPARE(blocked.gate->entered.available(), 2);
+        ImageFileWidget document(fixture("progress-error"), nullptr, true);
+        auto* overlay = document.findChild<QWidget*>("loadProgressOverlay");
+        QVERIFY(overlay && overlay->isHidden());
+        // Supply an error synchronously while the real open is still queued.
+        const QString reason = "Cannot read image file.";
+        QVERIFY(QMetaObject::invokeMethod(&document, "onLoadFailed", Q_ARG(QString, reason)));
+        QVERIFY(!overlay->isHidden());
+        QCOMPARE(document.findChild<QPlainTextEdit*>("loadErrorDetails")->toPlainText(), reason);
+    }
+
+    void cancellingHeaderRefreshRetainsCommittedImage()
+    {
+        const QString path = fixture("cancel-header-refresh");
+        writeMipFixture(path);
+        FileWidget widget(path);
+        QTRY_VERIFY(widget.isDocumentReady());
+        const auto* source = widget.sourceImage();
+        const auto* model = widget.activeFramebufferModel();
+        LoadPoolBlock block;
+        QTRY_COMPARE(block.gate->entered.available(), 2);
+        widget.refresh();
+        QVERIFY(widget.isRefreshInProgress());
+        LoadProgress::Snapshot progress;
+        QVERIFY(widget.loadingProgress(progress));
+        QCOMPARE(progress.phase, LoadProgress::Opening);
+        widget.setResolutionLevel(widget.resolutionLevel());
+        QVERIFY(!widget.isRefreshInProgress());
+        QVERIFY(!widget.loadingProgress(progress));
+        block.release();
+        // Queue a new request behind the cancelled job to observe its completion.
+        widget.refresh();
+        QTRY_VERIFY(!widget.isRefreshInProgress());
+        QVERIFY(widget.sourceImage() != source);
+        QVERIFY(widget.activeFramebufferModel() != model);
+        QVERIFY(widget.activeFramebufferModel()->isPreviewReady());
+    }
+
     void truncatedInputFailsCleanly()
     {
         const QString path = fixture("truncated");
@@ -2544,9 +2921,16 @@ class ViewerTests: public QObject
         file.close();
         QVERIFY_EXCEPTION_THROWN(OpenEXRImage(path, nullptr), std::exception);
         MainWindow window;
-        dismissNextError();
         window.open(path);
-        QCOMPARE(window.findChildren<ImageFileWidget*>().size(), 0);
+        auto* document = window.findChild<ImageFileWidget*>();
+        QVERIFY(document);
+        QTRY_VERIFY(document->hasDocumentLoadFailed());
+        QCOMPARE(window.findChildren<ImageFileWidget*>().size(), 1);
+        QVERIFY(!document->loadingError().isEmpty());
+        auto* details = document->findChild<QPlainTextEdit*>("loadErrorDetails");
+        QTRY_COMPARE(details->toPlainText(), document->loadingError());
+        QVERIFY(!details->isHidden());
+        QVERIFY(!window.findChild<QAction*>("action_Refresh")->isEnabled());
     }
 
     void rangeSliderIgnoresOtherButtonsAndUnchangedValues()
@@ -3133,6 +3517,7 @@ class ViewerTests: public QObject
         writeMultipartFixture(path, missing);
         dismissNextError();
         widget.refresh();
+        QTRY_VERIFY(!widget.isRefreshInProgress());
         QCOMPARE(widget.sourceImage(), oldImage);
         QCOMPARE(widget.activeFramebufferModel(), oldPreview);
         QCOMPARE(widget.stereoMode(), ImageFileWidget::StereoAnaglyph);
@@ -3627,6 +4012,7 @@ class ViewerTests: public QObject
         QVERIFY(QFile::rename(path, path + ".old"));
         dismissNextError();
         widget.refresh();
+        QTRY_VERIFY(!widget.isRefreshInProgress());
         QCOMPARE(widget.sourceImage(), previous);
         QCOMPARE(widget.findChild<RGBFramebufferWidget*>(), rgb);
     }
@@ -3680,7 +4066,7 @@ class ViewerTests: public QObject
         writeFixture(path, 2, 2, {{"Y", {1.f, 2.f, 3.f, 4.f}}});
         dismissNextError();
         widget.refresh();
-        QVERIFY(!widget.isRefreshInProgress());
+        QTRY_VERIFY(!widget.isRefreshInProgress());
         QCOMPARE(widget.sourceImage(), oldSource);
         QCOMPARE(widget.findChildren<YFramebufferWidget*>().size(), 2);
     }

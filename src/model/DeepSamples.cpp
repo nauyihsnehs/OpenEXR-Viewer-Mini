@@ -60,10 +60,11 @@ const DeepSamples::Channel* DeepSamples::find(const std::string& name) const
 
 std::shared_ptr<const DeepSamples> readDeepSamples(
   const std::shared_ptr<ExrInput>& source, int part,
-  const std::shared_ptr<std::atomic_bool>& cancel) try
+  const std::shared_ptr<std::atomic_bool>& cancel, const Progress& progress) try
 {
     if (!source || !source->file || part < 0 || part >= source->file->parts())
         throw std::runtime_error("Invalid deep image part.");
+    if (progress) progress->begin(LoadProgress::Decoding, 0, QObject::tr("Deep samples"));
     // Serialize cache creation, but keep the file binding lock scoped to each read.
     std::unique_lock<std::timed_mutex> cacheLock(source->deepMutex, std::defer_lock);
     while (!cacheLock.try_lock_for(std::chrono::milliseconds(20)))
@@ -117,6 +118,7 @@ std::shared_ptr<const DeepSamples> readDeepSamples(
     countsBuffer.insertSampleCountSlice(Imf::Slice::Make(Imf::UINT, data->counts.data(), window,
       sizeof(uint32_t), size_t(width) * sizeof(uint32_t)));
     size_t total = 0;
+    if (progress) progress->begin(LoadProgress::Decoding, data->height, QObject::tr("Sample counts"));
     for (int row = 0; row < data->height; ++row) {
         if (cancel->load()) return {};
         const int y = int(int64_t(window.min.y) + row);
@@ -133,11 +135,13 @@ std::shared_ptr<const DeepSamples> readDeepSamples(
             total += data->counts[p];
             data->offsets[p + 1] = total;
         }
+        if (progress) progress->advance();
     }
     for (auto& channel : data->channels) {
         if (cancel->load()) return {};
         channel.resize(total);
     }
+    if (progress) progress->begin(LoadProgress::Decoding, data->height, QObject::tr("Deep samples"));
     std::vector<std::vector<char*>> pointers(data->channels.size(), std::vector<char*>(data->width));
     for (int row = 0; row < data->height; ++row) {
         if (cancel->load()) return {};
@@ -165,10 +169,13 @@ std::shared_ptr<const DeepSamples> readDeepSamples(
                 throw std::runtime_error("Deep sample counts changed while reading.");
         }
         input.readPixels(y, y);
+        if (progress) progress->advance();
     }
     const auto* z = data->find("Z");
     data->order.resize(total);
+    if (progress) progress->begin(LoadProgress::Processing, data->height, QObject::tr("Depth order"));
     for (size_t p = 0; p < pixels; ++p) {
+        if (progress && p % size_t(data->width) == 0 && p) progress->advance();
         if (cancel->load()) return {};
         const size_t first = data->offsets[p], count = data->counts[p];
         for (size_t s = 0; s < count; ++s) {
@@ -188,6 +195,7 @@ std::shared_ptr<const DeepSamples> readDeepSamples(
           });
     }
     if (cancel->load()) return {};
+    if (progress) progress->advance();
     source->deepParts[part] = data;
     return data;
 }

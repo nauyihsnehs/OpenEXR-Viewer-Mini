@@ -35,6 +35,7 @@
 #include "NonFiniteIndicator.h"
 #include "DepthRangeWidget.h"
 #include "ProjectionControls.h"
+#include "ResolutionLevelWidget.h"
 #include "ScientificDoubleSpinBox.h"
 #include <QToolButton>
 #include <QSignalBlocker>
@@ -74,6 +75,7 @@ YFramebufferWidget::YFramebufferWidget(QWidget* parent)
         if (m_model) m_model->setHighlightNonFinite(enabled);
     });
     ui->horizontalLayout->addWidget(new ProjectionControls(this));
+    ui->horizontalLayout->addWidget(new ResolutionLevelWidget(this));
     wrapPreviewControls(ui->verticalLayout);
     ui->graphicsView->watchOutsideZoom(this, ui->horizontalLayout_3);
     ui->verticalLayout->insertWidget(1, new DepthRangeWidget(this));

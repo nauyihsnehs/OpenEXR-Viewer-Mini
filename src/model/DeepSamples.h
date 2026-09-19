@@ -1,4 +1,5 @@
 #pragma once
+#include <model/LoadProgress.h>
 
 #include <OpenEXR/ImfHeader.h>
 #include <OpenEXR/ImfPixelType.h>
@@ -53,4 +54,4 @@ struct DeepSamples {
 
 std::shared_ptr<const DeepSamples> readDeepSamples(
   const std::shared_ptr<ExrInput>& source, int part,
-  const std::shared_ptr<std::atomic_bool>& cancel);
+  const std::shared_ptr<std::atomic_bool>& cancel, const Progress& progress = {});

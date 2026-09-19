@@ -1,4 +1,5 @@
 #pragma once
+#include <model/LoadProgress.h>
 
 #include <model/framebuffer/FramebufferData.h>
 #include <QImage>
@@ -48,5 +49,5 @@ QRegion coverage(const FramebufferData& frame);
 bool sourcePosition(const FramebufferData& source, State state, QSize size,
                     int x, int y, QPointF& position);
 std::shared_ptr<const FramebufferData> project(const Snapshot& snapshot, State state,
-                                             QSize size, const Cancellation& cancel, int threads = 1);
+                                             QSize size, const Cancellation& cancel, int threads = 1, const Progress& progress = {});
 }

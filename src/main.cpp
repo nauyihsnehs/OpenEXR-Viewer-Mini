@@ -34,6 +34,9 @@
 #include <config.h>
 #include <QApplication>
 #include <QStringList>
+#include <QThread>
+#include <OpenEXR/ImfThreading.h>
+#include <algorithm>
 
 #include <cstdlib>
 #include <iostream>
@@ -57,6 +60,7 @@ int main(int argc, char* argv[])
 #endif
     QApplication a(argc, argv);
     a.setApplicationVersion(CMAKE_PROJECT_VERSION);
+    Imf::setGlobalThreadCount((std::min)(4, (std::max)(1, QThread::idealThreadCount() - 1)));
 
     MainWindow w;
     w.show();

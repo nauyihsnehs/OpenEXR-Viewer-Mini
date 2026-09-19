@@ -33,6 +33,7 @@
 #pragma once
 
 #include "FramebufferData.h"
+#include <model/LoadProgress.h>
 #include <util/EnvironmentProjection.h>
 #include <QFutureWatcher>
 #include <QImage>
@@ -92,6 +93,7 @@ class FramebufferModel: public QObject
     bool                      isImageLoaded() const { return m_loaded; }
     bool                      isPreviewReady() const { return m_ready; }
     bool                      isLoading() const { return m_loading; }
+    Progress loadProgress() const { return m_loading ? m_loadProgress : m_renderProgress; }
     QString                   errorString() const { return m_error; }
     int                       width() const { return m_data->width; }
     int                       height() const { return m_data->height; }
@@ -146,6 +148,7 @@ class FramebufferModel: public QObject
     std::string sampleLocationInfo(size_t channel, int x, int y) const;
     static std::string sampleLocationInfo(const FramebufferData& data, int component, int x, int y);
     using Decoder  = std::function<DecodeResult(const Cancellation&)>;
+    using ProgressDecoder = std::function<DecodeResult(const Cancellation&, const Progress&)>;
     struct RenderResult {
         RenderResult(QImage rendered = QImage(), std::shared_ptr<const FramebufferData> snapshot = {})
           : image(std::move(rendered)), data(std::move(snapshot)) {}
@@ -160,15 +163,18 @@ class FramebufferModel: public QObject
         QString error;
     };
     using Renderer = std::function<RenderResult(const Cancellation&)>;
+    using ProgressRenderer = std::function<RenderResult(const Cancellation&, const Progress&)>;
     void                                   startLoading(Decoder decoder);
+    void                                   startLoading(ProgressDecoder decoder);
     void                                   requestRender(Renderer renderer);
+    void                                   requestRender(ProgressRenderer renderer);
     static int                             renderThreadCount();
     virtual void                           updateImage() = 0;
     std::shared_ptr<const FramebufferData> m_data;
     EnvironmentProjection::Snapshot projectionInput() const;
     static RenderResult renderProjection(const std::shared_ptr<const FramebufferData>& data,
       EnvironmentProjection::Snapshot snapshot, EnvironmentProjection::ColorMapper mapper,
-      const Cancellation& cancel);
+      const Cancellation& cancel, const Progress& progress = {});
 
   private:
     DepthRange m_depthRange;
@@ -190,7 +196,8 @@ class FramebufferModel: public QObject
     QFutureWatcher<RenderResult> m_renderWatcher;
     Cancellation                 m_loadCancel;
     Cancellation                 m_renderCancel;
-    Renderer                     m_pendingRender;
+    ProgressRenderer             m_pendingRender;
+    Progress m_loadProgress, m_renderProgress;
     quint64                      m_generation       = 0;
     quint64                      m_activeGeneration = 0;
     bool                         m_renderActive     = false;

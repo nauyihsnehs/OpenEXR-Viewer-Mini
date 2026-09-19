@@ -219,7 +219,7 @@ QRegion EnvironmentProjection::coverage(const FramebufferData& frame)
 }
 
 std::shared_ptr<const FramebufferData> EnvironmentProjection::project(
-  const Snapshot& snapshot, State state, QSize size, const Cancellation& cancel, int threads)
+  const Snapshot& snapshot, State state, QSize size, const Cancellation& cancel, int threads, const Progress& progress)
 {
     if (!snapshot.source) throw std::runtime_error("No environment source.");
     if (cancel->load()) return {};
@@ -252,6 +252,7 @@ std::shared_ptr<const FramebufferData> EnvironmentProjection::project(
     const DirectionMapper direction(state, size);
     threads = std::max(1, std::min(4, threads));
     Q_UNUSED(threads);
+    if (progress) progress->begin(LoadProgress::Rendering, size.height(), QObject::tr("Projection"));
 #pragma omp parallel for num_threads(threads) if (count >= 65536)
     for (int y = 0; y < size.height(); ++y) {
         if (cancel->load()) continue;
@@ -273,8 +274,10 @@ std::shared_ptr<const FramebufferData> EnvironmentProjection::project(
             if (sphere) output->deepCoverage[p] = 1;
             if (diagnostics) flags[p] = sampler.flags;
         }
+        if (progress) progress->advance();
     }
+    if (progress) progress->begin(LoadProgress::Rendering, 0, QObject::tr("Projection coverage"));
     if (diagnostics && !cancel->load())
-        output->anomalyRegions = PixelDiagnostics::connectedRegions(flags, output->width, output->height, cancel);
+        output->anomalyRegions = PixelDiagnostics::connectedRegions(flags, output->width, output->height, cancel, progress);
     return cancel->load() ? nullptr : output;
 }

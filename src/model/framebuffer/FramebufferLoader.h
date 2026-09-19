@@ -1,6 +1,7 @@
 #pragma once
 
 #include "FramebufferData.h"
+#include <model/LoadProgress.h>
 #include <model/ExrInput.h>
 #include <array>
 #include <string>
@@ -20,5 +21,5 @@ namespace FramebufferLoader
       int                                             part,
       Layout                                          layout,
       const std::array<std::string, 4>&               channels,
-      const Cancellation&                             cancel, ResolutionLevel level = {});
+      const Cancellation&                             cancel, ResolutionLevel level = {}, const Progress& progress = {});
 }   // namespace FramebufferLoader

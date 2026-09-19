@@ -35,6 +35,7 @@
 #include "NonFiniteIndicator.h"
 #include "DepthRangeWidget.h"
 #include "ProjectionControls.h"
+#include "ResolutionLevelWidget.h"
 #include <QSignalBlocker>
 #include "ui_RGBFramebufferWidget.h"
 
@@ -108,6 +109,7 @@ RGBFramebufferWidget::RGBFramebufferWidget(QWidget* parent)
         if (m_model) m_model->setHighlightNonFinite(enabled);
     });
     ui->horizontalLayout->addWidget(new ProjectionControls(this));
+    ui->horizontalLayout->addWidget(new ResolutionLevelWidget(this));
     wrapPreviewControls(ui->verticalLayout);
     ui->graphicsView->watchOutsideZoom(this, ui->horizontalLayout_2);
     ui->verticalLayout->insertWidget(1, new DepthRangeWidget(this));

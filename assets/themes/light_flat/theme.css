@@ -37,6 +37,10 @@ QWidget {
     selection-color: #ffffff;
 }
 QWidget:disabled { color: #989da6; }
+QWidget#loadProgressOverlay { background: #ffffff; border: 1px solid #dce1e7; border-radius: 8px; }
+QWidget#loadProgressOverlay QLabel { background: transparent; border: none; }
+QProgressBar#loadProgressBar { background: #f2f3f5; border: 1px solid #dce1e7; border-radius: 4px; text-align: center; min-height: 18px; }
+QProgressBar#loadProgressBar::chunk { background: #b4cde7; border-radius: 3px; }
 QMainWindow#MainWindow[windowFrameActive="true"] {
     border: 1px solid #dce1e7;
 }

@@ -56,8 +56,10 @@ class ImageFileWidget: public QWidget
 {
     Q_OBJECT
   public:
+    // Desktop opens opt into background header I/O; preserve synchronous source
+    // construction for existing internal callers (pixel decoding is always async).
     explicit ImageFileWidget(
-      const QString& filename, QWidget* parent = nullptr);
+      const QString& filename, QWidget* parent = nullptr, bool asynchronous = false);
 
     explicit ImageFileWidget(std::istream& stream, QWidget* parent = nullptr);
 
@@ -88,6 +90,8 @@ class ImageFileWidget: public QWidget
     bool                    isDocumentReady() const;
     bool                    hasDocumentLoadFailed() const;
     bool                    isRefreshInProgress() const;
+    bool loadingProgress(LoadProgress::Snapshot& snapshot) const;
+    QString loadingError() const { return m_documentState == DocumentFailed ? m_openError : QString(); }
     QString                 activeFramebufferStatusText() const;
     QString                 activeFramebufferStatusToolTip() const;
     QString                 activeLayerTitleText() const;
@@ -95,6 +99,7 @@ class ImageFileWidget: public QWidget
     enum StereoMode { StereoDefault, StereoLeft, StereoRight, StereoAnaglyph };
     ResolutionLevel resolutionLevel() const { return m_resolutionLevel; }
     const std::vector<ResolutionLevel>& resolutionLevels() const { return m_resolutionLevels; }
+    ResolutionLevel requestedResolutionLevel() const;
     bool hasRipmapLevels() const;
     QString resolutionLevelLabel(ResolutionLevel level) const;
     void setResolutionLevel(ResolutionLevel level);
@@ -109,6 +114,8 @@ class ImageFileWidget: public QWidget
     void documentReady();
     void documentLoadFailed(const QString& message);
     void refreshInProgressChanged(bool refreshing);
+    void previewsAboutToBeReplaced();
+    void previewsReplaced();
 
 
   public slots:
@@ -170,7 +177,9 @@ class ImageFileWidget: public QWidget
     void          restorePreview(
                QWidget* widget, const SavedPreview& state) const;
     void trackInitialPreview(FramebufferModel* model);
-    void prepareDocument(ResolutionLevel level, bool reopen);
+    void prepareDocument(ResolutionLevel level, bool reopen, std::shared_ptr<ExrInput> input = {});
+    void startInputOpen(bool reopen, ResolutionLevel level);
+    void cancelInputOpen();
     void commitRefresh();
     void abortRefresh(const QString& message);
     void showLoadError(const QString& message) const;
@@ -215,4 +224,9 @@ class ImageFileWidget: public QWidget
     bool m_selectingStereo = false;
     QPointer<FramebufferModel>       m_initialPreview;
     std::unique_ptr<RefreshTransaction> m_refresh;
+    bool m_opening = false;
+    unsigned m_inputGeneration = 0;
+    Cancellation m_openCancel;
+    Progress m_openProgress;
+    QString m_openError;
 };

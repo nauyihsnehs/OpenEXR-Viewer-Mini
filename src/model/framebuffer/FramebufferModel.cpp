@@ -145,7 +145,7 @@ EnvironmentProjection::Snapshot FramebufferModel::projectionSnapshot() const
 
 FramebufferModel::RenderResult FramebufferModel::renderProjection(
   const std::shared_ptr<const FramebufferData>& data, EnvironmentProjection::Snapshot snapshot,
-  EnvironmentProjection::ColorMapper mapper, const Cancellation& cancel)
+  EnvironmentProjection::ColorMapper mapper, const Cancellation& cancel, const Progress& progress)
 {
     RenderResult result;
     result.data = data;
@@ -163,7 +163,7 @@ FramebufferModel::RenderResult FramebufferModel::renderProjection(
             && QSize(cached->width, cached->height) == raster)
             result.projected = cached;
         else
-            result.projected = EnvironmentProjection::project(snapshot, snapshot.state, raster, cancel, renderThreadCount());
+            result.projected = EnvironmentProjection::project(snapshot, snapshot.state, raster, cancel, renderThreadCount(), progress);
         if (!result.projected) return {};
         result.projectedCoverage = EnvironmentProjection::coverage(*result.projected);
     }
@@ -291,6 +291,7 @@ FramebufferModel::FramebufferModel(QObject* parent)
       this,
       [this] {
           const DecodeResult result = m_loadWatcher.result();
+          if (m_loadProgress) m_loadProgress->stop();
           m_loading                 = false;
           m_error                   = result.error;
           if (!result.data) {
@@ -309,6 +310,7 @@ FramebufferModel::FramebufferModel(QObject* parent)
       this,
       [this] {
           const RenderResult result = m_renderWatcher.result();
+          if (m_activeGeneration == m_generation && m_renderProgress) m_renderProgress->stop();
           m_renderActive            = false;
           if (m_activeGeneration == m_generation) {
               m_error = result.error;
@@ -346,6 +348,8 @@ FramebufferModel::~FramebufferModel()
     // Jobs own all their inputs; destroying a watcher does not wait for them.
     if (m_loadCancel) m_loadCancel->store(true);
     if (m_renderCancel) m_renderCancel->store(true);
+    if (m_loadProgress) m_loadProgress->stop();
+    if (m_renderProgress) m_renderProgress->stop();
 }
 
 int FramebufferModel::renderThreadCount()
@@ -363,13 +367,18 @@ void FramebufferModel::setReady(bool ready)
 
 void FramebufferModel::startLoading(Decoder decoder)
 {
+    startLoading([decoder](const Cancellation& cancel, const Progress&) { return decoder(cancel); });
+}
+
+void FramebufferModel::startLoading(ProgressDecoder decoder)
+{
     Q_ASSERT(QThread::currentThread() == thread());
     if (m_loading) return;
     m_projectionTimer.stop();
     m_projectionInteracting = m_projectionDirty = false;
     ++m_generation;
     if (m_renderCancel) m_renderCancel->store(true);
-    m_pendingRender = Renderer();
+    m_pendingRender = ProgressRenderer();
     m_loaded        = false;
     m_loading       = true;
     m_error.clear();
@@ -377,10 +386,13 @@ void FramebufferModel::startLoading(Decoder decoder)
     emit readinessChanged();
     m_loadCancel              = std::make_shared<std::atomic_bool>(false);
     const Cancellation cancel = m_loadCancel;
-    m_loadWatcher.setFuture(QtConcurrent::run([decoder, cancel] {
+    m_loadProgress = std::make_shared<LoadProgress>(m_generation);
+    m_loadProgress->begin(LoadProgress::Decoding);
+    const Progress progress = m_loadProgress;
+    m_loadWatcher.setFuture(QtConcurrent::run(imageLoadPool(), [decoder, cancel, progress] {
         DecodeResult result;
         try {
-            if (!cancel->load()) result = decoder(cancel);
+            if (!cancel->load()) result = decoder(cancel, progress);
         } catch (const std::exception& error) {
             result.error = QString::fromUtf8(error.what());
         } catch (...) {
@@ -392,6 +404,11 @@ void FramebufferModel::startLoading(Decoder decoder)
 
 void FramebufferModel::requestRender(Renderer renderer)
 {
+    requestRender([renderer](const Cancellation& cancel, const Progress&) { return renderer(cancel); });
+}
+
+void FramebufferModel::requestRender(ProgressRenderer renderer)
+{
     Q_ASSERT(QThread::currentThread() == thread());
     if (!m_loaded) return;
     ++m_generation;
@@ -402,6 +419,9 @@ void FramebufferModel::requestRender(Renderer renderer)
     m_error.clear();
     setReady(false);
     if (m_renderCancel) m_renderCancel->store(true);
+    if (m_renderProgress) m_renderProgress->stop();
+    m_renderProgress = std::make_shared<LoadProgress>(m_generation);
+    m_renderProgress->begin(LoadProgress::Rendering);
     m_pendingRender = std::move(renderer);
     startRender();
 }
@@ -411,14 +431,16 @@ void FramebufferModel::startRender()
     if (m_renderActive || !m_pendingRender) return;
     m_renderActive            = true;
     m_activeGeneration        = m_generation;
-    const Renderer render     = std::move(m_pendingRender);
-    m_pendingRender           = Renderer();
+    const ProgressRenderer render = std::move(m_pendingRender);
+    m_pendingRender           = ProgressRenderer();
     m_renderCancel            = std::make_shared<std::atomic_bool>(false);
     const Cancellation cancel = m_renderCancel;
-    m_renderWatcher.setFuture(QtConcurrent::run(renderPool(), [render, cancel] {
+    const Progress progress = m_renderProgress;
+    m_renderWatcher.setFuture(QtConcurrent::run(renderPool(), [render, cancel, progress] {
         RenderResult result;
         try {
-            if (!cancel->load()) result = render(cancel);
+            if (!cancel->load()) result = render(cancel, progress);
+            progress->stop();
             if (result.image.isNull() && !cancel->load())
                 result.error = QObject::tr("Unable to allocate preview image.");
         } catch (const std::exception& error) {

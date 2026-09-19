@@ -40,9 +40,10 @@ namespace
 
 std::vector<FramebufferData::AnomalyRegion> PixelDiagnostics::connectedRegions(
   const std::vector<uint8_t>& flags, int width, int height,
-  const Cancellation& cancel)
+  const Cancellation& cancel, const Progress& progress)
 {
     if (flags.empty()) return {};
+    if (progress) progress->begin(LoadProgress::Processing, height, QObject::tr("Anomaly regions"));
     std::vector<Node> nodes;
     std::vector<Run> previous, current;
     for (int y = 0; y < height; ++y) {
@@ -80,11 +81,15 @@ std::vector<FramebufferData::AnomalyRegion> PixelDiagnostics::connectedRegions(
             }
         }
         previous.swap(current);
+        if (progress) progress->advance();
     }
+    if (progress) progress->begin(LoadProgress::Processing, nodes.size(), QObject::tr("Region bounds"));
     std::vector<FramebufferData::AnomalyRegion> regions;
     for (size_t i = 0; i < nodes.size(); ++i) {
         if ((i & 4095) == 0 && cancel->load()) return {};
         if (nodes[i].parent == i) regions.push_back(nodes[i].region);
+        if (progress && ((i + 1) & 4095) == 0) progress->advance(4096);
     }
+    if (progress) progress->advance(nodes.size() & 4095);
     return regions;
 }

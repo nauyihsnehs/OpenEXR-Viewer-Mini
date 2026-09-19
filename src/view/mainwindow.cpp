@@ -361,6 +361,7 @@ MainWindow::MainWindow(QWidget* parent)
 MainWindow::~MainWindow()
 {
     m_minimalView = false;
+    m_rebindingMinimalModel = false;
     for (const auto& connection : m_minimalConnections) disconnect(connection);
     const QSignalBlocker blockTabs(m_openFileTabs);
     while (m_openFileTabs->count()) {
@@ -763,7 +764,7 @@ void MainWindow::applyPanelVisibilityToAllTabs() const
 
 void MainWindow::updateShowActions()
 {
-    if (m_minimalView && !m_switchingMinimalView) {
+    if (m_minimalView && !m_switchingMinimalView && !m_rebindingMinimalModel) {
         const auto* currentModel = currentFileWidget()
                                      ? currentFileWidget()->activeFramebufferModel() : nullptr;
         if (!m_minimalModel || (currentModel && currentModel != m_minimalModel.data()))
@@ -775,6 +776,8 @@ void MainWindow::updateShowActions()
     const FramebufferModel* model
       = widget ? widget->activeFramebufferModel() : nullptr;
     const bool copyEnabled = model && model->isFullPreviewReady();
+    ui->action_Refresh->setEnabled(widget && widget->isDocumentReady()
+      && !widget->isStream() && !widget->isRefreshInProgress());
 
     ui->action_Save->setEnabled(model && !model->getLoadedImage().isNull());
     ui->action_CopyImage->setEnabled(copyEnabled);
@@ -925,11 +928,30 @@ void MainWindow::addFileTab(ImageFileWidget* fileWidget, const QString& title)
       fileWidget,
       &ImageFileWidget::refreshInProgressChanged,
       this,
-      [this, fileWidget](bool refreshing) {
-          if (currentFileWidget() == fileWidget)
-              ui->action_Refresh->setEnabled(
-                !refreshing && !fileWidget->isStream());
-      });
+      &MainWindow::updateShowActions);
+    connect(fileWidget, &ImageFileWidget::previewsAboutToBeReplaced, this, [this, fileWidget] {
+        if (!m_minimalView || currentFileWidget() != fileWidget) return;
+        m_rebindingMinimalModel = true;
+        m_minimalReloadZoom = m_minimalPage->view()->viewState().zoom;
+        for (const auto& connection : m_minimalConnections) disconnect(connection);
+        m_minimalConnections.clear();
+        m_minimalPage->view()->setModel(nullptr);
+        m_minimalModel.clear();
+    });
+    connect(fileWidget, &ImageFileWidget::previewsReplaced, this, [this, fileWidget] {
+        if (!m_rebindingMinimalModel || currentFileWidget() != fileWidget) return;
+        m_rebindingMinimalModel = false;
+        const auto* model = fileWidget->activeFramebufferModel();
+        if (!m_minimalView || !model) { leaveMinimalView(); return; }
+        m_completeView = fileWidget->activeGraphicsView();
+        if (m_completeView) m_completeViewState = m_completeView->viewState();
+        m_minimalPreview = fileWidget->activePreviewWidget();
+        bindMinimalModel(model);
+        resizeMinimalView(m_minimalReloadZoom);
+        updateShowActions();
+    });
+    connect(fileWidget, &ImageFileWidget::documentReady, this, &MainWindow::updateShowActions);
+    connect(fileWidget, &ImageFileWidget::documentLoadFailed, this, &MainWindow::updateShowActions);
     const int index = m_openFileTabs->addTab(fileWidget, title);
     m_openFileTabs->setTabToolTip(
       index,
@@ -942,36 +964,9 @@ void MainWindow::addFileTab(ImageFileWidget* fileWidget, const QString& title)
 void MainWindow::queueFileTab(
   ImageFileWidget* fileWidget, const QString& title)
 {
-    if (!fileWidget->sourceImage() || fileWidget->hasDocumentLoadFailed()) {
-        delete fileWidget;
-        return;
-    }
-
     fileWidget->setSplitterImageState(m_splitterImageState);
     fileWidget->setSplitterPropertiesState(m_splitterPropertiesState);
-    fileWidget->setRgbPreviewMode(m_rgbPreviewMode);
-    applyPanelVisibility(fileWidget);
-    fileWidget->hide();
-    PendingOpen pending;
-    pending.widget = fileWidget;
-    pending.title  = title;
-    m_pendingOpens.append(pending);
-    connect(
-      fileWidget,
-      &ImageFileWidget::documentReady,
-      this,
-      [this, fileWidget] {
-          resolvePendingOpen(fileWidget, true);
-      });
-    connect(
-      fileWidget,
-      &ImageFileWidget::documentLoadFailed,
-      this,
-      [this, fileWidget](const QString&) {
-          resolvePendingOpen(fileWidget, false);
-      });
-    if (fileWidget->isDocumentReady())
-        resolvePendingOpen(fileWidget, true);
+    addFileTab(fileWidget, title);
 }
 
 QRect MainWindow::minimalScreenGeometry(const QPoint& center) const
@@ -1018,14 +1013,13 @@ void MainWindow::toggleMinimalView()
     m_workspaceToolbar->hide();
     m_titleBar->hide();
     m_minimalPage = new MinimalImageWidget(this);
+    m_minimalPage->setDocument(document);
     m_minimalPage->setSummary(QString(), model);
     setCentralWidget(m_minimalPage);
     setMinimumSize(1, m_minimalPage->footerHeight() + 1);
     setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
     if (isMaximized() || isFullScreen()) showNormal();
     updateWindowFrame();
-    m_minimalPage->view()->setModel(model);
-
     connect(m_minimalPage->view(), &GraphicsView::minimalViewRequested,
             this, &MainWindow::toggleMinimalView);
     connect(m_minimalPage->view(), &GraphicsView::imageWindowZoomRequested,
@@ -1038,6 +1032,19 @@ void MainWindow::toggleMinimalView()
             this, &MainWindow::adjustMinimalParameter);
     connect(m_minimalPage->view(), &GraphicsView::openFileOnDropEvent,
             this, static_cast<void (MainWindow::*)(const QString&)>(&MainWindow::open));
+    bindMinimalModel(model);
+    move(center - QPoint(width() / 2, height() / 2));
+    resizeMinimalView(m_completeViewState.zoom);
+    m_minimalPage->view()->setFocus(Qt::OtherFocusReason);
+}
+
+void MainWindow::bindMinimalModel(const FramebufferModel* model)
+{
+    for (const auto& connection : m_minimalConnections) disconnect(connection);
+    m_minimalConnections.clear();
+    m_minimalModel = model;
+    m_minimalPage->view()->setModel(model);
+    updateMinimalSummary();
     m_minimalConnections.append(connect(model, &QObject::destroyed, this, [this] {
         leaveMinimalView();
     }));
@@ -1063,9 +1070,6 @@ void MainWindow::toggleMinimalView()
                                         this, [this] {
         if (m_minimalView) resizeMinimalView(m_minimalPage->view()->viewState().zoom);
     }));
-    move(center - QPoint(width() / 2, height() / 2));
-    resizeMinimalView(m_completeViewState.zoom);
-    m_minimalPage->view()->setFocus(Qt::OtherFocusReason);
 }
 
 void MainWindow::leaveMinimalView()
@@ -1073,6 +1077,7 @@ void MainWindow::leaveMinimalView()
     if (!m_minimalView || m_switchingMinimalView) return;
     QScopedValueRollback<bool> switching(m_switchingMinimalView, true);
     m_minimalView = false;
+    m_rebindingMinimalModel = false;
     for (const auto& connection : m_minimalConnections) disconnect(connection);
     m_minimalConnections.clear();
     m_minimalPage->view()->setModel(nullptr);
@@ -1115,7 +1120,9 @@ void MainWindow::resizeMinimalView(double zoom)
                                 qMax(1, available.height() - footer) / imageHeight);
     if (maximum <= 0.) return;
     zoom = zoom <= 0. ? maximum : qBound(qMin(0.01, maximum), zoom, maximum);
-    const QSize size(qBound(1, int(std::ceil(imageWidth * zoom)), available.width()),
+    const int controlWidth = qMin(available.width(), m_minimalPage->minimumControlWidth());
+    setMinimumSize(controlWidth, footer + 1);
+    const QSize size(qBound(controlWidth, int(std::ceil(imageWidth * zoom)), available.width()),
                      qBound(1, int(std::ceil(imageHeight * zoom)),
                             qMax(1, available.height() - footer)) + footer);
     QPoint position = center - QPoint(size.width() / 2, size.height() / 2);
@@ -1183,31 +1190,6 @@ void MainWindow::adjustMinimalParameter(double steps)
 }
 
 
-void MainWindow::resolvePendingOpen(
-  ImageFileWidget* fileWidget, bool succeeded)
-{
-    for (PendingOpen& pending : m_pendingOpens) {
-        if (pending.widget != fileWidget || pending.resolved) continue;
-        pending.resolved  = true;
-        pending.succeeded = succeeded;
-        break;
-    }
-    flushPendingOpens();
-}
-
-
-void MainWindow::flushPendingOpens()
-{
-    while (!m_pendingOpens.isEmpty() && m_pendingOpens.front().resolved) {
-        const PendingOpen pending = m_pendingOpens.takeFirst();
-        if (pending.succeeded && pending.widget)
-            addFileTab(pending.widget, pending.title);
-        else if (pending.widget)
-            pending.widget->deleteLater();
-    }
-}
-
-
 void MainWindow::open(std::istream& stream)
 {
     leaveMinimalView();
@@ -1221,7 +1203,7 @@ void MainWindow::open(const QString& filename)
     leaveMinimalView();
     const QFileInfo info(filename);
     queueFileTab(
-      new ImageFileWidget(info.absoluteFilePath(), m_openFileTabs),
+      new ImageFileWidget(info.absoluteFilePath(), m_openFileTabs, true),
       info.fileName());
 }
 

@@ -92,12 +92,12 @@ class QFileIStream: public Imf::IStream
 
 
 OpenEXRImage::OpenEXRImage(const QString& filename, QObject* parent)
-  : QObject(parent)
-  , m_filename(filename)
-  , m_isStream(false)
+  : OpenEXRImage(filename, prepareInput(filename), parent)
+{}
+
+std::shared_ptr<ExrInput> OpenEXRImage::prepareInput(const QString& filename)
 {
     std::shared_ptr<QFile> file(new QFile(filename));
-
 #ifdef _WIN32
     // Permit render tools to atomically replace a file while its old snapshot is open.
     const HANDLE handle = CreateFileW(
@@ -133,21 +133,31 @@ OpenEXRImage::OpenEXRImage(const QString& filename, QObject* parent)
                                    .toStdString());
     }
 
-    m_streamName = filename.toUtf8();
-
-    std::shared_ptr<Imf::IStream> stream(new QFileIStream(m_streamName, *file));
+    // Synchronous I/O only, serialized by ExrInput::mutex. No event-driven Qt
+    // operations: the snapshot can outlive its creator and be released by a job.
+    file->moveToThread(nullptr);
+    std::shared_ptr<Imf::IStream> stream(new QFileIStream(filename.toUtf8(), *file));
     std::shared_ptr<Imf::MultiPartInputFile> exrIn(
       new Imf::MultiPartInputFile(*stream),
       [file, stream](Imf::MultiPartInputFile* input) {
           delete input;
       });
+    auto input = std::make_shared<ExrInput>();
+    input->file = std::move(exrIn);
+    return input;
+}
+
+OpenEXRImage::OpenEXRImage(const QString& filename, std::shared_ptr<ExrInput> input, QObject* parent)
+  : QObject(parent), m_filename(filename), m_isStream(false), m_input(std::move(input))
+{
+    if (!m_input || !m_input->file) throw std::runtime_error("No source image.");
+    auto exrIn = m_input->file;
     std::unique_ptr<HeaderModel> headerModel(
       new HeaderModel(*exrIn, exrIn->parts(), nullptr));
     std::unique_ptr<LayerModel> layerModel(new LayerModel(*exrIn, nullptr));
 
     headerModel->addFile(*exrIn, filename);
 
-    m_input->file = std::move(exrIn);
     m_headerModel = std::move(headerModel);
     m_layerModel  = std::move(layerModel);
 }

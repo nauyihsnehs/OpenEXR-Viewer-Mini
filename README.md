@@ -47,6 +47,13 @@ Viewing controls
   and raw channel values under the pointer,
   prioritizing pixel information when the window is narrow. Hover over the footer
   to read the full text.
+- Files appear in tabs immediately while opening, decoding, processing and rendering
+  continue in the background at full resolution. The progress overlay appears only
+  after one second of continuous work; errors appear immediately. Percentages describe the
+  current stage; stages without a measurable total use an activity bar. Closing a
+  tab cancels its pending work. Failed opens keep a tab with copyable error details.
+  Refresh and resolution changes retain the committed image while loading, with
+  the same progress overlay in the complete and minimal views.
 - All individual channels (R/G/B/A/Y/RY/BY and custom names such as V) use the same
   Colormap, Range, and Auto controls, defaulting to grayscale over 0 to 1. The range
   uses the source channel value directly, without exposure or an sRGB transform.
@@ -78,6 +85,17 @@ Viewing controls
   ready; cancellation or failure retains the committed images and level. Each file
   starts at `(0,0)`; refresh and minimal-window transitions preserve its selection.
   Mipmap uses a flat list of `(L,L)` levels; Ripmap uses **X level > Y level** submenus.
+  Shared sliders are also available in color/scalar preview controls and the minimal
+  footer: one slider for Mipmap, independent X/Y sliders for Ripmap. Mixed files
+  restricted to diagonal pairs use one slider; single-level files hide the controls.
+  Dragging only previews the target level and display dimensions; release loads it.
+  Arrow keys and Home/End select discrete levels; wheel over a slider does not zoom.
+  While loading, sliders are disabled and show both committed and requested levels;
+  the menu, copy and export continue to use the committed frame. Failed loads restore
+  the sliders without replacing the image. Minimal view stays open across successful
+  level changes and refreshes, rebinding the new model. Its footer retains at least
+  320 logical pixels of width (screen permitting) so even 1×1 levels remain selectable,
+  without stretching source pixels or changing the image zoom.
   Only the final pair selection starts a load. The menu intersects actual valid pairs
   across all parts (scanline/ONE_LEVEL allow only `(0,0)`, Mipmap only diagonal pairs).
   Views use the selected level's native dimensions, retain manual display parameters

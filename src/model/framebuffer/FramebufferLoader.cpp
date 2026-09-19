@@ -121,7 +121,7 @@ DecodeResult FramebufferLoader::decode(
   int                                             partId,
   Layout                                          layout,
   const std::array<std::string, 4>&               names,
-  const Cancellation&                             cancel, ResolutionLevel level)
+  const Cancellation&                             cancel, ResolutionLevel level, const Progress& progress)
 {
     const auto file = source ? source->file : nullptr;
     if (!file || partId < 0 || partId >= file->parts())
@@ -185,7 +185,7 @@ DecodeResult FramebufferLoader::decode(
     if (header.hasType() && header.type() == Imf::DEEPSCANLINE) {
         if (layout != Scalar && layout != RGB)
             throw std::runtime_error("Deep color previews currently support RGB/RGBA only.");
-        return DeepPreview::decode(data, source, partId, names, layout == Scalar, cancel);
+        return DeepPreview::decode(data, source, partId, names, layout == Scalar, cancel, progress);
     }
     std::array<Channel, 4> channels;
     Imf::FrameBuffer       buffer;
@@ -196,18 +196,23 @@ DecodeResult FramebufferLoader::decode(
         }
         if (cancel->load()) return DecodeResult();
     }
+    if (progress) progress->begin(LoadProgress::Decoding);
     if (tiled) {
         const auto makePart = [&] {
             const std::lock_guard<std::mutex> lock(source->mutex);
             return Imf::TiledInputPart(*file, partId);
         };
         Imf::TiledInputPart part = makePart();
-        for (int y = 0; y < part.numYTiles(level.y); ++y) {
+        const int tileRows = part.numYTiles(level.y);
+        if (progress) progress->begin(LoadProgress::Decoding, tileRows);
+        for (int y = 0; y < tileRows; y += 4) {
+            const int last = std::min(tileRows - 1, y + 3);
             if (cancel->load()) return DecodeResult();
             {
                 const std::lock_guard<std::mutex> lock(source->mutex);
                 part.setFrameBuffer(buffer);
-                part.readTiles(0, part.numXTiles(level.x) - 1, y, y, level.x, level.y);
+                part.readTiles(0, part.numXTiles(level.x) - 1, y, last, level.x, level.y);
+                if (progress) progress->advance(last - y + 1);
             }
             if (cancel->load()) return DecodeResult();
         }
@@ -217,21 +222,27 @@ DecodeResult FramebufferLoader::decode(
             return Imf::InputPart(*file, partId);
         };
         Imf::InputPart part = makePart();
-        for (int64_t y = window.min.y; y <= window.max.y; y += 32) {
+        if (progress) progress->begin(LoadProgress::Decoding, data->height);
+        for (int64_t y = window.min.y; y <= window.max.y; y += 256) {
             if (cancel->load()) return DecodeResult();
             const std::lock_guard<std::mutex> lock(source->mutex);
             part.setFrameBuffer(buffer);
             part.readPixels(
               static_cast<int>(y),
-              static_cast<int>(std::min<int64_t>(window.max.y, y + 31)));
+              static_cast<int>(std::min<int64_t>(window.max.y, y + 255)));
+            if (progress) progress->advance(std::min<int64_t>(window.max.y, y + 255) - y + 1);
         }
     }
+    uint64_t sampleRows = 0;
+    for (const auto& channel : channels) sampleRows += channel.height;
+    if (progress) progress->begin(LoadProgress::Processing, sampleRows, QObject::tr("Statistics"));
     // Count stored channel samples, not resampled pixels or synthesized RGBA.
     for (const Channel& channel : channels) {
         if (channel.pixels.empty()) continue;
         for (size_t i = 0; i < channel.pixels.size(); ++i) {
             if (i % size_t(channel.width) == 0 && cancel->load())
                 return DecodeResult();
+            if (progress && i && i % size_t(channel.width) == 0) progress->advance();
             const float value = channel.pixels[i];
             switch (PixelDiagnostics::classify(value)) {
                 case FramebufferData::NaN: ++data->nanCount; break;
@@ -249,37 +260,8 @@ DecodeResult FramebufferLoader::decode(
                     break;
             }
         }
+        if (progress) progress->advance();
     }
-    const int components = layout == Scalar ? 1 : 4;
-    data->pixels.resize(count * components);
-    std::vector<uint8_t> nonFiniteFlags;
-    if (data->nanCount || data->infCount) nonFiniteFlags.resize(count, 0);
-    for (int y = 0; y < data->height; ++y) {
-        if (cancel->load()) return DecodeResult();
-        for (int x = 0; x < data->width; ++x) {
-            float* pixel
-              = &data->pixels[(size_t(y) * data->width + x) * components];
-            const int64_t sx = int64_t(window.min.x) + x;
-            const int64_t sy = int64_t(window.min.y) + y;
-            if (!nonFiniteFlags.empty()) {
-                uint8_t& flags = nonFiniteFlags[size_t(y) * data->width + x];
-                for (size_t c = 0; c < channels.size(); ++c)
-                    if (!names[c].empty())
-                        flags |= PixelDiagnostics::classify(channels[c].at(sx, sy));
-            }
-            pixel[0]         = channels[0].at(sx, sy);
-            if (layout == Scalar) continue;
-            pixel[1] = layout == Luminance ? pixel[0] : channels[1].at(sx, sy);
-            pixel[2] = layout == Luminance ? pixel[0] : channels[2].at(sx, sy);
-            pixel[3] = names[3].empty() ? 1.f : channels[3].at(sx, sy);
-        }
-    }
-
-    data->anomalyRegions = PixelDiagnostics::connectedRegions(
-      nonFiniteFlags, data->width, data->height, cancel);
-    if (cancel->load()) return DecodeResult();
-    std::vector<uint8_t>().swap(nonFiniteFlags);
-
     Imf::Chromaticities chromaticities;
     const auto*         attribute
       = header.findTypedAttribute<Imf::ChromaticitiesAttribute>(
@@ -289,24 +271,77 @@ DecodeResult FramebufferLoader::decode(
         data->hasRawChromaticities = true;
         data->rawChromaticities = chromaticities;
     }
+    const Imf::Chromaticities standard;
+    const bool standardChromaticities
+      = chromaticities.red == standard.red && chromaticities.green == standard.green
+        && chromaticities.blue == standard.blue && chromaticities.white == standard.white;
+    const bool packLuminance = layout == Luminance || (layout == RGB && standardChromaticities);
+    const int components = layout == Scalar ? 1 : 4;
+    data->pixels.resize(count * components);
+    std::vector<uint8_t> nonFiniteFlags;
+    if (data->nanCount || data->infCount) nonFiniteFlags.resize(count, 0);
+    if (progress) progress->begin(LoadProgress::Processing, data->height, QObject::tr("Pixels"));
+    for (int y = 0; y < data->height; ++y) {
+        if (cancel->load()) return DecodeResult();
+        for (int x = 0; x < data->width; ++x) {
+            float* pixel
+              = &data->pixels[(size_t(y) * data->width + x) * components];
+            const int64_t sx = int64_t(window.min.x) + x;
+            const int64_t sy = int64_t(window.min.y) + y;
+            const size_t index = size_t(y) * data->width + x;
+            const auto sample = [&](size_t c) {
+                return channels[c].samplingX == 1 && channels[c].samplingY == 1
+                  ? channels[c].pixels[index] : channels[c].at(sx, sy);
+            };
+            if (!nonFiniteFlags.empty()) {
+                uint8_t& flags = nonFiniteFlags[size_t(y) * data->width + x];
+                for (size_t c = 0; c < channels.size(); ++c)
+                    if (!names[c].empty())
+                        flags |= PixelDiagnostics::classify(sample(c));
+            }
+            pixel[0]         = sample(0);
+            if (layout == Scalar) continue;
+            pixel[1] = layout == Luminance ? pixel[0] : sample(1);
+            pixel[2] = layout == Luminance ? pixel[0] : sample(2);
+            pixel[3] = names[3].empty() ? 1.f : sample(3);
+            if (packLuminance)
+                collect(ToneMapping::luminance(pixel[0], pixel[1], pixel[2]),
+                        data->luminanceMin, data->luminanceMax, data->hasFiniteLuminance);
+        }
+        if (progress) progress->advance();
+    }
+
+    // YC reconstruction below only needs channel geometry, not the planar samples.
+    for (auto& channel : channels) std::vector<float>().swap(channel.pixels);
+    if (progress) progress->begin(LoadProgress::Processing, 0, QObject::tr("Anomaly regions"));
+    data->anomalyRegions = PixelDiagnostics::connectedRegions(
+      nonFiniteFlags, data->width, data->height, cancel, progress);
+    if (cancel->load()) return DecodeResult();
+    std::vector<uint8_t>().swap(nonFiniteFlags);
+
     if (layout == Chroma) {
+        if (progress) progress->begin(LoadProgress::Processing, data->height, QObject::tr("YC preparation"));
         data->sourcePixels = data->pixels;
         const Imath::V3f weights = Imf::RgbaYca::computeYw(chromaticities);
         std::vector<Imf::Rgba> rgba(count);
         for (size_t i = 0; i < count; ++i) {
             if (i % size_t(data->width) == 0 && cancel->load()) return DecodeResult();
+            if (progress && i && i % size_t(data->width) == 0) progress->advance();
             rgba[i].r = data->pixels[4 * i + 1];   // RY
             rgba[i].g = data->pixels[4 * i];       // Y
             rgba[i].b = data->pixels[4 * i + 2];   // BY
             rgba[i].a = data->pixels[4 * i + 3];
         }
+        if (progress) progress->advance();
         // Match RgbaInputFile's separable reconstruction and edge extension.
         const int padding = Imf::RgbaYca::N2;
         std::vector<Imf::Rgba> lineBuffer(data->width + 2 * padding);
         if (subsampledChroma) {
+            if (progress) progress->begin(LoadProgress::Processing, data->height, QObject::tr("Chroma rows"));
             const int lastSampleX = int((channels[1].firstX + channels[1].width - 1) * 2 - window.min.x);
             for (int y = 0; y < data->height; ++y) {
                 if (cancel->load()) return DecodeResult();
+                if (progress && y) progress->advance();
                 if ((int64_t(window.min.y) + y) % 2 != 0) continue;
                 Imf::Rgba* line = rgba.data() + size_t(y) * data->width;
                 std::copy(line, line + data->width, lineBuffer.begin() + padding);
@@ -315,10 +350,12 @@ DecodeResult FramebufferLoader::decode(
                 Imf::RgbaYca::reconstructChromaHoriz(data->width, lineBuffer.data(), line);
             }
         }
+        if (progress && subsampledChroma) progress->advance();
         // Saturation correction also needs reconstructed RGB just outside the image.
         std::vector<Imf::Rgba> converted(count + 2 * size_t(data->width));
         const int lastSampleY = int((channels[1].firstY + channels[1].height - 1)
                                    * channels[1].samplingY - window.min.y);
+        if (progress) progress->begin(LoadProgress::Processing, data->height + (subsampledChroma ? 2 : 0), QObject::tr("YC conversion"));
         for (int y = subsampledChroma ? -1 : 0;
              y < data->height + (subsampledChroma ? 1 : 0); ++y) {
             if (cancel->load()) return DecodeResult();
@@ -336,8 +373,10 @@ DecodeResult FramebufferLoader::decode(
             }
             Imf::RgbaYca::YCAtoRGBA(weights, data->width, line,
                                    converted.data() + size_t(y + 1) * data->width);
+            if (progress) progress->advance();
         }
         std::vector<Imf::Rgba> corrected(data->width);
+        if (progress) progress->begin(LoadProgress::Processing, data->height, QObject::tr("YC saturation"));
         for (int y = 0; y < data->height; ++y) {
             if (cancel->load()) return DecodeResult();
             const Imf::Rgba* lines[] = {
@@ -353,14 +392,12 @@ DecodeResult FramebufferLoader::decode(
                 pixel[1]     = output[x].g;
                 pixel[2]     = output[x].b;
             }
+            if (progress) progress->advance();
         }
     }
-    const Imf::Chromaticities standard;
-    const bool standardChromaticities
-      = chromaticities.red == standard.red && chromaticities.green == standard.green
-        && chromaticities.blue == standard.blue && chromaticities.white == standard.white;
     // An approximate identity matrix still mixes NaN/Inf into other channels.
     if ((layout == RGB || layout == Chroma) && !standardChromaticities) {
+        if (progress) progress->begin(LoadProgress::Processing, data->height, QObject::tr("Color conversion"));
         if (layout == RGB) data->sourcePixels = data->pixels;
         const Imath::M44d conversion
           = Imath::M44d(Imf::RGBtoXYZ(chromaticities, 1.f))
@@ -368,6 +405,7 @@ DecodeResult FramebufferLoader::decode(
         for (size_t i = 0; i < count; ++i) {
             if (i % size_t(data->width) == 0 && cancel->load())
                 return DecodeResult();
+            if (progress && i && i % size_t(data->width) == 0) progress->advance();
             float*           pixel = &data->pixels[4 * i];
             const Imath::V3d rgb
               = Imath::V3d(pixel[0], pixel[1], pixel[2]) * conversion;
@@ -375,10 +413,14 @@ DecodeResult FramebufferLoader::decode(
             pixel[1] = static_cast<float>(rgb.y);
             pixel[2] = static_cast<float>(rgb.z);
         }
+        if (progress) progress->advance();
     }
-    for (size_t i = 0; i < count; ++i) {
+    if (progress && layout != Scalar && !packLuminance)
+        progress->begin(LoadProgress::Processing, data->height, QObject::tr("Luminance"));
+    for (size_t i = 0; layout != Scalar && !packLuminance && i < count; ++i) {
         if (i % size_t(data->width) == 0 && cancel->load())
             return DecodeResult();
+        if (progress && i && i % size_t(data->width) == 0) progress->advance();
         const float* pixel = &data->pixels[components * i];
         if (layout != Scalar)
             collect(
@@ -387,6 +429,7 @@ DecodeResult FramebufferLoader::decode(
               data->luminanceMax,
               data->hasFiniteLuminance);
     }
+    if (progress && layout != Scalar && !packLuminance) progress->advance();
     DecodeResult result;
     result.data = data;
     return result;

@@ -54,6 +54,8 @@ class OpenEXRImage: public QObject
 
   public:
     OpenEXRImage(const QString& filename, QObject* parent);
+    OpenEXRImage(const QString& filename, std::shared_ptr<ExrInput> input, QObject* parent);
+    static std::shared_ptr<ExrInput> prepareInput(const QString& filename);
     OpenEXRImage(std::istream& stream, QObject* parent);
 
     ~OpenEXRImage();
@@ -74,8 +76,6 @@ class OpenEXRImage: public QObject
   private:
     QString m_filename;
     bool    m_isStream;
-
-    QByteArray m_streamName;
 
     // Keep the declaration order aligned with the dependency order. Destruction
     // happens in reverse: models, EXR input, stream adapter, then backing file.

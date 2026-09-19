@@ -140,17 +140,8 @@ class MainWindow: public QMainWindow
     void toggleMinimalView();
 
   private:
-    struct PendingOpen {
-        QPointer<ImageFileWidget> widget;
-        QString                   title;
-        bool                      resolved  = false;
-        bool                      succeeded = false;
-    };
-
     void             addFileTab(ImageFileWidget* widget, const QString& title);
     void             queueFileTab(ImageFileWidget* widget, const QString& title);
-    void             resolvePendingOpen(ImageFileWidget* widget, bool succeeded);
-    void             flushPendingOpens();
     ImageFileWidget* currentFileWidget() const;
     void             applyPanelVisibility(ImageFileWidget* widget) const;
     void             applyPanelVisibilityToAllTabs() const;
@@ -168,6 +159,7 @@ class MainWindow: public QMainWindow
     void             updateFileTabPresentation();
     void             copyActiveImage(bool fullResolution);
     void leaveMinimalView();
+    void bindMinimalModel(const FramebufferModel* model);
     void resizeMinimalView(double zoom);
     void moveMinimalView(const QPoint& position);
     void updateMinimalSummary();
@@ -203,11 +195,12 @@ class MainWindow: public QMainWindow
     QSize m_completeMaximumSize;
     bool m_minimalView = false;
     bool m_switchingMinimalView = false;
+    bool m_rebindingMinimalModel = false;
+    double m_minimalReloadZoom = 1.;
     bool m_resizingMinimalView = false;
     bool m_completeToolbarVisible = true;
     bool m_completeTitleVisible = true;
     QVector<QMetaObject::Connection> m_minimalConnections;
-    QList<PendingOpen> m_pendingOpens;
 
     QLabel*      m_windowTitleLabel;
     QWidget*     m_titleBar;
