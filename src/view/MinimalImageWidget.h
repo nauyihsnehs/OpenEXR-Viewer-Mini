@@ -6,7 +6,9 @@ class DepthRangeWidget;
 class ProjectionControls;
 class GraphicsView;
 class QLabel;
+class PixelReadoutLabel;
 class CropIndicator;
+class NonFiniteIndicator;
 class FramebufferModel;
 
 class MinimalImageWidget : public QWidget
@@ -15,8 +17,8 @@ class MinimalImageWidget : public QWidget
     explicit MinimalImageWidget(QWidget* parent = nullptr);
     GraphicsView* view() const { return m_view; }
     int footerHeight() const;
-    void setSummary(const QString& text, const FramebufferModel* model);
-    void setPixelInfo(const QString& text);
+    void setSummary(const QString& text, const FramebufferModel* model,
+                    const QString& detail = QString());
 
   protected:
     void resizeEvent(QResizeEvent* event) override;
@@ -28,8 +30,9 @@ class MinimalImageWidget : public QWidget
     DepthRangeWidget* m_depthRange;
     ProjectionControls* m_projection;
     CropIndicator* m_cropIndicator;
+    NonFiniteIndicator* m_nonFiniteIndicator;
     QLabel* m_summaryLabel;
-    QLabel* m_pixelLabel;
+    PixelReadoutLabel* m_pixelLabel;
     QString m_summary;
-    QString m_pixelInfo;
+    QString m_summaryDetail;
 };

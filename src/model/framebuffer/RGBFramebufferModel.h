@@ -86,7 +86,7 @@ class RGBFramebufferModel: public FramebufferModel
       int                                             partId,
       const std::array<std::string, 4>&               channels, ResolutionLevel level = {});
 
-    virtual std::string getColorInfo(int x, int y) const;
+    std::string getColorInfo(int x, int y, bool compact = false) const override;
 
     virtual float                    getRedInfo(int x, int y) const;
     virtual float                    getGreenInfo(int x, int y) const;

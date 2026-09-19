@@ -113,7 +113,7 @@
     <bool>false</bool>
    </property>
    <property name="text">
-    <string>&amp;Save...</string>
+    <string>&amp;Export…</string>
    </property>
    <property name="shortcut">
     <string>Ctrl+S</string>

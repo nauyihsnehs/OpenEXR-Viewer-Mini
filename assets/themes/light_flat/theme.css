@@ -69,7 +69,7 @@ QToolBar#workspaceToolbar {
     padding: 6px 8px;
 }
 QToolBar#workspaceToolbar::separator { background: #dce1e7; width: 1px; margin: 5px 8px; }
-QToolBar#workspaceToolbar QToolButton { padding: 6px 10px; }
+QToolBar#workspaceToolbar QToolButton { padding: 5px; }
 QToolButton#fileInfoButton, QToolButton#anomalyMarkerButton { padding: 2px; border-radius: 4px; }
 QPushButton, QToolButton {
     background: #f3f5f8;
@@ -88,8 +88,8 @@ QSpinBox:focus, QDoubleSpinBox:focus, QLineEdit:focus {
     border: 1px solid #507aaa;
 }
 QWidget#customTitleBar QToolButton:focus { border: 1px solid #507aaa; }
-QPushButton#welcomeOpenButton { background: #507aaa; color: #ffffff; padding: 9px 24px; }
-QPushButton#welcomeOpenButton:hover { background: #426b9b; }
+QPushButton[compactIcon="true"], QToolButton[compactIcon="true"] { padding: 4px; }
+QPushButton#welcomeOpenButton { padding: 6px; }
 QPushButton#welcomeOpenButton:focus { border: 1px solid #272b32; }
 QWidget#welcomePage, QWidget#welcomeContent { background: #f2f3f5; }
 QWidget#welcomeContent QLabel { background: transparent; }

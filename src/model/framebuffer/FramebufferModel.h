@@ -69,7 +69,7 @@ class FramebufferModel: public QObject
     QRect previewDisplayWindow() const { return m_projected ? m_projected->displayWindow : getDisplayWindow(); }
     float previewPixelAspect() const { return m_projected ? 1.f : pixelAspectRatio(); }
     bool isProjected() const { return bool(m_projected); }
-    std::string projectedColorInfo(int x, int y) const;
+    std::string projectedColorInfo(int x, int y, bool compact = false) const;
     // Deep has no single raw value per pixel: its 2D buffer is the current composite.
     // Lossless Deep export must read deepSamples(), including native channel types.
     const std::vector<float>& getRawPixels() const
@@ -123,7 +123,7 @@ class FramebufferModel: public QObject
 
     ResolutionLevel resolutionLevel() const { return m_data->resolutionLevel; }
     size_t resolutionLevelCount() const { return m_data->resolutionLevels.size(); }
-    virtual std::string              getColorInfo(int x, int y) const = 0;
+    virtual std::string getColorInfo(int x, int y, bool compact = false) const = 0;
     virtual std::vector<std::string> rawChannelNames() const          = 0;
     virtual std::vector<int> rawChannelComponents() const
     {

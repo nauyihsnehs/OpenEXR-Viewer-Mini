@@ -2,6 +2,7 @@
 #include "ui_SaveImageDialog.h"
 
 #include "ComboBoxBehavior.h"
+#include "ViewerIcons.h"
 
 #include <QComboBox>
 #include <QSpinBox>
@@ -35,7 +36,9 @@ SaveImageDialog::SaveImageDialog(const QString& path, QWidget* parent)
   , ui(new Ui::SaveImageDialog)
 {
     ui->setupUi(this);
-    setWindowTitle(tr("Save Image"));
+    setWindowTitle(tr("Export"));
+    ViewerIcons::setupButton(ui->browseButton, ViewerIcons::Open,
+      tr("Choose Export Path"), tr("Choose export path"));
     setFixedWidth(520);
 
     ui->resolutionLevelLabel->hide();
@@ -129,7 +132,8 @@ void SaveImageDialog::setStatus(const QString& message, bool error)
 void SaveImageDialog::setResolutionLevelInfo(ResolutionLevel level, bool multilevel)
 {
     ui->resolutionLevelLabel->setVisible(multilevel);
-    ui->resolutionLevelLabel->setText(tr("Level %1 — selected level only; scanline EXR").arg(QString::fromStdString(level.toString())));
+    ui->resolutionLevelLabel->setText(tr("Level %1 — selected level only").arg(QString::fromStdString(level.toString())));
+    ui->resolutionLevelLabel->setToolTip(tr("Only the selected resolution level is exported. EXR output uses scanline storage."));
 }
 
 
@@ -240,18 +244,18 @@ void SaveImageDialog::reject()
 
 void SaveImageDialog::setupOptions()
 {
-    ui->targetCombo->addItem(tr("Preview Image"), ImageSave::TargetPreview);
+    ui->targetCombo->addItem(tr("Preview"), ImageSave::TargetPreview);
     ui->targetCombo->addItem(
-      tr("Active Original"),
+      tr("Active Source"),
       ImageSave::TargetActiveOriginal);
     ui->targetCombo->addItem(
-      tr("Layered Original"),
+      tr("Layered Source"),
       ImageSave::TargetLayeredOriginal);
     ui->targetCombo->addItem(
-      tr("HDR Bracketed Images"),
+      tr("Exposure Bracket"),
       ImageSave::TargetHdrBracketedImages);
 
-    ui->targetCombo->addItem(tr("Projection Conversion"), ImageSave::TargetProjectionConversion);
+    ui->targetCombo->addItem(tr("Projection"), ImageSave::TargetProjectionConversion);
     m_projectionPanel = new QWidget(this);
     m_projectionPanel->setObjectName("projectionPanel");
     auto* form = new QFormLayout(m_projectionPanel);
@@ -260,14 +264,17 @@ void SaveImageDialog::setupOptions()
     m_projectionType->setObjectName("projectionTypeCombo");
     for (int i = EnvironmentProjection::LatLong; i <= EnvironmentProjection::Sphere; ++i)
         m_projectionType->addItem(EnvironmentProjection::name(EnvironmentProjection::Type(i)), i);
-    form->addRow(tr("Output projection"), m_projectionType);
+    form->addRow(tr("Projection"), m_projectionType);
     m_projectionWidth = new QSpinBox(m_projectionPanel);
     m_projectionHeight = new QSpinBox(m_projectionPanel);
     m_projectionWidth->setObjectName("projectionWidth");
     m_projectionHeight->setObjectName("projectionHeight");
-    for (auto* spin : {m_projectionWidth, m_projectionHeight}) spin->setRange(1, 1000000);
-    form->addRow(tr("Width (pixels)"), m_projectionWidth);
-    form->addRow(tr("Height (pixels)"), m_projectionHeight);
+    for (auto* spin : {m_projectionWidth, m_projectionHeight}) {
+        spin->setRange(1, 1000000);
+        spin->setSuffix(tr(" px"));
+    }
+    form->addRow(tr("Width"), m_projectionWidth);
+    form->addRow(tr("Height"), m_projectionHeight);
     m_projectionWidth->setToolTip(tr("Cube: width is the face edge; the strip is six faces high."));
     m_yaw = new QDoubleSpinBox(m_projectionPanel);
     m_pitch = new QDoubleSpinBox(m_projectionPanel);
@@ -277,10 +284,14 @@ void SaveImageDialog::setupOptions()
     m_yaw->setRange(-180., 180.); m_pitch->setRange(-90., 90.);
     m_fov->setRange(10., 150.); m_fov->setValue(90.);
     for (auto* spin : {m_yaw, m_pitch, m_fov}) { spin->setDecimals(2); spin->setSuffix(QString::fromUtf8("°")); }
-    form->addRow(tr("Yaw (+Z = 0)"), m_yaw);
-    form->addRow(tr("Pitch (+Y up)"), m_pitch);
-    form->addRow(tr("Horizontal field of view"), m_fov);
-    auto* note = new QLabel(tr("EXR: linear values, one scanline part, selected level only.\nPNG/JPEG: current display parameters."), m_projectionPanel);
+    form->addRow(tr("Yaw"), m_yaw);
+    form->addRow(tr("Pitch"), m_pitch);
+    form->addRow(tr("FOV"), m_fov);
+    m_yaw->setToolTip(tr("Yaw: 0° faces +Z."));
+    m_pitch->setToolTip(tr("Pitch: +Y is up."));
+    m_fov->setToolTip(tr("Horizontal field of view"));
+    auto* note = new QLabel(tr("Selected level only. EXR: linear. PNG/JPEG: display colors."), m_projectionPanel);
+    note->setToolTip(tr("EXR stores linear values in one scanline part. PNG/JPEG uses the current display parameters. Only the selected resolution level is exported."));
     note->setWordWrap(true); form->addRow(note);
     ui->verticalLayout->insertWidget(1, m_projectionPanel);
     connect(m_projectionType, static_cast<void(QComboBox::*)(int)>(&QComboBox::currentIndexChanged),
@@ -295,8 +306,8 @@ void SaveImageDialog::setupOptions()
 
     ui->qualitySpinBox->setRange(1, 100);
     ui->qualitySpinBox->setValue(90);
-    ui->jpegBackgroundCombo->addItem(tr("Black (0)"), ImageSave::BackgroundBlack);
-    ui->jpegBackgroundCombo->addItem(tr("White (1)"), ImageSave::BackgroundWhite);
+    ui->jpegBackgroundCombo->addItem(tr("Black"), ImageSave::BackgroundBlack);
+    ui->jpegBackgroundCombo->addItem(tr("White"), ImageSave::BackgroundWhite);
 
     ui->bracketCountCombo->addItem(tr("3"), 3);
     ui->bracketCountCombo->addItem(tr("5"), 5);
@@ -308,13 +319,13 @@ void SaveImageDialog::setupOptions()
     ui->bracketStepSpinBox->setSingleStep(0.5);
     ui->bracketStepSpinBox->setDecimals(1);
     ui->bracketStepSpinBox->setValue(2.);
-    ui->bracketStepSpinBox->setFixedWidth(84);
+    ui->bracketStepSpinBox->setSuffix(tr(" EV"));
 
     ui->bracketCenterSpinBox->setRange(-20., 20.);
     ui->bracketCenterSpinBox->setSingleStep(0.5);
     ui->bracketCenterSpinBox->setDecimals(1);
     ui->bracketCenterSpinBox->setValue(0.);
-    ui->bracketCenterSpinBox->setFixedWidth(84);
+    ui->bracketCenterSpinBox->setSuffix(tr(" EV"));
 
     ui->compressionCombo->addItem(tr("ZIP"), ImageSave::CompressionZip);
     ui->compressionCombo->addItem(tr("None"), ImageSave::CompressionNone);
@@ -326,17 +337,20 @@ void SaveImageDialog::setupOptions()
     ui->pixelTypeCombo->addItem(tr("Float"), ImageSave::PixelFloat);
     ui->pixelTypeCombo->addItem(tr("Half"), ImageSave::PixelHalf);
 
-    ui->channelScopeCombo->addItem(tr("All channels"), ImageSave::ChannelsAll);
-    ui->channelScopeCombo->addItem(tr("Color channels (RGB/YC)"), ImageSave::ChannelsRgb);
+    ui->channelScopeCombo->addItem(tr("All"), ImageSave::ChannelsAll);
+    ui->channelScopeCombo->addItem(tr("RGB/YC"), ImageSave::ChannelsRgb);
+    ui->channelScopeCombo->setToolTip(tr("Export all channels or color channels (RGB/YC). Deep output also includes A and Z."));
 
-    ui->metadataCombo->addItem(tr("Basic source-safe"), ImageSave::MetadataBasic);
+    ui->metadataCombo->addItem(tr("Basic"), ImageSave::MetadataBasic);
     ui->metadataCombo->addItem(tr("None"), ImageSave::MetadataNone);
+    ui->metadataCombo->setToolTip(tr("Basic: preserve source-safe metadata."));
 
-    ui->multipartCombo->addItem(tr("Preserve multipart"), ImageSave::MultipartPreserve);
-    ui->multipartCombo->addItem(tr("Flatten to single part"), ImageSave::MultipartFlatten);
+    ui->multipartCombo->addItem(tr("Preserve"), ImageSave::MultipartPreserve);
+    ui->multipartCombo->addItem(tr("Flatten"), ImageSave::MultipartFlatten);
+    ui->multipartCombo->setToolTip(tr("Preserve source parts or flatten to a single part."));
 
     QPushButton* saveButton = ui->buttonBox->button(QDialogButtonBox::Save);
-    if (saveButton) saveButton->setText(tr("Save"));
+    if (saveButton) saveButton->setText(tr("Export"));
 }
 
 
@@ -482,7 +496,7 @@ void SaveImageDialog::browse()
 {
     const QString filename = QFileDialog::getSaveFileName(
       this,
-      tr("Save Image"),
+      tr("Export"),
       ui->pathEdit->text().trimmed(),
       ImageSave::filter(format()));
 

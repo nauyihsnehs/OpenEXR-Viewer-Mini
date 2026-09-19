@@ -1,4 +1,5 @@
 #include "WorkspaceWidgets.h"
+#include "ViewerIcons.h"
 
 #include <QAction>
 #include <QBoxLayout>
@@ -6,6 +7,7 @@
 #include <QFocusEvent>
 #include <QGraphicsOpacityEffect>
 #include <QLabel>
+#include <QKeySequence>
 #include <QPainter>
 #include <QPalette>
 #include <QPolygonF>
@@ -62,17 +64,19 @@ class WelcomePage : public QWidget
         auto* title = new QLabel(tr("OpenEXR Viewer"), content);
         title->setObjectName("welcomeTitle");
         items->addWidget(title, 0, Qt::AlignHCenter);
-        auto* hint = new QLabel(tr("Drop EXR files here to explore your images"), content);
+        auto* hint = new QLabel(tr("Drop EXR files here"), content);
         hint->setObjectName("welcomeHint");
         hint->setWordWrap(true);
         hint->setAlignment(Qt::AlignCenter);
         items->addWidget(hint);
-        auto* open = new QPushButton(tr("Open image"), content);
+        auto* open = new QPushButton(content);
         open->setObjectName("welcomeOpenButton");
+        ViewerIcons::setupButton(open, ViewerIcons::Open, tr("Open Image"),
+                                 openAction->toolTip(), 40, 22);
         open->setCursor(Qt::PointingHandCursor);
         connect(open, &QPushButton::clicked, openAction, &QAction::trigger);
         items->addWidget(open, 0, Qt::AlignHCenter);
-        auto* shortcut = new QLabel(tr("Ctrl+O  /  Click anywhere to open"), content);
+        auto* shortcut = new QLabel(openAction->shortcut().toString(QKeySequence::NativeText), content);
         shortcut->setObjectName("welcomeHint");
         shortcut->setWordWrap(true);
         shortcut->setAlignment(Qt::AlignCenter);

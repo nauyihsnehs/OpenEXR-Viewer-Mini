@@ -32,6 +32,7 @@
 
 #include "RGBFramebufferWidget.h"
 #include "CropIndicator.h"
+#include "NonFiniteIndicator.h"
 #include "DepthRangeWidget.h"
 #include "ProjectionControls.h"
 #include <QSignalBlocker>
@@ -41,6 +42,7 @@
 #include "GraphicsView.h"
 #include "ComboBoxBehavior.h"
 #include "WorkspaceWidgets.h"
+#include "ViewerIcons.h"
 #include "ScientificDoubleSpinBox.h"
 
 #include <QAbstractSpinBox>
@@ -88,8 +90,20 @@ RGBFramebufferWidget::RGBFramebufferWidget(QWidget* parent)
   , m_savedFalseColorMax(1.)
 {
     ui->setupUi(this);
+    ViewerIcons::setupButton(ui->falseColorAutoButton, ViewerIcons::AutoRange,
+      tr("Automatic Range"), tr("Automatic luminance range\nTurn off to restore the previous manual range."));
+    ViewerIcons::setupButton(ui->cbFalseColorScale, ViewerIcons::ColorScale,
+      tr("Color Scale"), tr("Show or hide the color scale"));
+    ui->exposureButton->setToolTip(tr("Exposure (EV)\nClick to reset to 0 EV."));
+    ui->exposureButton->setAccessibleName(tr("Reset Exposure"));
+    ui->sbExposure->setAccessibleName(tr("Exposure (EV)"));
+    ui->cbFalseColorColormap->setAccessibleName(tr("Colormap"));
+    ui->cbFalseColorColormap->setToolTip(tr("Colormap"));
+    updateZoomLevelText(m_zoomLevel);
     m_cropIndicator = new CropIndicator(this);
     ui->horizontalLayout_2->insertWidget(1, m_cropIndicator, 0, Qt::AlignVCenter);
+    m_nonFiniteIndicator = new NonFiniteIndicator(this);
+    ui->horizontalLayout_2->insertWidget(3, m_nonFiniteIndicator, 0, Qt::AlignVCenter);
     connect(ui->anomalyMarkerButton, &QToolButton::toggled, this, [this](bool enabled) {
         if (m_model) m_model->setHighlightNonFinite(enabled);
     });
@@ -129,6 +143,7 @@ RGBFramebufferWidget::RGBFramebufferWidget(QWidget* parent)
     ui->fileInfoButton->setIcon(
       style()->standardIcon(QStyle::SP_MessageBoxInformation));
     ui->fileInfoButton->setToolTip(QString());
+    ui->fileInfoButton->setAccessibleName(tr("Image Information"));
     ui->fileInfoButton->installEventFilter(this);
     updateFramebufferSummary();
 
@@ -155,7 +170,7 @@ RGBFramebufferWidget::RGBFramebufferWidget(QWidget* parent)
       tr("Reinhard"),
       RGBFramebufferModel::Tone_Reinhard);
     ui->cbToneMappingMethod->addItem(
-      tr("ACES fitted"),
+      tr("ACES"),
       RGBFramebufferModel::Tone_ACES);
     ui->cbToneMappingMethod->addItem(
       tr("Filmic/Hable"),
@@ -165,6 +180,8 @@ RGBFramebufferWidget::RGBFramebufferWidget(QWidget* parent)
       tr("Clamp"),
       RGBFramebufferModel::Tone_Clamp);
     ui->cbToneMappingMethod->setCurrentIndex(0);
+    ui->cbToneMappingMethod->setItemData(1, tr("ACES fitted"), Qt::ToolTipRole);
+    ui->cbToneMappingMethod->setAccessibleName(tr("Tone Mapping Method"));
 
     const QSignalBlocker blocker_cbFalseColorColormap(ui->cbFalseColorColormap);
     for (int i = 0; i < ColormapModule::N_MAPS; i++) {
@@ -202,6 +219,8 @@ RGBFramebufferWidget::~RGBFramebufferWidget()
 void RGBFramebufferWidget::setModel(RGBFramebufferModel* model)
 {
     m_model = model;
+    m_nonFiniteIndicator->setModel(model);
+    ui->pixelValueLabel->setModel(model);
     findChild<DepthRangeWidget*>()->setModel(model);
     findChild<ProjectionControls*>()->setModel(model);
     if (m_model) m_model->setHighlightNonFinite(ui->anomalyMarkerButton->isChecked());
@@ -235,7 +254,6 @@ void RGBFramebufferWidget::setModel(RGBFramebufferModel* model)
       &FramebufferModel::readinessChanged,
       this,
       &RGBFramebufferWidget::updateFramebufferSummary);
-    onQueryPixelInfo(0, 0);
     updateFramebufferSummary();
 }
 
@@ -360,7 +378,8 @@ void RGBFramebufferWidget::configureToneParam(
   double         minimum,
   double         maximum,
   double         step,
-  double         value)
+  double         value,
+  const QString& fullLabel)
 {
     if (index < 0 || index >= s_toneParamCount) return;
 
@@ -368,7 +387,13 @@ void RGBFramebufferWidget::configureToneParam(
     m_toneParamDefaults[index]  = value;
 
     controls.container->setVisible(true);
+    const QString name = fullLabel.isEmpty() ? label : fullLabel;
     controls.button->setText(label);
+    controls.button->setToolTip(tr("%1\nClick to reset to %2.").arg(name).arg(value));
+    controls.button->setAccessibleName(tr("Reset %1").arg(name));
+    controls.slider->setAccessibleName(name);
+    controls.spinBox->setAccessibleName(name);
+    controls.spinBox->setToolTip(name);
 
     controls.slider->blockSignals(true);
     controls.spinBox->blockSignals(true);
@@ -552,6 +577,9 @@ void RGBFramebufferWidget::syncFalseColorRangeToModel()
 
 void RGBFramebufferWidget::updateToneMappingControls()
 {
+    const QString detail = ui->cbToneMappingMethod->currentData(Qt::ToolTipRole).toString();
+    ui->cbToneMappingMethod->setToolTip(detail.isEmpty()
+      ? ui->cbToneMappingMethod->currentText() : detail);
     ui->toneClampRangeWidget->setVisible(false);
 
     switch (currentToneMappingMethod()) {
@@ -564,25 +592,27 @@ void RGBFramebufferWidget::updateToneMappingControls()
         case RGBFramebufferModel::Tone_Filmic:
             configureToneParam(
               0,
-              tr("Shoulder Strength"),
+              tr("Shoulder"),
               0.00,
               1.00,
               0.01,
-              0.15);
+              0.15,
+              tr("Shoulder Strength"));
             configureToneParam(
               1,
-              tr("Linear Strength"),
+              tr("Linear"),
               0.00,
               1.00,
               0.01,
-              0.50);
-            configureToneParam(2, tr("Linear Angle"), 0.00, 1.00, 0.01, 0.10);
-            configureToneParam(3, tr("Toe Strength"), 0.00, 1.00, 0.01, 0.20);
+              0.50,
+              tr("Linear Strength"));
+            configureToneParam(2, tr("Angle"), 0.00, 1.00, 0.01, 0.10, tr("Linear Angle"));
+            configureToneParam(3, tr("Toe"), 0.00, 1.00, 0.01, 0.20, tr("Toe Strength"));
             break;
 
         case RGBFramebufferModel::Tone_Log:
             configureToneParam(0, tr("Range"), 1.00, 64.00, 0.10, 16.00);
-            configureToneParam(1, tr("Compression"), 0.10, 8.00, 0.01, 1.00);
+            configureToneParam(1, tr("Compress"), 0.10, 8.00, 0.01, 1.00, tr("Compression"));
             hideToneParams(2);
             break;
 
@@ -662,8 +692,7 @@ bool RGBFramebufferWidget::eventFilter(QObject* watched, QEvent* event)
 
 void RGBFramebufferWidget::onQueryPixelInfo(int x, int y)
 {
-    ui->pixelValueLabel->setText(
-      QString::fromStdString(m_model->getColorInfo(x, y)));
+    ui->pixelValueLabel->queryPixel(x, y);
 }
 
 
@@ -792,10 +821,10 @@ void RGBFramebufferWidget::on_falseColorAutoButton_clicked()
 }
 
 
-void RGBFramebufferWidget::on_cbFalseColorScale_stateChanged(int state)
+void RGBFramebufferWidget::on_cbFalseColorScale_toggled(bool checked)
 {
     ui->falseColorScaleWidget->setVisible(
-      state == Qt::Checked
+      checked
       && m_previewMode == RGBFramebufferModel::Preview_FalseColor);
 }
 
@@ -904,7 +933,10 @@ void RGBFramebufferWidget::onControlWheel(double steps)
 void RGBFramebufferWidget::updateZoomLevelText(double zoom)
 {
     m_zoomLevel = zoom;
-    ui->zoomButton->setText(tr("Zoom %1%").arg(qRound(zoom * 100.)));
+    ui->zoomButton->setText(tr("%1%").arg(qRound(zoom * 100.)));
+    ui->zoomButton->setAccessibleName(tr("Image Zoom"));
+    ui->zoomButton->setToolTip(qRound(zoom * 100.) == 100
+      ? tr("Click to fit image to window") : tr("Click to restore 100% zoom"));
 }
 
 
@@ -912,6 +944,7 @@ void RGBFramebufferWidget::updateFramebufferSummary()
 {
     m_cropIndicator->setModel(m_model);
     ui->framebufferSummaryLabel->setText(framebufferSummaryText(m_model));
+    ui->framebufferSummaryLabel->setToolTip(framebufferSummaryToolTip(m_model));
     const bool loaded = m_model && m_model->isImageLoaded();
     ui->anomalyMarkerButton->setEnabled(loaded);
     ui->falseColorAutoButton->setEnabled(loaded && m_model->hasFiniteLuminanceSamples());

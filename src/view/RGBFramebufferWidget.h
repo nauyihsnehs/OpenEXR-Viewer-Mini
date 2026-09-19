@@ -48,6 +48,7 @@ namespace Ui
 }
 
 class CropIndicator;
+class NonFiniteIndicator;
 
 class RGBFramebufferWidget: public QWidget
 {
@@ -90,7 +91,7 @@ class RGBFramebufferWidget: public QWidget
     void on_sbFalseColorMaxValue_valueChanged(double value);
     void on_falseColorRangeSlider_rangeChanged(double min, double max);
     void on_falseColorAutoButton_clicked();
-    void on_cbFalseColorScale_stateChanged(int state);
+    void on_cbFalseColorScale_toggled(bool checked);
     void on_sbToneParam0_valueChanged(double value);
     void on_slToneParam0_valueChanged(int value);
     void on_toneParamButton0_clicked();
@@ -130,7 +131,8 @@ class RGBFramebufferWidget: public QWidget
       double         minimum,
       double         maximum,
       double         step,
-      double         value);
+      double         value,
+      const QString& fullLabel = QString());
     void                hideToneParams(int firstHiddenIndex);
     void                setToneParamValue(int index, double value);
     void                setToneClampRange(double min, double max);
@@ -148,6 +150,7 @@ class RGBFramebufferWidget: public QWidget
     Ui::RGBFramebufferWidget*        ui;
     RGBFramebufferModel*             m_model;
     CropIndicator*                   m_cropIndicator;
+    NonFiniteIndicator*              m_nonFiniteIndicator;
     RGBFramebufferModel::PreviewMode m_previewMode;
     ToneParamControls                m_toneParamControls[4];
     double                           m_toneParamDefaults[4];

@@ -33,6 +33,8 @@
 #include "mainwindow.h"
 #include "FileDrop.h"
 #include "WorkspaceWidgets.h"
+#include "ViewerIcons.h"
+#include "FramebufferInfo.h"
 #include "MinimalImageWidget.h"
 #include "RGBFramebufferWidget.h"
 #include <util/PreviewImage.h>
@@ -117,7 +119,7 @@ static ImageSave::ConflictPolicy
 conflictChoice(QWidget* parent, const QStringList& paths)
 {
     QMessageBox box(parent);
-    box.setWindowTitle(QObject::tr("Save Image"));
+    box.setWindowTitle(QObject::tr("Export"));
     box.setIcon(QMessageBox::Warning);
     box.setText(QObject::tr("The output file already exists."));
     box.setInformativeText(paths.join("\n"));
@@ -302,7 +304,7 @@ MainWindow::MainWindow(QWidget* parent)
         updateShowActions();
     });
     m_projectionMenu->addSeparator();
-    m_resetProjection = m_projectionMenu->addAction(tr("Reset Projection View"));
+    m_resetProjection = m_projectionMenu->addAction(tr("Reset View"));
     m_resetProjection->setObjectName("action_ResetProjectionView");
     connect(m_resetProjection, &QAction::triggered, this, [this] {
         auto* document = currentFileWidget();
@@ -310,7 +312,7 @@ MainWindow::MainWindow(QWidget* parent)
         if (!model) return;
         model->resetProjectionView();
     });
-    m_resolutionMenu = ui->menu_Show->addMenu(tr("Resolution Level"));
+    m_resolutionMenu = ui->menu_Show->addMenu(tr("Resolution"));
     m_resolutionMenu->setObjectName("menu_ResolutionLevel");
     m_resolutionActions = new QActionGroup(this);
     m_resolutionActions->setExclusive(true);
@@ -378,9 +380,21 @@ void MainWindow::setupWorkspace()
     toolbar->setObjectName("workspaceToolbar");
     toolbar->setMovable(false);
     toolbar->setFloatable(false);
-    toolbar->setToolButtonStyle(Qt::ToolButtonTextOnly);
-    ui->action_Open->setIconText(tr("Open"));
-    ui->action_Save->setIconText(tr("Export"));
+    toolbar->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    toolbar->setIconSize(QSize(18, 18));
+    const auto decorate = [](QAction* action, ViewerIcons::Kind kind, const QString& name) {
+        action->setIcon(ViewerIcons::icon(kind));
+        action->setIconText(name);
+        const QString shortcut = action->shortcut().toString(QKeySequence::NativeText);
+        action->setToolTip(shortcut.isEmpty() ? name : name + " (" + shortcut + ")");
+    };
+    decorate(ui->action_Open, ViewerIcons::Open, tr("Open Image"));
+    decorate(ui->action_Save, ViewerIcons::Export, tr("Export Image"));
+    decorate(ui->action_ModeExposure, ViewerIcons::Exposure, tr("Exposure"));
+    decorate(ui->action_ModeToneMapping, ViewerIcons::ToneMapping, tr("Tone Mapping"));
+    decorate(ui->action_ModeFalseColor, ViewerIcons::FalseColor, tr("False Color"));
+    decorate(ui->action_ShowLayers, ViewerIcons::Layers, tr("Layers"));
+    decorate(ui->action_ShowAttributes, ViewerIcons::Attributes, tr("Attributes"));
     toolbar->addAction(ui->action_Open);
     toolbar->addAction(ui->action_Save);
     toolbar->addSeparator();
@@ -390,6 +404,12 @@ void MainWindow::setupWorkspace()
     toolbar->addSeparator();
     toolbar->addAction(ui->action_ShowLayers);
     toolbar->addAction(ui->action_ShowAttributes);
+    for (QAction* action : toolbar->actions()) {
+        auto* button = qobject_cast<QToolButton*>(toolbar->widgetForAction(action));
+        if (!button) continue;
+        button->setFixedSize(32, 32);
+        button->setAccessibleName(action->iconText());
+    }
     addToolBar(Qt::TopToolBarArea, toolbar);
     animateToolbarButtons(toolbar);
 
@@ -541,7 +561,7 @@ void MainWindow::setupStereoActions()
     menu->setToolTipsVisible(true);
     m_stereoActions = new QActionGroup(this);
     m_stereoActions->setExclusive(true);
-    const QStringList labels = {tr("Default"), tr("Left eye only"), tr("Right eye only"), tr("Anaglyph 3D")};
+    const QStringList labels = {tr("Default"), tr("Left Eye"), tr("Right Eye"), tr("Anaglyph 3D")};
     const QStringList names = {"Default", "Left", "Right", "Anaglyph"};
     for (int i = 0; i < labels.size(); ++i) {
         auto* action = menu->addAction(labels[i]);
@@ -1016,13 +1036,6 @@ void MainWindow::toggleMinimalView()
             this, &MainWindow::resetMinimalParameters);
     connect(m_minimalPage->view(), &GraphicsView::controlWheel,
             this, &MainWindow::adjustMinimalParameter);
-    const QPointer<const FramebufferModel> pixelModel(model);
-    MinimalImageWidget* pixelPage = m_minimalPage;
-    connect(pixelPage->view(), &GraphicsView::queryPixelInfo, pixelPage,
-            [pixelPage, pixelModel](int x, int y) {
-        pixelPage->setPixelInfo(pixelModel
-          ? QString::fromStdString(pixelModel->getColorInfo(x, y)) : QString());
-    });
     connect(m_minimalPage->view(), &GraphicsView::openFileOnDropEvent,
             this, static_cast<void (MainWindow::*)(const QString&)>(&MainWindow::open));
     m_minimalConnections.append(connect(model, &QObject::destroyed, this, [this] {
@@ -1038,6 +1051,7 @@ void MainWindow::toggleMinimalView()
     m_minimalConnections.append(connect(model, &FramebufferModel::imageChanged, this,
       [this, projectionCanvasSize, projectionFooterHeight] {
           if (!m_minimalView || !m_minimalModel) return;
+          updateMinimalSummary();
           const auto next = PreviewImage::Geometry(*m_minimalModel).outputSize();
           const int footer = m_minimalPage->footerHeight();
           if (next != *projectionCanvasSize || footer != *projectionFooterHeight) {
@@ -1136,7 +1150,7 @@ void MainWindow::updateMinimalSummary()
                             && (document->sourceImage()->getLayerModel()->hasViews() || m_minimalModel->resolutionLevelCount() > 1)
                             ? document->activeLayerTitleText() : QString();
     if (m_minimalModel->rawEnvmap() >= 0) {
-        parameter += tr(" | Source %1 → %2")
+        parameter += tr(" | %1 → %2")
           .arg(EnvironmentProjection::name(EnvironmentProjection::Type(m_minimalModel->rawEnvmap())))
           .arg(EnvironmentProjection::name(m_minimalModel->projectionState().type));
         if (!m_minimalModel->environmentSource().available())
@@ -1144,11 +1158,12 @@ void MainWindow::updateMinimalSummary()
     }
     const QSize displaySize = m_minimalModel->isProjected() ? m_minimalModel->projectionCanvasSize()
       : m_minimalModel->previewDisplayWindow().size();
-    m_minimalPage->setSummary(tr("%1 | Display %2 x %3 | %4% | %5")
+    const QString detail = tr("%1 | %2×%3 | %4% | %5")
       .arg(layer.isEmpty() ? file : file + " | " + layer)
       .arg(displaySize.width()).arg(displaySize.height())
-      .arg(m_minimalPage->view()->viewState().zoom * 100., 0, 'f', 1).arg(parameter),
-      m_minimalModel);
+      .arg(m_minimalPage->view()->viewState().zoom * 100., 0, 'f', 1).arg(parameter);
+    m_minimalPage->setSummary(framebufferSummaryText(m_minimalModel), m_minimalModel,
+      detail + "\n" + framebufferSummaryToolTip(m_minimalModel));
 }
 
 void MainWindow::resetMinimalParameters()

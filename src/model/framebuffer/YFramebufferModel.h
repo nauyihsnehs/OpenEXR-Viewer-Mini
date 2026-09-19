@@ -55,7 +55,7 @@ class YFramebufferModel: public FramebufferModel
     double displayMaximum() const { return m_data->deep ? m_data->displayMaximum : getDatasetMax(); }
     bool hasFiniteDisplay() const { return m_data->deep ? m_data->hasFiniteDisplay : hasFiniteSamples(); }
 
-    virtual std::string              getColorInfo(int x, int y) const;
+    std::string getColorInfo(int x, int y, bool compact = false) const override;
     virtual std::vector<std::string> rawChannelNames() const;
 
   public slots:

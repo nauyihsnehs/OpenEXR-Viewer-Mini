@@ -32,6 +32,7 @@
 
 #include "YFramebufferWidget.h"
 #include "CropIndicator.h"
+#include "NonFiniteIndicator.h"
 #include "DepthRangeWidget.h"
 #include "ProjectionControls.h"
 #include "ScientificDoubleSpinBox.h"
@@ -41,6 +42,7 @@
 
 #include "ComboBoxBehavior.h"
 #include "WorkspaceWidgets.h"
+#include "ViewerIcons.h"
 #include "FramebufferInfo.h"
 
 #include <QPoint>
@@ -56,8 +58,17 @@ YFramebufferWidget::YFramebufferWidget(QWidget* parent)
   , m_zoomLevel(1.)
 {
     ui->setupUi(this);
+    ViewerIcons::setupButton(ui->buttonAuto, ViewerIcons::AutoRange,
+      tr("Automatic Range"), tr("Use the full finite value range\nAdjust either bound to return to a manual range."));
+    ViewerIcons::setupButton(ui->cbScale, ViewerIcons::ColorScale,
+      tr("Color Scale"), tr("Show or hide the color scale"));
+    ui->cbColormap->setAccessibleName(tr("Colormap"));
+    ui->cbColormap->setToolTip(tr("Colormap"));
+    updateZoomLevelText(m_zoomLevel);
     m_cropIndicator = new CropIndicator(this);
     ui->horizontalLayout_3->insertWidget(1, m_cropIndicator, 0, Qt::AlignVCenter);
+    m_nonFiniteIndicator = new NonFiniteIndicator(this);
+    ui->horizontalLayout_3->insertWidget(3, m_nonFiniteIndicator, 0, Qt::AlignVCenter);
     setRange(0., 1.);
     connect(ui->anomalyMarkerButton, &QToolButton::toggled, this, [this](bool enabled) {
         if (m_model) m_model->setHighlightNonFinite(enabled);
@@ -73,6 +84,7 @@ YFramebufferWidget::YFramebufferWidget(QWidget* parent)
     ui->fileInfoButton->setIcon(
       style()->standardIcon(QStyle::SP_MessageBoxInformation));
     ui->fileInfoButton->setToolTip(QString());
+    ui->fileInfoButton->setAccessibleName(tr("Image Information"));
     ui->fileInfoButton->installEventFilter(this);
     updateFramebufferSummary();
 
@@ -108,6 +120,8 @@ YFramebufferWidget::~YFramebufferWidget()
 void YFramebufferWidget::setModel(YFramebufferModel* model)
 {
     m_model = model;
+    m_nonFiniteIndicator->setModel(model);
+    ui->selectInfoLabel->setModel(model);
     findChild<DepthRangeWidget*>()->setModel(model);
     findChild<ProjectionControls*>()->setModel(model);
     if (m_model) m_model->setHighlightNonFinite(ui->anomalyMarkerButton->isChecked());
@@ -155,8 +169,7 @@ bool YFramebufferWidget::eventFilter(QObject* watched, QEvent* event)
 
 void YFramebufferWidget::onQueryPixelInfo(int x, int y)
 {
-    ui->selectInfoLabel->setText(
-      QString::fromStdString(m_model->getColorInfo(x, y)));
+    ui->selectInfoLabel->queryPixel(x, y);
 }
 
 
@@ -206,20 +219,19 @@ void YFramebufferWidget::on_cbColormap_currentIndexChanged(int index)
 }
 
 
-void YFramebufferWidget::on_cbScale_stateChanged(int arg1)
+void YFramebufferWidget::on_cbScale_toggled(bool checked)
 {
-    if (arg1 == Qt::Checked) {
-        ui->scaleWidget->show();
-    } else {
-        ui->scaleWidget->hide();
-    }
+    ui->scaleWidget->setVisible(checked);
 }
 
 
 void YFramebufferWidget::updateZoomLevelText(double zoom)
 {
     m_zoomLevel = zoom;
-    ui->zoomButton->setText(tr("Zoom %1%").arg(qRound(zoom * 100.)));
+    ui->zoomButton->setText(tr("%1%").arg(qRound(zoom * 100.)));
+    ui->zoomButton->setAccessibleName(tr("Image Zoom"));
+    ui->zoomButton->setToolTip(qRound(zoom * 100.) == 100
+      ? tr("Click to fit image to window") : tr("Click to restore 100% zoom"));
 }
 
 
@@ -227,6 +239,7 @@ void YFramebufferWidget::updateFramebufferSummary()
 {
     m_cropIndicator->setModel(m_model);
     ui->framebufferSummaryLabel->setText(framebufferSummaryText(m_model));
+    ui->framebufferSummaryLabel->setToolTip(framebufferSummaryToolTip(m_model));
     const bool loaded = m_model && m_model->isImageLoaded();
     ui->anomalyMarkerButton->setEnabled(loaded);
     ui->buttonAuto->setEnabled(loaded && m_model->hasFiniteDisplay());

@@ -66,6 +66,7 @@
 
 #include "GraphicsView.h"
 #include "FramebufferInfo.h"
+#include "PixelReadoutLabel.h"
 #include <QKeyEvent>
 #include <QPointer>
 #include <QSignalBlocker>
@@ -1597,6 +1598,7 @@ void ImageFileWidget::onFileInfoHoverLeft()
 
 void ImageFileWidget::onActiveSubWindowChanged(QMdiSubWindow* window)
 {
+    for (auto* readout : findChildren<PixelReadoutLabel*>()) readout->clearSample();
     if (!m_selectingStereo) {
         cancelStereoPreview();
         m_stereoMode = window && !window->property("stereoKeys").toStringList().isEmpty()

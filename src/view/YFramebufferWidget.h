@@ -45,6 +45,7 @@ namespace Ui
 }
 
 class CropIndicator;
+class NonFiniteIndicator;
 
 class YFramebufferWidget: public QWidget
 {
@@ -85,7 +86,7 @@ class YFramebufferWidget: public QWidget
 
     void on_cbColormap_currentIndexChanged(int index);
 
-    void on_cbScale_stateChanged(int arg1);
+    void on_cbScale_toggled(bool checked);
     void updateZoomLevelText(double zoom);
     void updateFramebufferSummary();
     void on_zoomButton_clicked();
@@ -96,5 +97,6 @@ class YFramebufferWidget: public QWidget
     Ui::YFramebufferWidget* ui;
     YFramebufferModel*      m_model;
     CropIndicator*          m_cropIndicator;
+    NonFiniteIndicator*     m_nonFiniteIndicator;
     double                  m_zoomLevel;
 };

@@ -373,7 +373,7 @@ namespace
         using FramebufferModel::Renderer;
         using FramebufferModel::requestRender;
         using FramebufferModel::startLoading;
-        std::string getColorInfo(int, int) const override { return ""; }
+        std::string getColorInfo(int, int, bool = false) const override { return ""; }
         std::vector<std::string> rawChannelNames() const override
         {
             return {"Y"};

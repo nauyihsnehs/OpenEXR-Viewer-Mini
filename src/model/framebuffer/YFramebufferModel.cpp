@@ -65,12 +65,22 @@ void YFramebufferModel::load(
     });
 }
 
-std::string YFramebufferModel::getColorInfo(int x, int y) const
+std::string YFramebufferModel::getColorInfo(int x, int y, bool compact) const
 {
-    if (isProjected()) return projectedColorInfo(x, y);
+    if (isProjected()) return projectedColorInfo(x, y, compact);
     if (!isImageLoaded() || x < 0 || x >= width() || y < 0 || y >= height())
         return "";
     std::stringstream text;
+    if (compact) {
+        const size_t index = size_t(y) * width() + x;
+        text << "(" << x + getDataWindow().x() << ", " << y + getDataWindow().y() << ")  ";
+        if (m_data->deep && !m_data->covers(index)) return text.str() + "—";
+        const std::string name = PixelDiagnostics::compactChannelName(m_layer);
+        if (m_data->deep) text << (m_layer == "Z" ? "Nearest " : "Comp ");
+        text << name << " " << PixelDiagnostics::sampleText(
+          m_data->deep ? m_data->pixels[index] : getRawPixels()[index], true);
+        return text.str();
+    }
     if (resolutionLevelCount() > 1) text << "Level " << resolutionLevel().toString() << " | ";
     const size_t index = size_t(y) * width() + x;
     if (m_data->deep) {

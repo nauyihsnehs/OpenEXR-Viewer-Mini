@@ -147,30 +147,42 @@ void RGBFramebufferModel::load(
     });
 }
 
-std::string RGBFramebufferModel::getColorInfo(int x, int y) const
+std::string RGBFramebufferModel::getColorInfo(int x, int y, bool compact) const
 {
-    if (isProjected()) return projectedColorInfo(x, y);
+    if (isProjected()) return projectedColorInfo(x, y, compact);
     if (!isImageLoaded() || x < 0 || x >= width() || y < 0 || y >= height())
         return "";
     if (isDerivedPreview()) {
         const QPoint position = getDataWindow().topLeft() + QPoint(x, y);
         if (!pixelCoverage().contains(QPoint(x, y))) return "";
         std::stringstream text;
-        if (resolutionLevelCount() > 1) text << "Level " << resolutionLevel().toString() << " | ";
-        text << "x: " << position.x() << " y: " << position.y();
+        if (!compact && resolutionLevelCount() > 1) text << "Level " << resolutionLevel().toString() << " | ";
+        if (compact) text << "(" << position.x() << ", " << position.y() << ")";
+        else text << "x: " << position.x() << " y: " << position.y();
         for (size_t i = 0; i < 2; ++i) {
             const auto& eye = *m_data->stereo[i];
-            text << (i == 0 ? " | Left:" : " | Right:");
+            text << (compact ? (i == 0 ? "  L" : "  R") : (i == 0 ? " | Left:" : " | Right:"));
             if (!eye.dataWindow.contains(position)) {
-                text << " no data";
+                text << (compact ? " —" : " no data");
                 continue;
             }
             const QPoint local = position - eye.dataWindow.topLeft();
             const size_t index = size_t(local.y()) * eye.width + local.x();
-            if (!eye.covers(index)) { text << " No samples"; continue; }
-            if (eye.deep) text << " Composite";
+            if (!eye.covers(index)) { text << (compact ? " —" : " No samples"); continue; }
+            if (eye.deep) text << (compact ? " Comp" : " Composite");
             const auto& raw = eye.deep || eye.sourcePixels.empty() ? eye.pixels : eye.sourcePixels;
             const float* pixel = &raw[4 * (size_t(local.y()) * eye.width + local.x())];
+            if (compact) {
+                std::vector<std::string> names;
+                std::vector<int> components;
+                for (int c = 0; c < 4; ++c) {
+                    if (m_data->stereoChannels[i][c].empty()) continue;
+                    names.push_back(m_data->stereoChannels[i][c]);
+                    components.push_back(c);
+                }
+                text << " " << PixelDiagnostics::compactChannels(names, components, pixel);
+                continue;
+            }
             for (int c = 0; c < 4; ++c) {
                 const auto& name = m_data->stereoChannels[i][c];
                 if (!name.empty())
@@ -183,6 +195,20 @@ std::string RGBFramebufferModel::getColorInfo(int x, int y) const
     const size_t index = size_t(y) * width() + x;
     const float* pixel = &(m_data->deep ? getDisplayPixels() : getRawPixels())[4 * index];
     std::stringstream text;
+    if (compact) {
+        text << "(" << x + getDataWindow().x() << ", " << y + getDataWindow().y() << ")  ";
+        if (m_data->deep) {
+            if (!m_data->covers(index)) return text.str() + "—";
+            text << "Comp ";
+        }
+        text << PixelDiagnostics::compactChannels(rawChannelNames(), rawChannelComponents(), pixel);
+        if (m_layerType == Layer_RGB || m_layerType == Layer_YC) {
+            const float* display = &getDisplayPixels()[4 * index];
+            text << "  Lum " << PixelDiagnostics::compactSampleText(
+              ToneMapping::luminance(display[0], display[1], display[2]));
+        }
+        return text.str();
+    }
     if (resolutionLevelCount() > 1) text << "Level " << resolutionLevel().toString() << " | ";
     text << "x: " << x + getDataWindow().x()
          << " y: " << y + getDataWindow().y() << " |";

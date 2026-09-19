@@ -11,7 +11,7 @@
    </rect>
   </property>
   <property name="windowTitle">
-   <string>Save Image</string>
+   <string>Export</string>
   </property>
   <layout class="QVBoxLayout" name="verticalLayout">
    <item>
@@ -54,7 +54,7 @@
        <item>
         <widget class="QPushButton" name="browseButton">
          <property name="text">
-          <string>Browse...</string>
+          <string/>
          </property>
         </widget>
        </item>
@@ -89,7 +89,7 @@
        <item row="2" column="0">
         <widget class="QLabel" name="jpegBackgroundLabel">
          <property name="text">
-          <string>Transparency background:</string>
+          <string>Background:</string>
          </property>
         </widget>
        </item>
@@ -109,7 +109,7 @@
        <item row="4" column="0">
         <widget class="QLabel" name="bracketStepLabel">
          <property name="text">
-          <string>Step EV:</string>
+          <string>Step:</string>
          </property>
         </widget>
        </item>
@@ -119,7 +119,7 @@
        <item row="5" column="0">
         <widget class="QLabel" name="bracketCenterLabel">
          <property name="text">
-          <string>Center EV:</string>
+          <string>Center:</string>
          </property>
         </widget>
        </item>
@@ -182,13 +182,15 @@
        </item>
        <item row="5" column="1">
         <widget class="QLabel" name="deepMultipartLabel">
-         <property name="text"><string>Preserve multipart (required for Deep)</string></property>
+         <property name="text"><string>Preserved (Deep)</string></property>
+         <property name="toolTip"><string>Deep export requires preserving the source parts.</string></property>
         </widget>
        </item>
        <item row="6" column="0" colspan="2">
         <widget class="QLabel" name="deepInfoLabel">
          <property name="wordWrap"><bool>true</bool></property>
-         <property name="text"><string>Deep Scanline: lossless ZIPS and original channel types. All original samples are saved, regardless of Depth Range. A and Z are included as dependencies.</string></property>
+         <property name="text"><string>All Deep samples saved; Depth Range ignored. A and Z included.</string></property>
+         <property name="toolTip"><string>Deep Scanline uses lossless ZIPS and original channel types. All original samples are saved, regardless of the preview Depth Range. A and Z are included as dependencies.</string></property>
         </widget>
        </item>
       </layout>
@@ -201,7 +203,7 @@
           <bool>true</bool>
          </property>
          <property name="text">
-          <string>HDR saves RGB radiance data. Alpha is ignored; single-channel data is copied to RGB.</string>
+          <string>RGB radiance; Alpha discarded. Single channel → RGB.</string>
          </property>
         </widget>
        </item>

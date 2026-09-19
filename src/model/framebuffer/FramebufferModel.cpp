@@ -171,7 +171,7 @@ FramebufferModel::RenderResult FramebufferModel::renderProjection(
     return cancel->load() ? RenderResult() : result;
 }
 
-std::string FramebufferModel::projectedColorInfo(int x, int y) const
+std::string FramebufferModel::projectedColorInfo(int x, int y, bool compact) const
 {
     if (!m_projected || x < 0 || y < 0 || x >= m_projected->width || y >= m_projected->height) return "";
     const size_t p = size_t(y) * m_projected->width + x;
@@ -180,9 +180,17 @@ std::string FramebufferModel::projectedColorInfo(int x, int y) const
     if (!EnvironmentProjection::sourcePosition(*m_data, projectionState(),
         QSize(m_projected->width, m_projected->height), x, y, position)) return "";
     std::ostringstream text;
+    const auto names = rawPixelStride() == 1 ? rawChannelNames() : std::vector<std::string>{"R", "G", "B", "A"};
+    if (compact) {
+        text << "≈(" << std::setprecision(5) << position.x() << ", " << position.y() << ")  ";
+        const std::vector<int> components = rawPixelStride() == 1
+          ? std::vector<int>{0} : std::vector<int>{0, 1, 2, 3};
+        text << PixelDiagnostics::compactChannels(names, components,
+          &m_projected->pixels[p * rawPixelStride()]);
+        return text.str();
+    }
     text << "Level " << resolutionLevel().toString() << " | Source sample ("
          << std::setprecision(9) << position.x() << ", " << position.y() << ") | Interpolated linear";
-    const auto names = rawPixelStride() == 1 ? rawChannelNames() : std::vector<std::string>{"R", "G", "B", "A"};
     for (size_t c = 0; c < names.size(); ++c)
         text << " " << names[c] << ": " << PixelDiagnostics::sampleText(m_projected->pixels[p * rawPixelStride() + c]);
     return text.str();

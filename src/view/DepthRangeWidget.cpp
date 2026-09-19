@@ -10,7 +10,7 @@ DepthRangeWidget::DepthRangeWidget(QWidget* parent) : QWidget(parent)
     setObjectName("depthRangeControl");
     auto* row = new QHBoxLayout(this);
     row->setContentsMargins(8, 2, 8, 2);
-    row->addWidget(new QLabel(tr("Depth Range"), this));
+    row->addWidget(new QLabel(tr("Depth"), this));
     m_minimum = new QLabel(this);
     m_maximum = new QLabel(this);
     m_slider = new RangeSliderWidget(this);

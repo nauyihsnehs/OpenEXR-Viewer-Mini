@@ -90,6 +90,8 @@ set(PROJECT_SOURCES
     src/view/mainwindow.ui
     src/view/WorkspaceWidgets.cpp
     src/view/WorkspaceWidgets.h
+    src/view/ViewerIcons.cpp
+    src/view/ViewerIcons.h
     src/view/MinimalImageWidget.cpp
     src/view/MinimalImageWidget.h
     src/view/CropIndicator.h
@@ -109,6 +111,10 @@ set(PROJECT_SOURCES
     src/view/ComboBoxBehavior.h
 
     src/view/FramebufferInfo.h
+    src/view/PixelReadoutLabel.cpp
+    src/view/PixelReadoutLabel.h
+    src/view/NonFiniteIndicator.cpp
+    src/view/NonFiniteIndicator.h
 
     src/io/ImageSave.cpp
     src/io/ImageSave.h
