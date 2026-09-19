@@ -56,6 +56,7 @@ class YFramebufferWidget: public QWidget
     ~YFramebufferWidget();
 
     void                    setModel(YFramebufferModel* model);
+    void adoptPreparedModel(YFramebufferModel* model, const PreviewState& state);
     const FramebufferModel* framebufferModel() const { return m_model; }
     PreviewState            previewState() const;
     void                    restorePreviewState(const PreviewState& state);
@@ -92,6 +93,7 @@ class YFramebufferWidget: public QWidget
     void on_zoomButton_clicked();
 
   private:
+    void bindModel(YFramebufferModel* model, bool initialize);
     void                    setRange(double min, double max);
     bool                    m_autoRange = false;
     Ui::YFramebufferWidget* ui;

@@ -90,12 +90,14 @@ Viewing controls
   restricted to diagonal pairs use one slider; single-level files hide the controls.
   Dragging only previews the target level and display dimensions; release loads it.
   Arrow keys and Home/End select discrete levels; wheel over a slider does not zoom.
-  While loading, sliders are disabled and show both committed and requested levels;
-  the menu, copy and export continue to use the committed frame. Failed loads restore
-  the sliders without replacing the image. Minimal view stays open across successful
-  level changes and refreshes, rebinding the new model. Its footer retains at least
-  320 logical pixels of width (screen permitting) so even 1×1 levels remain selectable,
-  without stretching source pixels or changing the image zoom.
+  While loading, only the sliders are disabled; their thumbs stay at the requested
+  level. Fixed-width status fields and a loading indicator avoid layout shifts, with
+  full current/target details in tooltips. The menu, copy and export still use the
+  committed frame. Failed loads restore the sliders without replacing the image.
+  Level switches retain tabs, controls, graphics views, focus and toolbar scroll;
+  only completed models are swapped in. File refresh retains its rebuilding path.
+  Minimal view stays open and its footer reserves the controls' width (screen
+  permitting), so even 1×1 levels remain selectable without stretching the image.
   Only the final pair selection starts a load. The menu intersects actual valid pairs
   across all parts (scanline/ONE_LEVEL allow only `(0,0)`, Mipmap only diagonal pairs).
   Views use the selected level's native dimensions, retain manual display parameters

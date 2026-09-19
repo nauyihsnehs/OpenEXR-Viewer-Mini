@@ -181,6 +181,7 @@ class ImageFileWidget: public QWidget
     void startInputOpen(bool reopen, ResolutionLevel level);
     void cancelInputOpen();
     void commitRefresh();
+    void commitResolutionLevel();
     void abortRefresh(const QString& message);
     void showLoadError(const QString& message) const;
     void           clearImage(bool keepSource = false);

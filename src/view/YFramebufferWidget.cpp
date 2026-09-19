@@ -75,7 +75,7 @@ YFramebufferWidget::YFramebufferWidget(QWidget* parent)
         if (m_model) m_model->setHighlightNonFinite(enabled);
     });
     ui->horizontalLayout->addWidget(new ProjectionControls(this));
-    ui->horizontalLayout->addWidget(new ResolutionLevelWidget(this));
+    ui->horizontalLayout->insertWidget(0, new ResolutionLevelWidget(this));
     wrapPreviewControls(ui->verticalLayout);
     ui->graphicsView->watchOutsideZoom(this, ui->horizontalLayout_3);
     ui->verticalLayout->insertWidget(1, new DepthRangeWidget(this));
@@ -121,12 +121,28 @@ YFramebufferWidget::~YFramebufferWidget()
 
 void YFramebufferWidget::setModel(YFramebufferModel* model)
 {
+    bindModel(model, true);
+}
+
+void YFramebufferWidget::adoptPreparedModel(YFramebufferModel* model, const PreviewState& state)
+{
+    Q_ASSERT(model && model->isPreviewReady());
+    if (m_model) disconnect(m_model, nullptr, this, nullptr);
+    // Apply the prepared controls without writing parameters back into either model.
+    m_model = nullptr;
+    restorePreviewState(state);
+    bindModel(model, false);
+}
+
+void YFramebufferWidget::bindModel(YFramebufferModel* model, bool initialize)
+{
+    if (m_model) disconnect(m_model, nullptr, this, nullptr);
     m_model = model;
     m_nonFiniteIndicator->setModel(model);
     ui->selectInfoLabel->setModel(model);
     findChild<DepthRangeWidget*>()->setModel(model);
     findChild<ProjectionControls*>()->setModel(model);
-    if (m_model) m_model->setHighlightNonFinite(ui->anomalyMarkerButton->isChecked());
+    if (initialize) m_model->setHighlightNonFinite(ui->anomalyMarkerButton->isChecked());
     if (m_model && m_model->parent() != this) m_model->setParent(this);
     ui->graphicsView->setModel(model);
     connect(model, &FramebufferModel::imageChanged, this, [this] {
@@ -284,14 +300,16 @@ PreviewState YFramebufferWidget::previewState() const
 }
 void YFramebufferWidget::restorePreviewState(const PreviewState& state)
 {
-    m_model->setDepthRange(state.depth);
-    m_model->setProjectionState(state.projection);
+    if (m_model) {
+        m_model->setDepthRange(state.depth);
+        m_model->setProjectionState(state.projection);
+    }
     ui->anomalyMarkerButton->setChecked(state.highlightNonFinite);
     ui->cbColormap->setCurrentIndex(state.colormap);
     ui->cbScale->setChecked(state.scaleVisible);
-    m_autoRange = state.automatic && (m_model->hasDeepSamples() || m_model->hasFiniteDisplay());
-    m_model->setAutomaticRange(m_autoRange);
-    if (m_autoRange)
+    m_autoRange = state.automatic && (!m_model || m_model->hasDeepSamples() || m_model->hasFiniteDisplay());
+    if (m_model) m_model->setAutomaticRange(m_autoRange);
+    if (m_autoRange && m_model)
         setRange(m_model->displayMinimum(), m_model->displayMaximum());
     else
         setRange(state.minimum, state.maximum);

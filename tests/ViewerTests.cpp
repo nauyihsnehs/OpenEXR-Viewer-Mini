@@ -28,10 +28,14 @@
 #include <QTimer>
 #include <QWheelEvent>
 #include <QSlider>
+#include <QScrollArea>
+#include <QScrollBar>
 #include <view/ResolutionLevelWidget.h>
 #include <QTabBar>
 #include <QPlainTextEdit>
 #include <QProgressBar>
+#include <QProxyStyle>
+#include <QStyleOptionSlider>
 #include <QtConcurrent/QtConcurrentRun>
 #include <QtEndian>
 #include <model/OpenEXRImage.h>
@@ -83,6 +87,30 @@
 
 namespace
 {
+    // Exercise both native track-click paths independently of the host theme.
+    class ResolutionSliderStyle : public QProxyStyle {
+    public:
+        explicit ResolutionSliderStyle(bool absolute) : m_absolute(absolute) {}
+        int styleHint(StyleHint hint, const QStyleOption* option = nullptr,
+                      const QWidget* widget = nullptr, QStyleHintReturn* result = nullptr) const override {
+            if (hint == SH_Slider_AbsoluteSetButtons) return m_absolute ? int(Qt::LeftButton) : 0;
+            if (hint == SH_Slider_PageSetButtons) return m_absolute ? 0 : int(Qt::LeftButton);
+            return QProxyStyle::styleHint(hint, option, widget, result);
+        }
+    private:
+        bool m_absolute;
+    };
+
+    QPoint resolutionHandleCenter(QSlider* slider) {
+        QStyleOptionSlider option;
+        option.initFrom(slider);
+        option.orientation = slider->orientation();
+        option.minimum = slider->minimum(); option.maximum = slider->maximum();
+        option.sliderPosition = slider->sliderPosition(); option.sliderValue = slider->value();
+        return slider->style()->subControlRect(QStyle::CC_Slider, &option,
+                                               QStyle::SC_SliderHandle, slider).center();
+    }
+
     // Small point-sample fixture; file order deliberately differs from depth order.
     void writeDeepFixture(const QString& path, bool stereo = false, bool zBack = false,
                           int omittedPart = -1, float depthShift = 0.f, bool constant = false)
@@ -1789,6 +1817,11 @@ class ViewerTests: public QObject
         widget.setStereoMode(ImageFileWidget::StereoAnaglyph);
         QTRY_COMPARE(widget.stereoMode(), ImageFileWidget::StereoAnaglyph);
         const auto* oldModel = widget.activeFramebufferModel();
+        const auto retainedPages = widget.findChildren<RGBFramebufferWidget*>();
+        const QPointer<YFramebufferWidget> retainedScalar = scalar;
+        auto* toolbar = widget.activePreviewWidget()->findChild<QScrollArea*>("previewControlsScroll");
+        QVERIFY(toolbar); toolbar->horizontalScrollBar()->setValue(toolbar->horizontalScrollBar()->maximum());
+        const int toolbarOffset = toolbar->horizontalScrollBar()->value();
         widget.setResolutionLevel(pending);
         QCOMPARE(widget.resolutionLevel(), ResolutionLevel(0, 0));
         QCOMPARE(widget.activeFramebufferModel(), oldModel);
@@ -1797,9 +1830,16 @@ class ViewerTests: public QObject
         QCOMPARE(widget.resolutionLevel(), selected);
         QCOMPARE(other.resolutionLevel(), ResolutionLevel(0, 0));
         QCOMPARE(widget.stereoMode(), ImageFileWidget::StereoAnaglyph);
+        QCOMPARE(widget.findChildren<RGBFramebufferWidget*>(), retainedPages);
+        QCOMPARE(widget.findChild<YFramebufferWidget*>(), retainedScalar.data());
+        QCOMPARE(toolbar->horizontalScrollBar()->value(), toolbarOffset);
         for (auto* page : widget.findChildren<RGBFramebufferWidget*>()) {
             QCOMPARE(page->framebufferModel()->resolutionLevel(), selected);
-            QVERIFY(page->framebufferModel()->isPreviewReady());
+            QVERIFY(page->framebufferModel()->isFullPreviewReady()); // Adoption does not schedule another render.
+            auto* view = page->findChild<GraphicsView*>();
+            auto* image = qgraphicsitem_cast<QGraphicsPixmapItem*>(view->scene()->items().first());
+            QVERIFY(image && !image->pixmap().isNull());
+            QCOMPARE(image->pixmap().size(), page->framebufferModel()->getLoadedImage().size());
         }
         scalar = widget.findChild<YFramebufferWidget*>();
         QCOMPARE(scalar->framebufferModel()->resolutionLevel(), selected);
@@ -1857,21 +1897,52 @@ class ViewerTests: public QObject
         QCOMPARE(y->isHidden(), !ripmap);
         const auto* old = document->activeFramebufferModel();
         const auto image = PreviewImage::render(*old);
+        const QPointer<QWidget> page = document->activePreviewWidget();
+        const QPointer<GraphicsView> graphics = document->activeGraphicsView();
+        const QPointer<ResolutionLevelWidget> retainedControls = controls;
+        const QPointer<QSlider> retainedX = x;
+        auto* toolbar = page->findChild<QScrollArea*>("previewControlsScroll"); QVERIFY(toolbar);
+        x->setFocus(); QApplication::processEvents();
+        const int scroll = toolbar->horizontalScrollBar()->value();
+        const QRect track(x->mapTo(page, QPoint()), x->size());
+        const QSize barSize = controls->size();
         QSignalSpy requests(document, &ImageFileWidget::refreshInProgressChanged);
         x->setSliderDown(true); x->setSliderPosition(1); x->setSliderPosition(2);
         QCOMPARE(requests.count(), 0); QVERIFY(!document->isRefreshInProgress());
+        QApplication::processEvents();
+        QCOMPARE(QRect(x->mapTo(page, QPoint()), x->size()), track);
+        QCOMPARE(controls->size(), barSize);
         QCOMPARE(document->resolutionLevel(), ResolutionLevel());
         QCOMPARE(document->activeFramebufferModel(), old);
         QCOMPARE(PreviewImage::render(*old), image); // Copy/export still sees the committed level.
         QVERIFY(controls->findChild<QLabel*>("resolutionLevelStatus")->text().startsWith("Target"));
         const ResolutionLevel target(2, ripmap ? 0 : 2);
+        bool checkedLoading = false;
+        const auto loadingConnection = connect(document, &ImageFileWidget::refreshInProgressChanged, controls, [&](bool loading) {
+            if (!loading) return;
+            checkedLoading = true;
+            QCOMPARE(document->requestedResolutionLevel(), target);
+            QVERIFY(controls->isEnabled() && !x->isEnabled());
+            QCOMPARE(x->value(), 2);
+            QVERIFY(controls->findChild<QLabel*>("resolutionLevelStatus")->toolTip().contains("Loading"));
+            QCOMPARE(document->activeFramebufferModel(), old);
+            QCOMPARE(QRect(x->mapTo(page, QPoint()), x->size()), track);
+        });
         x->setSliderDown(false);
-        QCOMPARE(requests.count(), 1); QVERIFY(document->isRefreshInProgress());
-        QCOMPARE(document->requestedResolutionLevel(), target);
-        QVERIFY(!controls->isEnabled());
-        QVERIFY(controls->findChild<QLabel*>("resolutionLevelStatus")->text().contains("Loading"));
-        QCOMPARE(document->activeFramebufferModel(), old);
+        QCOMPARE(requests.count(), 0); // Loading starts outside the input signal stack.
+        QTRY_COMPARE(document->resolutionLevel(), target);
         QTRY_VERIFY(!document->isRefreshInProgress());
+        QVERIFY(checkedLoading); QCOMPARE(requests.count(), 2);
+        disconnect(loadingConnection);
+        QCOMPARE(document->activePreviewWidget(), page.data());
+        QCOMPARE(document->activeGraphicsView(), graphics.data());
+        QCOMPARE(page->findChild<ResolutionLevelWidget*>(), retainedControls.data());
+        QCOMPARE(page->findChild<QSlider*>("resolutionXSlider"), retainedX.data());
+        QCOMPARE(toolbar->horizontalScrollBar()->value(), scroll);
+        QCOMPARE(QRect(x->mapTo(page, QPoint()), x->size()), track);
+        QCOMPARE(controls->size(), barSize);
+        QVERIFY(x->hasFocus());
+        QVERIFY(document->activeFramebufferModel()->isFullPreviewReady());
         QCOMPARE(document->resolutionLevel(), target);
         QCOMPARE(other.resolutionLevel(), ResolutionLevel());
         controls = document->activePreviewWidget()->findChild<ResolutionLevelWidget*>();
@@ -1883,15 +1954,15 @@ class ViewerTests: public QObject
         if (ripmap) {
             y = controls->findChild<QSlider*>("resolutionYSlider");
             y->setSliderDown(true); y->setSliderPosition(1); y->setSliderDown(false);
+            QTRY_COMPARE(document->resolutionLevel(), ResolutionLevel(2, 1));
             QTRY_VERIFY(!document->isRefreshInProgress());
-            QCOMPARE(document->resolutionLevel(), ResolutionLevel(2, 1));
         }
         controls = document->activePreviewWidget()->findChild<ResolutionLevelWidget*>();
         x = controls->findChild<QSlider*>("resolutionXSlider");
         const int previousY = document->resolutionLevel().y;
         QTest::keyClick(x, Qt::Key_Home);
+        QTRY_COMPARE(document->resolutionLevel(), ResolutionLevel(0, ripmap ? previousY : 0));
         QTRY_VERIFY(!document->isRefreshInProgress());
-        QCOMPARE(document->resolutionLevel(), ResolutionLevel(0, ripmap ? previousY : 0));
         // Native slider wheel handling must neither change layers nor zoom the image.
         x = document->activePreviewWidget()->findChild<QSlider*>("resolutionXSlider");
         const double zoom = document->activeGraphicsView()->viewState().zoom;
@@ -1902,12 +1973,157 @@ class ViewerTests: public QObject
         QCOMPARE(document->activeGraphicsView()->viewState().zoom, zoom);
         const int last = x->maximum();
         QTest::keyClick(x, Qt::Key_End);
+        QTRY_COMPARE(document->resolutionLevel(), ResolutionLevel(last, ripmap ? previousY : last));
         QTRY_VERIFY(!document->isRefreshInProgress());
-        QCOMPARE(document->resolutionLevel(), ResolutionLevel(last, ripmap ? previousY : last));
         x = document->activePreviewWidget()->findChild<QSlider*>("resolutionXSlider");
         QTest::keyClick(x, Qt::Key_Left);
+        QTRY_COMPARE(document->resolutionLevel(), ResolutionLevel(last - 1, ripmap ? previousY : last - 1));
         QTRY_VERIFY(!document->isRefreshInProgress());
-        QCOMPARE(document->resolutionLevel(), ResolutionLevel(last - 1, ripmap ? previousY : last - 1));
+    }
+
+    void resolutionSliderMouseInputAtHighFit_data()
+    {
+        QTest::addColumn<bool>("ripmap");
+        QTest::addColumn<bool>("scalar");
+        QTest::addColumn<bool>("absolute");
+        for (bool ripmap : {false, true})
+            for (bool scalar : {false, true})
+                for (bool absolute : {false, true})
+                    QTest::newRow(qPrintable(QString("%1-%2-%3").arg(ripmap ? "rip" : "mip")
+                      .arg(scalar ? "scalar" : "rgb").arg(absolute ? "absolute" : "page")))
+                      << ripmap << scalar << absolute;
+    }
+
+    void resolutionSliderMouseInputAtHighFit()
+    {
+        QFETCH(bool, ripmap); QFETCH(bool, scalar); QFETCH(bool, absolute);
+        const QString path = fixture("slider-mouse-fit");
+        if (ripmap) writeRipFixture(path); else writeMipFixture(path);
+        FileWidget document(path); document.resize(1000, 750); document.show();
+        QTRY_VERIFY(document.isDocumentReady());
+        if (scalar) {
+            document.openLayer(document.sourceImage()->getLayerModel()->findChannel(0, "Z"));
+            QTRY_VERIFY(document.activeFramebufferModel()->isPreviewReady());
+        }
+        const auto last = document.resolutionLevels().back();
+        document.setResolutionLevel(last);
+        QTRY_VERIFY(!document.isRefreshInProgress());
+        QCOMPARE(document.resolutionLevel(), last);
+        auto* view = document.activeGraphicsView();
+        view->autoscale();
+        QVERIFY(view->viewState().fit && view->viewState().zoom > 64.);
+        QCOMPARE(document.activeFramebufferModel()->getLoadedImage().size(), QSize(1, 1));
+        auto* page = document.activePreviewWidget();
+        auto* controls = page->findChild<ResolutionLevelWidget*>(); QVERIFY(controls);
+        auto* x = controls->findChild<QSlider*>("resolutionXSlider");
+        auto* loading = controls->findChild<QLabel*>("resolutionLevelLoading");
+        auto* style = new ResolutionSliderStyle(absolute); style->setParent(x); x->setStyle(style);
+        QApplication::processEvents();
+        const QRect track = x->geometry();
+        const QSize barSize = controls->size();
+        QSignalSpy requests(&document, &ImageFileWidget::refreshInProgressChanged);
+
+        // Actual mouse events exercise QSlider's private pressed-control state.
+        const QPoint first(2, x->height() / 2), end(x->width() - 3, x->height() / 2);
+        QTest::mousePress(x, Qt::LeftButton, Qt::NoModifier, resolutionHandleCenter(x));
+        QTest::mouseMove(x, first);
+        QApplication::processEvents();
+        QVERIFY(x->isSliderDown()); QCOMPARE(x->value(), 0);
+        QCOMPARE(requests.count(), 0); QCOMPARE(document.resolutionLevel(), last);
+        QTest::mouseRelease(x, Qt::LeftButton, Qt::NoModifier, first);
+        const ResolutionLevel firstLevel(0, ripmap ? last.y : 0);
+        QTRY_COMPARE(document.resolutionLevel(), firstLevel);
+        QTRY_VERIFY(!document.isRefreshInProgress());
+        QCOMPARE(requests.count(), 2);
+        QVERIFY(x->isEnabled() && !x->isSliderDown() && loading->text().isEmpty());
+
+        requests.clear();
+        QTest::mousePress(x, Qt::LeftButton, Qt::NoModifier, end);
+        if (absolute) {
+            // The value changes before Qt marks the handle as pressed.
+            QApplication::processEvents();
+            QCOMPARE(requests.count(), 0);
+            QVERIFY(x->isEnabled() && x->isSliderDown());
+        }
+        QTest::mouseRelease(x, Qt::LeftButton, Qt::NoModifier, end);
+        const int targetX = absolute ? last.x : 1;
+        const ResolutionLevel target(targetX, ripmap ? last.y : targetX);
+        QTRY_COMPARE(document.resolutionLevel(), target);
+        QTRY_VERIFY(!document.isRefreshInProgress());
+        QCOMPARE(requests.count(), 2);
+        QVERIFY(x->isEnabled() && !x->isSliderDown() && loading->text().isEmpty());
+        QCOMPARE(document.activePreviewWidget(), page);
+        QCOMPARE(document.activeGraphicsView(), view);
+        QCOMPARE(page->findChild<ResolutionLevelWidget*>(), controls);
+        QCOMPARE(x->geometry(), track); QCOMPARE(controls->size(), barSize);
+
+        // Inject the old stuck-down condition after loading has disabled the slider.
+        const auto connection = connect(&document, &ImageFileWidget::refreshInProgressChanged,
+                                         controls, [x](bool busy) { if (busy) x->setSliderDown(true); });
+        document.setResolutionLevel(firstLevel); // The same entry point used by the menu.
+        QTRY_VERIFY(!document.isRefreshInProgress());
+        QVERIFY(x->isEnabled() && !x->isSliderDown() && loading->text().isEmpty());
+        disconnect(connection);
+        QTest::keyClick(x, Qt::Key_End);
+        QTRY_COMPARE(document.resolutionLevel(), last);
+        QTRY_VERIFY(!document.isRefreshInProgress());
+        QVERIFY(x->isEnabled() && !x->isSliderDown() && loading->text().isEmpty());
+        QVERIFY(view->viewState().fit && view->viewState().zoom > 64.);
+    }
+
+    void resolutionSliderQueuedInputIsSuperseded()
+    {
+        const QString path = fixture("slider-queued"); writeMipFixture(path);
+        FileWidget first(path), second(path);
+        QTRY_VERIFY(first.isDocumentReady() && second.isDocumentReady());
+        ResolutionLevelWidget controls;
+        controls.setDocument(&first);
+        auto* x = controls.findChild<QSlider*>("resolutionXSlider");
+        auto* loading = controls.findChild<QLabel*>("resolutionLevelLoading");
+        QSignalSpy firstRequests(&first, &ImageFileWidget::refreshInProgressChanged);
+        QSignalSpy secondRequests(&second, &ImageFileWidget::refreshInProgressChanged);
+        x->setValue(1); x->setValue(2); // Coalesce input before the event loop resumes.
+        QCOMPARE(firstRequests.count(), 0);
+        QTRY_COMPARE(first.resolutionLevel(), ResolutionLevel(2, 2));
+        QTRY_VERIFY(!first.isRefreshInProgress());
+        QCOMPARE(firstRequests.count(), 2);
+
+        firstRequests.clear();
+        x->setValue(1);
+        controls.setDocument(&second);
+        QApplication::processEvents();
+        QCOMPARE(firstRequests.count(), 0); QCOMPARE(secondRequests.count(), 0);
+        QCOMPARE(x->value(), 0);
+        x->setValue(1);
+        second.setResolutionLevel({2, 2}); // External/menu request wins over queued input.
+        QTRY_VERIFY(!second.isRefreshInProgress());
+        QApplication::processEvents();
+        QCOMPARE(second.resolutionLevel(), ResolutionLevel(2, 2));
+        QCOMPARE(secondRequests.count(), 2);
+        QCOMPARE(x->value(), 2); QVERIFY(x->isEnabled() && loading->text().isEmpty());
+
+        secondRequests.clear();
+        x->setValue(1);
+        second.refresh();
+        QTRY_VERIFY(!second.isRefreshInProgress());
+        QApplication::processEvents();
+        QCOMPARE(second.resolutionLevel(), ResolutionLevel(2, 2));
+        QCOMPARE(secondRequests.count(), 2); QCOMPARE(x->value(), 2);
+
+        secondRequests.clear();
+        second.setResolutionLevel({1, 1});
+        QVERIFY(second.isRefreshInProgress());
+        x->setSliderDown(true);
+        second.setResolutionLevel({2, 2}); // Cancel to the committed level.
+        QVERIFY(!second.isRefreshInProgress());
+        QVERIFY(x->isEnabled() && !x->isSliderDown() && loading->text().isEmpty());
+        QApplication::processEvents();
+        QCOMPARE(secondRequests.count(), 2); QCOMPARE(x->value(), 2);
+        x->setValue(1);
+        second.setResolutionLevel({2, 2}); // Also discard queued input without an active load.
+        QApplication::processEvents();
+        QCOMPARE(second.resolutionLevel(), ResolutionLevel(2, 2));
+        QCOMPARE(secondRequests.count(), 3); QCOMPARE(x->value(), 2);
     }
 
     void resolutionSliderMinimalRebindAndFailure()
@@ -1924,23 +2140,46 @@ class ViewerTests: public QObject
         auto* controls = minimal->findChild<ResolutionLevelWidget*>(); QVERIFY(controls && !controls->isHidden());
         auto* x = controls->findChild<QSlider*>("resolutionXSlider");
         const auto* old = document->activeFramebufferModel();
+        const QRect track = x->geometry();
+        const auto statusSize = controls->size();
         QTimer closeError;
         connect(&closeError, &QTimer::timeout, &window, [] {
             for (auto* top : QApplication::topLevelWidgets())
                 if (auto* message = qobject_cast<QMessageBox*>(top)) message->accept();
         });
         closeError.start(10);
+        QSignalSpy requests(document, &ImageFileWidget::refreshInProgressChanged);
+        connect(document, &ImageFileWidget::refreshInProgressChanged, controls,
+                [x](bool busy) { if (busy) x->setSliderDown(true); });
         x->setSliderDown(true); x->setSliderPosition(1); x->setSliderDown(false);
+        QTRY_COMPARE(requests.count(), 2);
         QTRY_VERIFY(!document->isRefreshInProgress());
         closeError.stop();
         QCOMPARE(document->activeFramebufferModel(), old);
         QCOMPARE(window.centralWidget(), minimal); QCOMPARE(x->value(), 0);
-        QVERIFY(controls->isEnabled()); QCOMPARE(view->viewState().zoom, 8.);
+        QCOMPARE(x->geometry(), track); QCOMPARE(controls->size(), statusSize);
+        QCOMPARE(minimal->findChild<ResolutionLevelWidget*>(), controls);
+        QVERIFY(controls->isEnabled() && x->isEnabled() && !x->isSliderDown());
+        QVERIFY(controls->findChild<QLabel*>("resolutionLevelLoading")->text().isEmpty());
+        QCOMPARE(view->viewState().zoom, 8.);
         QPointer<const FramebufferModel> previous(old);
+        bool retainedOldFrame = false, installedCompleteFrame = false;
+        connect(document, &ImageFileWidget::previewsAboutToBeReplaced, minimal, [&] {
+            auto* image = qgraphicsitem_cast<QGraphicsPixmapItem*>(view->scene()->items().first());
+            retainedOldFrame = image && !image->pixmap().isNull();
+        });
+        connect(document, &ImageFileWidget::previewsReplaced, minimal, [&] {
+            auto* image = qgraphicsitem_cast<QGraphicsPixmapItem*>(view->scene()->items().first());
+            installedCompleteFrame = image && !image->pixmap().isNull()
+              && document->activeFramebufferModel()->isFullPreviewReady()
+              && image->pixmap().size() == document->activeFramebufferModel()->getLoadedImage().size();
+        });
         auto* y = controls->findChild<QSlider*>("resolutionYSlider");
         y->setSliderDown(true); y->setSliderPosition(1); y->setSliderDown(false);
+        QTRY_COMPARE(document->resolutionLevel(), ResolutionLevel(0, 1));
         QTRY_VERIFY(!document->isRefreshInProgress());
         QVERIFY(previous.isNull()); QCOMPARE(window.centralWidget(), minimal);
+        QVERIFY(retainedOldFrame && installedCompleteFrame);
         QCOMPARE(document->resolutionLevel(), ResolutionLevel(0, 1));
         QCOMPARE(view->viewState().zoom, 8.); QCOMPARE(y->value(), 1);
         QVERIFY(window.width() >= 320); // Small stored levels retain usable controls without changing pixel zoom.

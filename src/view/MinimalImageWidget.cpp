@@ -53,7 +53,7 @@ void MinimalImageWidget::setDocument(ImageFileWidget* document)
 
 int MinimalImageWidget::minimumControlWidth() const
 {
-    return m_resolution->isHidden() ? 1 : 320;
+    return m_resolution->isHidden() ? 1 : m_resolution->width() + 16;
 }
 
 int MinimalImageWidget::footerHeight() const

@@ -935,8 +935,8 @@ void MainWindow::addFileTab(ImageFileWidget* fileWidget, const QString& title)
         m_minimalReloadZoom = m_minimalPage->view()->viewState().zoom;
         for (const auto& connection : m_minimalConnections) disconnect(connection);
         m_minimalConnections.clear();
-        m_minimalPage->view()->setModel(nullptr);
-        m_minimalModel.clear();
+        // Retain the displayed pixmap until the new complete model is bound.
+        // In-place level commits keep the old model alive through previewsReplaced().
     });
     connect(fileWidget, &ImageFileWidget::previewsReplaced, this, [this, fileWidget] {
         if (!m_rebindingMinimalModel || currentFileWidget() != fileWidget) return;

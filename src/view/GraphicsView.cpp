@@ -100,11 +100,14 @@ void GraphicsView::setModel(const FramebufferModel* model)
     _model = model;
     _dragging = _rightClick = false;
     unsetCursor();
-    _imageItem->setPixmap(QPixmap());
-    _displayWindow = QRectF();
-    _displayClip->setRect(_displayWindow);
-    viewport()->update();
-    emit queryPixelInfo(-1, -1);
+    const bool completed = model && model->isPreviewReady() && !model->getLoadedImage().isNull();
+    if (!completed) {
+        _imageItem->setPixmap(QPixmap());
+        _displayWindow = QRectF();
+        _displayClip->setRect(_displayWindow);
+        viewport()->update();
+        emit queryPixelInfo(-1, -1);
+    }
     if (!model) return;
     connect(model, &FramebufferModel::anomalyMarkersChanged, this,
             [this] { viewport()->update(); });
@@ -120,8 +123,8 @@ void GraphicsView::setModel(const FramebufferModel* model)
       &FramebufferModel::imageLoaded,
       this,
       &GraphicsView::onImageLoaded);
-    if (model->isImageLoaded()) onImageLoaded();
-    if (!model->getLoadedImage().isNull()) onImageChanged();
+    if (completed) onImageChanged();
+    else if (model->isImageLoaded()) onImageLoaded();
 }
 
 void GraphicsView::onImageLoaded()

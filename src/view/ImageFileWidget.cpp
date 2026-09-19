@@ -55,6 +55,9 @@
 #include <QTabBar>
 #include <QTimer>
 #include <QToolTip>
+#include <QApplication>
+#include <QScrollArea>
+#include <QScrollBar>
 
 #include <model/OpenEXRImage.h>
 #include <model/attribute/LayerItem.h>
@@ -680,6 +683,7 @@ void ImageFileWidget::prepareDocument(ResolutionLevel level, bool reopen, std::s
 void ImageFileWidget::commitRefresh()
 {
     if (!m_refresh) return;
+    if (!m_refresh->image) { commitResolutionLevel(); return; }
     emit previewsAboutToBeReplaced();
     auto transaction = std::move(m_refresh);
     clearImage(!transaction->image);
@@ -705,6 +709,71 @@ void ImageFileWidget::commitRefresh()
     emit activeFramebufferChanged();
     emit refreshInProgressChanged(false);
     emit previewsReplaced();
+}
+
+
+void ImageFileWidget::commitResolutionLevel()
+{
+    // Validate every destination before touching any visible page.
+    const auto windows = m_mdiArea->subWindowList();
+    std::vector<QMdiSubWindow*> destinations;
+    for (const auto& prepared : m_refresh->prepared) {
+        auto it = std::find_if(windows.begin(), windows.end(), [&prepared](QMdiSubWindow* window) {
+            return window->property("layerKey").toString() == prepared.key;
+        });
+        if (it == windows.end() ||
+            bool(qobject_cast<RGBFramebufferWidget*>((*it)->widget())) !=
+            bool(qobject_cast<RGBFramebufferWidget*>(prepared.widget))) {
+            abortRefresh(tr("The open previews changed during the level switch; previous images retained."));
+            return;
+        }
+        destinations.push_back(*it);
+    }
+    emit previewsAboutToBeReplaced();
+    auto transaction = std::move(m_refresh);
+    const bool updates = updatesEnabled();
+    setUpdatesEnabled(false);
+    const QPointer<QWidget> focus = QApplication::focusWidget();
+    std::vector<FramebufferModel*> previous;
+    m_resolutionLevel = transaction->saved.level;
+    m_resolutionLevels = transaction->levels;
+    for (size_t i = 0; i < destinations.size(); ++i) {
+        auto* window = destinations[i];
+        auto* page = window->widget();
+        auto& prepared = transaction->prepared[i];
+        auto* old = const_cast<FramebufferModel*>(framebufferModel(window));
+        previous.push_back(old);
+        disconnect(old, nullptr, this, nullptr);
+        disconnect(old, nullptr, window, nullptr);
+        auto* controls = page->findChild<QScrollArea*>("previewControlsScroll");
+        const int scroll = controls ? controls->horizontalScrollBar()->value() : 0;
+        if (auto* rgb = qobject_cast<RGBFramebufferWidget*>(page)) {
+            const auto state = qobject_cast<RGBFramebufferWidget*>(prepared.widget)->previewState();
+            rgb->adoptPreparedModel(static_cast<RGBFramebufferModel*>(prepared.model), state);
+        } else {
+            const auto state = qobject_cast<YFramebufferWidget*>(prepared.widget)->previewState();
+            qobject_cast<YFramebufferWidget*>(page)->adoptPreparedModel(static_cast<YFramebufferModel*>(prepared.model), state);
+        }
+        page->findChild<GraphicsView*>()->restoreViewState(transaction->saved.previews[i].view);
+        window->setWindowTitle(prepared.model->resolutionLevelCount() > 1
+          ? prepared.title + tr(" — Level %1 (%2 × %3)")
+              .arg(QString::fromStdString(m_resolutionLevel.toString()))
+              .arg(prepared.model->width()).arg(prepared.model->height()) : prepared.title);
+        if (controls) {
+            controls->widget()->layout()->activate();
+            controls->horizontalScrollBar()->setValue(scroll);
+        }
+        // The new model now belongs to the retained page, not its temporary controls.
+        delete prepared.widget;
+        prepared.widget = nullptr;
+    }
+    m_stereoMode = transaction->saved.stereoMode;
+    if (focus && focus->isEnabled() && !focus->hasFocus()) focus->setFocus(Qt::OtherFocusReason);
+    emit activeFramebufferChanged();
+    emit refreshInProgressChanged(false);
+    emit previewsReplaced(); // Minimal view rebinds before any old model is destroyed.
+    for (auto* old : previous) delete old;
+    setUpdatesEnabled(updates);
 }
 
 

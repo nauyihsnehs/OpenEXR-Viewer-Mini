@@ -109,7 +109,7 @@ RGBFramebufferWidget::RGBFramebufferWidget(QWidget* parent)
         if (m_model) m_model->setHighlightNonFinite(enabled);
     });
     ui->horizontalLayout->addWidget(new ProjectionControls(this));
-    ui->horizontalLayout->addWidget(new ResolutionLevelWidget(this));
+    ui->horizontalLayout->insertWidget(0, new ResolutionLevelWidget(this));
     wrapPreviewControls(ui->verticalLayout);
     ui->graphicsView->watchOutsideZoom(this, ui->horizontalLayout_2);
     ui->verticalLayout->insertWidget(1, new DepthRangeWidget(this));
@@ -220,21 +220,41 @@ RGBFramebufferWidget::~RGBFramebufferWidget()
 
 void RGBFramebufferWidget::setModel(RGBFramebufferModel* model)
 {
+    bindModel(model, true);
+}
+
+void RGBFramebufferWidget::adoptPreparedModel(RGBFramebufferModel* model, const PreviewState& state)
+{
+    Q_ASSERT(model && model->isPreviewReady());
+    if (m_model) disconnect(m_model, nullptr, this, nullptr);
+    // Apply the prepared controls without writing parameters back into either model.
+    m_model = nullptr;
+    restorePreviewState(state);
+    bindModel(model, false);
+}
+
+void RGBFramebufferWidget::bindModel(RGBFramebufferModel* model, bool initialize)
+{
+    if (m_model) disconnect(m_model, nullptr, this, nullptr);
     m_model = model;
     m_nonFiniteIndicator->setModel(model);
     ui->pixelValueLabel->setModel(model);
     findChild<DepthRangeWidget*>()->setModel(model);
     findChild<ProjectionControls*>()->setModel(model);
-    if (m_model) m_model->setHighlightNonFinite(ui->anomalyMarkerButton->isChecked());
+    if (initialize) m_model->setHighlightNonFinite(ui->anomalyMarkerButton->isChecked());
     if (m_model && m_model->parent() != this) m_model->setParent(this);
-    m_model->setExposure(ui->sbExposure->value());
-    m_model->setPreviewMode(m_previewMode);
-    m_model->setToneMappingMethod(currentToneMappingMethod());
-    m_model->setFalseColorColormap(currentFalseColorMap());
-    setFalseColorAutoRange(false);
-    updateFalseColorRangeBounds();
-    syncFalseColorRangeToModel();
-    syncToneParamsToModel();
+    if (initialize) {
+        m_model->setExposure(ui->sbExposure->value());
+        m_model->setPreviewMode(m_previewMode);
+        m_model->setToneMappingMethod(currentToneMappingMethod());
+        m_model->setFalseColorColormap(currentFalseColorMap());
+        setFalseColorAutoRange(false);
+        updateFalseColorRangeBounds();
+        syncFalseColorRangeToModel();
+        syncToneParamsToModel();
+    } else {
+        updateFalseColorRangeBounds();
+    }
     ui->graphicsView->setModel(m_model);
     connect(model, &FramebufferModel::imageChanged, this, [this] {
         if (m_falseColorAutoRange && m_model->hasFiniteLuminanceSamples())
@@ -985,8 +1005,10 @@ PreviewState RGBFramebufferWidget::previewState() const
 
 void RGBFramebufferWidget::restorePreviewState(const PreviewState& state)
 {
-    m_model->setDepthRange(state.depth);
-    m_model->setProjectionState(state.projection);
+    if (m_model) {
+        m_model->setDepthRange(state.depth);
+        m_model->setProjectionState(state.projection);
+    }
     ui->anomalyMarkerButton->setChecked(state.highlightNonFinite);
     setPreviewMode(static_cast<RGBFramebufferModel::PreviewMode>(state.mode));
     ui->sbExposure->setValue(state.exposure);
@@ -1002,8 +1024,8 @@ void RGBFramebufferWidget::restorePreviewState(const PreviewState& state)
     ui->cbFalseColorScale->setChecked(state.scaleVisible);
     m_savedFalseColorMin = state.savedMinimum;
     m_savedFalseColorMax = state.savedMaximum;
-    setFalseColorAutoRange(state.automatic && (m_model->hasDeepSamples() || m_model->hasFiniteLuminanceSamples()));
-    if (m_falseColorAutoRange)
+    setFalseColorAutoRange(state.automatic && (!m_model || m_model->hasDeepSamples() || m_model->hasFiniteLuminanceSamples()));
+    if (m_falseColorAutoRange && m_model)
         setFalseColorRange(
           m_model->getLuminanceMin(),
           m_model->getLuminanceMax(),

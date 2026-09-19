@@ -59,6 +59,7 @@ class RGBFramebufferWidget: public QWidget
     ~RGBFramebufferWidget();
 
     void                    setModel(RGBFramebufferModel* model);
+    void adoptPreparedModel(RGBFramebufferModel* model, const PreviewState& state);
     const FramebufferModel* framebufferModel() const { return m_model; }
     void         setPreviewMode(RGBFramebufferModel::PreviewMode mode);
     PreviewState previewState() const;
@@ -113,6 +114,7 @@ class RGBFramebufferWidget: public QWidget
     void on_zoomButton_clicked();
 
   private:
+    void bindModel(RGBFramebufferModel* model, bool initialize);
     struct ToneParamControls {
         QWidget*        container;
         QPushButton*    button;
