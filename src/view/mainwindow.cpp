@@ -394,6 +394,11 @@ void MainWindow::setupWorkspace()
     decorate(ui->action_ModeExposure, ViewerIcons::Exposure, tr("Exposure"));
     decorate(ui->action_ModeToneMapping, ViewerIcons::ToneMapping, tr("Tone Mapping"));
     decorate(ui->action_ModeFalseColor, ViewerIcons::FalseColor, tr("False Color"));
+    decorate(ui->action_ModeHDR, ViewerIcons::Hdr, tr("HDR Display"));
+    ui->action_ModeHDR->setToolTip(tr("Display linear color on a Windows HDR monitor.\nHDR must be enabled in Windows; otherwise an SDR exposure preview is shown."));
+#ifndef Q_OS_WIN
+    ui->action_ModeHDR->setVisible(false);
+#endif
     decorate(ui->action_ShowLayers, ViewerIcons::Layers, tr("Layers"));
     decorate(ui->action_ShowAttributes, ViewerIcons::Attributes, tr("Attributes"));
     toolbar->addAction(ui->action_Open);
@@ -402,6 +407,7 @@ void MainWindow::setupWorkspace()
     toolbar->addAction(ui->action_ModeExposure);
     toolbar->addAction(ui->action_ModeToneMapping);
     toolbar->addAction(ui->action_ModeFalseColor);
+    toolbar->addAction(ui->action_ModeHDR);
     toolbar->addSeparator();
     toolbar->addAction(ui->action_ShowLayers);
     toolbar->addAction(ui->action_ShowAttributes);
@@ -520,10 +526,12 @@ void MainWindow::setupPreviewModeActions()
     modeGroup->addAction(ui->action_ModeExposure);
     modeGroup->addAction(ui->action_ModeToneMapping);
     modeGroup->addAction(ui->action_ModeFalseColor);
+    modeGroup->addAction(ui->action_ModeHDR);
 
     ui->action_ModeExposure->setCheckable(true);
     ui->action_ModeToneMapping->setCheckable(true);
     ui->action_ModeFalseColor->setCheckable(true);
+    ui->action_ModeHDR->setCheckable(true);
     ui->action_ModeExposure->setChecked(true);
 }
 
@@ -535,6 +543,7 @@ void MainWindow::applyRgbPreviewMode(RGBFramebufferModel::PreviewMode mode)
     ui->action_ModeExposure->blockSignals(true);
     ui->action_ModeToneMapping->blockSignals(true);
     ui->action_ModeFalseColor->blockSignals(true);
+    ui->action_ModeHDR->blockSignals(true);
 
     ui->action_ModeExposure->setChecked(
       mode == RGBFramebufferModel::Preview_Exposure);
@@ -542,10 +551,12 @@ void MainWindow::applyRgbPreviewMode(RGBFramebufferModel::PreviewMode mode)
       mode == RGBFramebufferModel::Preview_ToneMapping);
     ui->action_ModeFalseColor->setChecked(
       mode == RGBFramebufferModel::Preview_FalseColor);
+    ui->action_ModeHDR->setChecked(mode == RGBFramebufferModel::Preview_HDR);
 
     ui->action_ModeExposure->blockSignals(false);
     ui->action_ModeToneMapping->blockSignals(false);
     ui->action_ModeFalseColor->blockSignals(false);
+    ui->action_ModeHDR->blockSignals(false);
 
     for (int i = 0; i < m_openFileTabs->count(); i++) {
         ImageFileWidget* widget
@@ -1256,11 +1267,13 @@ void MainWindow::on_action_Save_triggered()
     dialog.setEnvironmentSource(*environment);
     dialog.setResolutionLevelInfo(savedLevel, multilevel);
     dialog.setDeepSourceInfo(model && bool(model->deepSamples()), deepSource);
+    dialog.setHdrDisplayPreview(bool(model->hdrPreview()));
     const auto updateSource = [&dialog, guardedModel, guardedImage, preview, environment] {
         if (guardedModel && guardedModel->isFullPreviewReady() && preview->image.isNull()) {
             *preview = PreviewImage::capture(*guardedModel);
             *environment = guardedModel->projectionSnapshot();
             dialog.setEnvironmentSource(*environment);
+            dialog.setHdrDisplayPreview(bool(guardedModel->hdrPreview()));
         }
         dialog.setSourceState(
           guardedModel && guardedImage && guardedModel->isImageLoaded(),
@@ -1653,6 +1666,12 @@ void MainWindow::on_action_ModeExposure_triggered()
 void MainWindow::on_action_ModeToneMapping_triggered()
 {
     applyRgbPreviewMode(RGBFramebufferModel::Preview_ToneMapping);
+}
+
+void MainWindow::on_action_ModeHDR_triggered()
+{
+    applyRgbPreviewMode(RGBFramebufferModel::Preview_HDR);
+    for (auto* view : findChildren<GraphicsView*>()) view->retryHdrOutput();
 }
 
 

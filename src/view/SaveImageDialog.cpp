@@ -188,6 +188,12 @@ void SaveImageDialog::setDeepSourceInfo(bool activeDeep, bool fileDeep)
     updateOptions();
 }
 
+void SaveImageDialog::setHdrDisplayPreview(bool enabled)
+{
+    m_hdrDisplayPreview = enabled;
+    updateOptions();
+}
+
 void SaveImageDialog::setSourceState(bool available, bool previewReady, const QString& error, bool derived)
 {
     m_sourceAvailable = available;
@@ -452,6 +458,7 @@ void SaveImageDialog::updateOptions()
     ui->deepMultipartLabel->setVisible(layered && deep);
     ui->multipartCombo->setVisible(layered && !deep);
     ui->hdrInfoLabel->setVisible(hdr);
+    ui->hdrDisplayNotice->setVisible(m_hdrDisplayPreview && preview);
     updateSaveAvailability();
 }
 

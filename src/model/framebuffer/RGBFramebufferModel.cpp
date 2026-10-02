@@ -335,6 +335,7 @@ void RGBFramebufferModel::updateImage()
     const bool automatic = m_falseColorAutomatic;
     const auto                 mode     = m_previewMode;
     const auto                 method   = m_toneMappingMethod;
+    const double exposureEv = m_exposure;
     const double exposure = std::exp2(m_exposure);
     const std::array<double, 4> params = {
       {m_toneParams[0], m_toneParams[1], m_toneParams[2], m_toneParams[3]}};
@@ -342,7 +343,7 @@ void RGBFramebufferModel::updateImage()
     const double maximum  = m_falseColorMax;
     const auto   colormap = m_falseColorMap;
     requestRender(
-      [source, projection, range, automatic, mode, method, exposure, params, minimum, maximum, colormap](
+      [source, projection, range, automatic, mode, method, exposure, exposureEv, params, minimum, maximum, colormap](
         const Cancellation& cancel, const Progress& progress) -> RenderResult {
           const auto data = DeepPreview::compose(source, range, cancel, progress);
           if (!data || cancel->load()) return {};
@@ -409,6 +410,13 @@ void RGBFramebufferModel::updateImage()
               }
               return cancel->load() ? QImage() : image;
           };
-          return renderProjection(data, projection, mapper, cancel, progress);
+          auto result = renderProjection(data, projection, mapper, cancel, progress);
+          if (mode == Preview_HDR && !result.image.isNull() && !cancel->load()) {
+              auto frame = std::make_shared<HdrPreviewFrame>();
+              frame->data = result.projected ? result.projected : result.data;
+              frame->exposure = exposureEv;
+              result.hdrPreview = frame;
+          }
+          return result;
       });
 }

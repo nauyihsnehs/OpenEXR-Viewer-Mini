@@ -177,6 +177,7 @@ set(PROJECT_SOURCES
     src/model/framebuffer/FramebufferModel.cpp
     src/model/framebuffer/FramebufferModel.h
     src/model/framebuffer/FramebufferData.h
+    src/model/framebuffer/HdrPreviewFrame.h
     src/model/framebuffer/PixelDiagnostics.h
     src/model/framebuffer/PixelDiagnostics.cpp
     src/model/framebuffer/FramebufferLoader.h
@@ -222,6 +223,10 @@ set(PROJECT_SOURCES
     assets/themes/dark_flat.qrc
     assets/icons/icons.qrc
 )
+
+if(WIN32)
+    list(APPEND PROJECT_SOURCES src/view/HdrRenderer.cpp src/view/HdrRenderer.h)
+endif()
 
 if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
     if (WIN32)
@@ -275,6 +280,9 @@ target_include_directories(openexr-viewer PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
 target_link_libraries(openexr-viewer PRIVATE Qt${QT_VERSION_MAJOR}::Widgets)
 target_link_libraries(openexr-viewer PRIVATE Qt${QT_VERSION_MAJOR}::Concurrent)
 target_link_libraries(openexr-viewer PRIVATE Imath::Imath OpenEXR::OpenEXR)
+if(WIN32)
+    target_link_libraries(openexr-viewer PRIVATE d3d11 dxgi d3dcompiler)
+endif()
 
 if((OpenMP_CXX_FOUND) OR (OpenMP_FOUND))
     target_link_libraries(openexr-viewer PRIVATE OpenMP::OpenMP_CXX)
@@ -448,6 +456,7 @@ if(BUILD_TESTING)
         target_link_libraries(viewer-tests PRIVATE OpenMP::OpenMP_CXX)
     endif()
     if(WIN32)
+        target_link_libraries(viewer-tests PRIVATE d3d11 dxgi d3dcompiler)
         add_custom_command(TARGET viewer-tests POST_BUILD COMMAND ${CMAKE_COMMAND}
             -E copy_if_different $<TARGET_FILE:Qt${QT_VERSION_MAJOR}::Test>
             $<TARGET_FILE_DIR:viewer-tests>
@@ -468,7 +477,7 @@ if(BUILD_TESTING)
         target_link_libraries(viewer-benchmark PRIVATE OpenMP::OpenMP_CXX)
     endif()
     if(WIN32)
-        target_link_libraries(viewer-benchmark PRIVATE psapi)
+        target_link_libraries(viewer-benchmark PRIVATE psapi d3d11 dxgi d3dcompiler)
         add_dependencies(viewer-benchmark openexr-viewer)
     endif()
 endif()

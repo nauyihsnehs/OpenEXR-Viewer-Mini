@@ -33,10 +33,13 @@
 #pragma once
 #include <QGraphicsView>
 #include <QPointer>
+#include <memory>
 #include <model/framebuffer/FramebufferModel.h>
 
 class QGraphicsRectItem;
 class QLayout;
+class HdrRenderer;
+class QShowEvent;
 
 class GraphicsView: public QGraphicsView
 {
@@ -48,6 +51,9 @@ class GraphicsView: public QGraphicsView
         QPointF center;
     };
     explicit GraphicsView(QWidget* parent = nullptr);
+    ~GraphicsView() override;
+    QString hdrStatusText() const { return _hdrStatus; }
+    QString hdrStatusDetail() const { return _hdrDetail; }
     ViewState viewState() const;
     void      restoreViewState(const ViewState& state);
     void setImageWindowMode();
@@ -63,6 +69,7 @@ class GraphicsView: public QGraphicsView
     void zoomOut();
     void autoscale();
     void refreshPixelInfo();
+    void retryHdrOutput();
 
   signals:
     void zoomLevelChanged(double zoom);
@@ -73,11 +80,14 @@ class GraphicsView: public QGraphicsView
     void resetParametersRequested();
     void imageWindowZoomRequested(double zoom);
     void imageWindowMoveRequested(const QPoint& position);
+    void hdrStatusChanged();
 
   protected:
     bool eventFilter(QObject* object, QEvent* event) override;
     void focusOutEvent(QFocusEvent* event) override;
     void hideEvent(QHideEvent* event) override;
+    void showEvent(QShowEvent* event) override;
+    void paintEvent(QPaintEvent* event) override;
     void changeEvent(QEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
@@ -101,6 +111,17 @@ class GraphicsView: public QGraphicsView
     void queryPixelAt(const QPoint& position);
     void zoomWheel(double steps, const QPoint& anchor);
     void endProjectionGesture();
+    void updateHdrOutput(bool retry = false);
+    void queueHdrProbe();
+    void setHdrStatus(const QString& status, const QString& detail);
+    QString _hdrStatus, _hdrDetail;
+    bool _hdrPainting = false, _hdrRequested = false, _hdrProbePending = false;
+#ifdef Q_OS_WIN
+    std::unique_ptr<HdrRenderer> _hdrRenderer;
+    QTimer _hdrTimer;
+    QPointer<QWidget> _hdrWindow;
+    bool _hdrProbing = false;
+#endif
     QPointer<QWidget> _wheelArea;
     QPointer<QLayout> _wheelRegion;
     QTimer _fovTimer;

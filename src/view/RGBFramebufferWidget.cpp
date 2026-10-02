@@ -105,6 +105,8 @@ RGBFramebufferWidget::RGBFramebufferWidget(QWidget* parent)
     ui->horizontalLayout_2->insertWidget(1, m_cropIndicator, 0, Qt::AlignVCenter);
     m_nonFiniteIndicator = new NonFiniteIndicator(this);
     ui->horizontalLayout_2->insertWidget(3, m_nonFiniteIndicator, 0, Qt::AlignVCenter);
+    connect(ui->graphicsView, &GraphicsView::hdrStatusChanged,
+            this, &RGBFramebufferWidget::updateFramebufferSummary);
     connect(ui->anomalyMarkerButton, &QToolButton::toggled, this, [this](bool enabled) {
         if (m_model) m_model->setHighlightNonFinite(enabled);
     });
@@ -305,6 +307,7 @@ void RGBFramebufferWidget::setPreviewMode(RGBFramebufferModel::PreviewMode mode)
       falseColor && ui->cbFalseColorScale->isChecked());
 
     if (m_model) m_model->setPreviewMode(mode);
+    updateFramebufferSummary();
 }
 
 
@@ -750,6 +753,7 @@ void RGBFramebufferWidget::resetCurrentMode()
     if (!m_model || !m_model->isImageLoaded()) return;
     switch (m_previewMode) {
         case RGBFramebufferModel::Preview_Exposure:
+        case RGBFramebufferModel::Preview_HDR:
             ui->sbExposure->setValue(0.);
             break;
         case RGBFramebufferModel::Preview_ToneMapping:
@@ -965,8 +969,15 @@ void RGBFramebufferWidget::updateZoomLevelText(double zoom)
 void RGBFramebufferWidget::updateFramebufferSummary()
 {
     m_cropIndicator->setModel(m_model);
-    ui->framebufferSummaryLabel->setText(framebufferSummaryText(m_model));
-    ui->framebufferSummaryLabel->setToolTip(framebufferSummaryToolTip(m_model));
+    QString summary = framebufferSummaryText(m_model);
+    QString detail = framebufferSummaryToolTip(m_model);
+    if (m_previewMode == RGBFramebufferModel::Preview_HDR) {
+        const QString status = ui->graphicsView->hdrStatusText();
+        summary += " | " + (status.isEmpty() ? tr("HDR — preparing preview") : status);
+        detail += "\n" + ui->graphicsView->hdrStatusDetail();
+    }
+    ui->framebufferSummaryLabel->setText(summary);
+    ui->framebufferSummaryLabel->setToolTip(detail);
     const bool loaded = m_model && m_model->isImageLoaded();
     ui->anomalyMarkerButton->setEnabled(loaded);
     ui->falseColorAutoButton->setEnabled(loaded && m_model->hasFiniteLuminanceSamples());

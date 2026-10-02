@@ -13,6 +13,19 @@ Luminance-Chroma and Y layers.
 Viewing controls
 ================
 
+- On Windows, **View > Mode > HDR** displays linear floating-point color directly
+  on an HDR monitor. Enable HDR in Windows Display Settings first. Exposure (EV)
+  remains available; at 0 EV, linear RGB=1 follows the Windows SDR content white
+  level. Highlights above 1 and finite negative RGB components are retained.
+  The information bar reports whether HDR is enabled or an SDR Exposure preview
+  is being used, with the reason in its tooltip. Moving between displays and
+  changing Windows HDR/SDR brightness settings refreshes the output. Re-select
+  HDR to retry after a GPU failure. If the system white level cannot be read,
+  RGB=1 uses 80 nits. Ordinary scalar layers continue to use their colormap.
+  Copy and PNG/JPEG export use the SDR Exposure preview at the same EV;
+  source EXR/HDR exports retain their existing behavior. HDR is supported in
+  both complete and minimal views and requires Direct3D 11 HDR presentation.
+  See the pending [HDR display checklist](docs/hdr-displays.md).
 - Layer previews use tabs, with the tab bar hidden when only one preview is open.
 - View > Show toggles the Attributes and Layers panels. Data and display window
   coordinates remain available in Attributes; previews have no window outlines

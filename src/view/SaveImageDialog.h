@@ -25,6 +25,7 @@ class SaveImageDialog: public QDialog
     void               setStatus(const QString& message, bool error);
     void setResolutionLevelInfo(ResolutionLevel level, bool multilevel);
     void setDeepSourceInfo(bool activeDeep, bool fileDeep);
+    void setHdrDisplayPreview(bool enabled);
     void setEnvironmentSource(const EnvironmentProjection::Snapshot& source);
     void setSourceState(bool available, bool previewReady, const QString& error = QString(), bool derived = false);
 
@@ -54,6 +55,7 @@ class SaveImageDialog: public QDialog
     bool m_derived = false;
     bool m_activeDeep = false;
     bool m_fileDeep = false;
+    bool m_hdrDisplayPreview = false;
     bool m_readinessStatus = true;
     QString m_previewError;
     EnvironmentProjection::Snapshot m_environment;

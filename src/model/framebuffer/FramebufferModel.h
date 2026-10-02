@@ -33,6 +33,7 @@
 #pragma once
 
 #include "FramebufferData.h"
+#include "HdrPreviewFrame.h"
 #include <model/LoadProgress.h>
 #include <util/EnvironmentProjection.h>
 #include <QFutureWatcher>
@@ -53,6 +54,7 @@ class FramebufferModel: public QObject
     ~FramebufferModel() override;
 
     const QImage&             getLoadedImage() const { return m_image; }
+    const std::shared_ptr<const HdrPreviewFrame>& hdrPreview() const { return m_hdrPreview; }
     EnvironmentProjection::SourceInfo environmentSource() const { return EnvironmentProjection::describe(*m_data); }
     int rawEnvmap() const { return m_data->envmap; }
     EnvironmentProjection::State projectionState() const;
@@ -153,6 +155,7 @@ class FramebufferModel: public QObject
         RenderResult(QImage rendered = QImage(), std::shared_ptr<const FramebufferData> snapshot = {})
           : image(std::move(rendered)), data(std::move(snapshot)) {}
         QImage image;
+        std::shared_ptr<const HdrPreviewFrame> hdrPreview;
         std::shared_ptr<const FramebufferData> data;
         std::shared_ptr<const FramebufferData> projected;
         QRegion projectedCoverage;
@@ -192,6 +195,7 @@ class FramebufferModel: public QObject
     void                         startRender();
     void                         setReady(bool ready);
     QImage                       m_image;
+    std::shared_ptr<const HdrPreviewFrame> m_hdrPreview;
     QFutureWatcher<DecodeResult> m_loadWatcher;
     QFutureWatcher<RenderResult> m_renderWatcher;
     Cancellation                 m_loadCancel;

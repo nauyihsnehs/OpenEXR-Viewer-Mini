@@ -54,9 +54,21 @@
 #include <QComboBox>
 #include <QAbstractSlider>
 #include <QWheelEvent>
+#include <QShowEvent>
+#include <QScopedValueRollback>
+#ifdef Q_OS_WIN
+#include "HdrRenderer.h"
+#endif
 
 GraphicsView::GraphicsView(QWidget* parent): QGraphicsView(parent)
 {
+#ifdef Q_OS_WIN
+    setViewport(new HdrViewport(this));
+    viewport()->installEventFilter(this);
+    _hdrRenderer.reset(new HdrRenderer);
+    _hdrTimer.setInterval(1000);
+    connect(&_hdrTimer, &QTimer::timeout, this, [this] { updateHdrOutput(); });
+#endif
     setScene(new QGraphicsScene(this));
     _displayClip = scene()->addRect(QRectF(), QPen(Qt::NoPen), QBrush(Qt::NoBrush));
     _displayClip->setFlag(QGraphicsItem::ItemClipsChildrenToShape);
@@ -70,6 +82,109 @@ GraphicsView::GraphicsView(QWidget* parent): QGraphicsView(parent)
     _fovTimer.setSingleShot(true);
     _fovTimer.setInterval(150);
     connect(&_fovTimer, &QTimer::timeout, this, &GraphicsView::endProjectionGesture);
+}
+
+GraphicsView::~GraphicsView() = default;
+
+void GraphicsView::setHdrStatus(const QString& status, const QString& detail)
+{
+    if (_hdrStatus == status && _hdrDetail == detail) return;
+    _hdrStatus = status; _hdrDetail = detail;
+    emit hdrStatusChanged();
+}
+
+void GraphicsView::queueHdrProbe()
+{
+    if (_hdrProbePending) return;
+    _hdrProbePending = true;
+    QTimer::singleShot(0, this, [this] {
+        _hdrProbePending = false;
+        updateHdrOutput();
+    });
+}
+
+void GraphicsView::retryHdrOutput()
+{ updateHdrOutput(true); }
+
+void GraphicsView::updateHdrOutput(bool retry)
+{
+    const bool requested = _model && bool(_model->hdrPreview());
+#ifdef Q_OS_WIN
+    if (_hdrProbing) return;
+    QScopedValueRollback<bool> probing(_hdrProbing, true);
+    auto* surface = static_cast<HdrViewport*>(viewport());
+    if (!requested) {
+        _hdrTimer.stop();
+        _hdrRenderer->release();
+        surface->setHdrPainting(false);
+        const bool wasPainting = _hdrPainting;
+        _hdrPainting = _hdrRequested = false;
+        setHdrStatus(QString(), QString());
+        if (wasPainting) viewport()->update();
+        return;
+    }
+    if (!isVisible() || window()->isMinimized()) {
+        _hdrTimer.stop();
+        return;
+    }
+    if (_hdrWindow != window()) {
+        if (_hdrWindow) _hdrWindow->removeEventFilter(this);
+        _hdrWindow = window();
+        _hdrWindow->installEventFilter(this);
+    }
+    surface->setAttribute(Qt::WA_DontCreateNativeAncestors);
+    surface->setAttribute(Qt::WA_NativeWindow);
+    const bool displayChanged = _hdrRenderer->refresh(surface->winId(), retry || !_hdrRequested);
+    _hdrRequested = true;
+    const bool painting = _hdrRenderer->available();
+    surface->setHdrPainting(painting);
+    const bool changed = _hdrPainting != painting;
+    _hdrPainting = painting;
+    setHdrStatus(_hdrRenderer->statusText(), _hdrRenderer->statusDetail());
+    if (!_hdrTimer.isActive()) _hdrTimer.start();
+    // White-level changes can require a new GPU frame even when status stays enabled.
+    if (displayChanged || changed) viewport()->update();
+#else
+    Q_UNUSED(retry);
+    _hdrRequested = requested;
+    setHdrStatus(requested ? tr("HDR unavailable — SDR preview") : QString(),
+                 requested ? tr("Native HDR display is supported on Windows only.") : QString());
+#endif
+}
+
+void GraphicsView::paintEvent(QPaintEvent* event)
+{
+#ifdef Q_OS_WIN
+    if (_hdrPainting) {
+        if (!_model || !_model->hdrPreview()) { queueHdrProbe(); return; }
+        const auto frame = _model->hdrPreview();
+        const qreal dpr = viewport()->devicePixelRatioF();
+        const QSize size(qRound(viewport()->width() * dpr), qRound(viewport()->height() * dpr));
+        if (size.isEmpty()) return;
+        const QTransform imageToViewport = _imageItem->deviceTransform(viewportTransform());
+        const auto geometry = PreviewImage::Geometry(*_model);
+        QImage markers;
+        if (_model->highlightNonFinite()) {
+            markers = QImage(size, QImage::Format_ARGB32_Premultiplied);
+            if (!markers.isNull()) {
+                markers.setDevicePixelRatio(dpr);
+                markers.fill(Qt::transparent);
+                QPainter painter(&markers);
+                const QRectF clip = imageToViewport.mapRect(geometry.visiblePixels)
+                  .intersected(QRectF(viewport()->rect()));
+                AnomalyMarkers::draw(painter, *_model, imageToViewport, clip);
+            }
+        }
+        if (!_hdrRenderer->render(viewport()->winId(), size, dpr, *frame, imageToViewport,
+          geometry.visiblePixels, _imageItem->transformationMode() == Qt::SmoothTransformation,
+          _checkerboard, markers, _model->highlightNonFinite())) {
+            // Resume Qt backing-store painting on the next event, outside this native paint.
+            queueHdrProbe();
+        }
+        return;
+    }
+#endif
+    QGraphicsView::paintEvent(event);
 }
 
 void GraphicsView::updateCheckerboard()
@@ -98,6 +213,7 @@ void GraphicsView::setModel(const FramebufferModel* model)
     endProjectionGesture();
     if (_model) disconnect(_model, nullptr, this, nullptr);
     _model = model;
+    updateHdrOutput();
     _dragging = _rightClick = false;
     unsetCursor();
     const bool completed = model && model->isPreviewReady() && !model->getLoadedImage().isNull();
@@ -112,7 +228,7 @@ void GraphicsView::setModel(const FramebufferModel* model)
     connect(model, &FramebufferModel::anomalyMarkersChanged, this,
             [this] { viewport()->update(); });
     connect(model, &FramebufferModel::readinessChanged, this,
-            [this] { viewport()->update(); });
+            [this] { updateHdrOutput(); viewport()->update(); });
     connect(
       model,
       &FramebufferModel::imageChanged,
@@ -169,6 +285,8 @@ void GraphicsView::onImageChanged()
         _imageItem->setTransformationMode(geometry.imageToScene.isIdentity() ? Qt::FastTransformation : Qt::SmoothTransformation);
         _imageItem->setPixmap(QPixmap::fromImage(_model->getLoadedImage()));
     }
+    updateHdrOutput();
+    if (_hdrPainting) viewport()->update();
     refreshPixelInfo();
 }
 
@@ -285,6 +403,13 @@ void GraphicsView::watchOutsideZoom(QWidget* area, QLayout* region)
 
 bool GraphicsView::eventFilter(QObject* object, QEvent* event)
 {
+#ifdef Q_OS_WIN
+    if ((object == _hdrWindow.data() || object == viewport())
+        && (event->type() == QEvent::Move || event->type() == QEvent::Show
+            || event->type() == QEvent::WinIdChange || event->type() == QEvent::ScreenChangeInternal
+            || event->type() == QEvent::WindowStateChange))
+        queueHdrProbe();
+#endif
     if (event->type() != QEvent::Wheel || !_wheelArea || !_model || !_model->isImageLoaded())
         return QGraphicsView::eventFilter(object, event);
     auto* widget = qobject_cast<QWidget*>(object);
@@ -336,13 +461,23 @@ void GraphicsView::focusOutEvent(QFocusEvent* event)
 
 void GraphicsView::hideEvent(QHideEvent* event)
 {
+#ifdef Q_OS_WIN
+    _hdrTimer.stop();
+#endif
     endProjectionGesture();
     QGraphicsView::hideEvent(event);
+}
+
+void GraphicsView::showEvent(QShowEvent* event)
+{
+    QGraphicsView::showEvent(event);
+    updateHdrOutput();
 }
 
 void GraphicsView::resizeEvent(QResizeEvent* event)
 {
     QGraphicsView::resizeEvent(event);
+    if (_hdrRequested) queueHdrProbe();
     if (_autoscale) autoscale();
 }
 void GraphicsView::keyPressEvent(QKeyEvent* event)

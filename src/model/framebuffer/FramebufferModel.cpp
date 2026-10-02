@@ -324,6 +324,7 @@ FramebufferModel::FramebufferModel(QObject* parent)
                   m_committedProjection = result.projectionState;
                   m_colorMapper = result.mapColors;
                   m_image = result.image;
+                  m_hdrPreview = result.hdrPreview;
                   setReady(true);
                   emit imageChanged();
               } else if (!m_error.isEmpty()) {
@@ -380,6 +381,7 @@ void FramebufferModel::startLoading(ProgressDecoder decoder)
     if (m_renderCancel) m_renderCancel->store(true);
     m_pendingRender = ProgressRenderer();
     m_loaded        = false;
+    m_hdrPreview.reset();
     m_loading       = true;
     m_error.clear();
     setReady(false);

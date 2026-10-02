@@ -37,6 +37,7 @@ MinimalImageWidget::MinimalImageWidget(QWidget* parent) : QWidget(parent)
     m_pixelLabel->setTextFormat(Qt::PlainText);
     m_pixelLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     connect(m_view, &GraphicsView::queryPixelInfo, m_pixelLabel, &PixelReadoutLabel::queryPixel);
+    connect(m_view, &GraphicsView::hdrStatusChanged, this, &MinimalImageWidget::updateSummary);
     m_depthRange = new DepthRangeWidget(m_footer);
     m_projection = new ProjectionControls(m_footer);
     m_resolution = new ResolutionLevelWidget(m_footer);
@@ -84,6 +85,11 @@ void MinimalImageWidget::resizeEvent(QResizeEvent* event)
 
 void MinimalImageWidget::updateSummary()
 {
+    const QString status = m_view->hdrStatusText();
+    const QString summaryText = status.isEmpty() ? m_summary : m_summary + " | " + status;
+    const QString detail = status.isEmpty() ? m_summaryDetail
+      : m_summaryDetail + "\n" + status + "\n" + m_view->hdrStatusDetail();
+    m_summaryLabel->setToolTip(detail);
     const int rowHeight = fontMetrics().height() + 12;
     int top = rowHeight;
     const int depthHeight = m_depthRange->isHidden() ? 0 : m_depthRange->sizeHint().height();
@@ -99,7 +105,7 @@ void MinimalImageWidget::updateSummary()
     const int indicatorSpace = available >= m_nonFiniteIndicator->width() + 6
       ? m_nonFiniteIndicator->width() + 6 : 0;
     const int summary = qMin(available - indicatorSpace,
-      m_summaryLabel->fontMetrics().boundingRect(m_summary).width() + 2);
+      m_summaryLabel->fontMetrics().boundingRect(summaryText).width() + 2);
     const int gap = qMin(8, available - summary - indicatorSpace);
     const int pixels = available - summary - indicatorSpace - gap;
     m_summaryLabel->setGeometry(left, 0, summary, rowHeight);
@@ -110,6 +116,6 @@ void MinimalImageWidget::updateSummary()
     m_summaryLabel->setVisible(summary > 0);
     m_pixelLabel->setVisible(pixels > 0);
     m_summaryLabel->setText(m_summaryLabel->fontMetrics().elidedText(
-      m_summary, Qt::ElideRight, summary));
-    m_footer->setToolTip(m_summaryDetail);
+      summaryText, Qt::ElideRight, summary));
+    m_footer->setToolTip(detail);
 }

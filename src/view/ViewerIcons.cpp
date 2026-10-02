@@ -78,6 +78,15 @@ class IconEngine : public QIconEngine
                 path.cubicTo(12, 14, 8, 5, 17, 5);
                 painter->drawPath(path);
                 break;
+            case Hdr:
+                painter->drawRoundedRect(QRectF(2, 4, 16, 12), 2, 2);
+                painter->drawLine(QPointF(5, 13), QPointF(5, 7));
+                painter->drawLine(QPointF(5, 10), QPointF(8, 10));
+                painter->drawLine(QPointF(8, 13), QPointF(8, 7));
+                path = QPainterPath(QPointF(11, 13));
+                path.lineTo(11, 7); path.cubicTo(17, 7, 17, 13, 11, 13);
+                painter->drawPath(path);
+                break;
             case FalseColor: {
                 const QColor colors[] = {QColor(79, 117, 211), QColor(58, 178, 159),
                                          QColor(225, 185, 65), QColor(213, 92, 78)};

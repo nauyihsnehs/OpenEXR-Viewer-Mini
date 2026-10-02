@@ -10,6 +10,11 @@
 
 LoadProgressWidget::LoadProgressWidget(QWidget* parent) : QWidget(parent)
 {
+#ifdef Q_OS_WIN
+    // A native child can stay above the HDR swap chain in complete and minimal views.
+    setAttribute(Qt::WA_DontCreateNativeAncestors);
+    setAttribute(Qt::WA_NativeWindow);
+#endif
     setObjectName("loadProgressOverlay");
     setAttribute(Qt::WA_StyledBackground);
     setAutoFillBackground(true);

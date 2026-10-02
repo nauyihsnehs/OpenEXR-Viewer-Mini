@@ -126,6 +126,12 @@
        <item row="5" column="1">
         <widget class="QDoubleSpinBox" name="bracketCenterSpinBox"/>
        </item>
+       <item row="6" column="0" colspan="2">
+        <widget class="QLabel" name="hdrDisplayNotice">
+         <property name="wordWrap"><bool>true</bool></property>
+         <property name="text"><string>HDR display mode: PNG/JPEG exports use the SDR Exposure preview at the same EV. Windows HDR brightness is not included.</string></property>
+        </widget>
+       </item>
       </layout>
      </widget>
      <widget class="QWidget" name="exrPage">

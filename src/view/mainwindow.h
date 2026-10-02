@@ -128,6 +128,7 @@ class MainWindow: public QMainWindow
     void on_action_ModeExposure_triggered();
     void on_action_ModeToneMapping_triggered();
     void on_action_ModeFalseColor_triggered();
+    void on_action_ModeHDR_triggered();
     void on_action_ThemeLight_triggered();
     void on_action_ThemeDark_triggered();
 

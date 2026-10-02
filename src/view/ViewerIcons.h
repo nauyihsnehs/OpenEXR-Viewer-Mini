@@ -7,7 +7,7 @@ class QAbstractButton;
 
 namespace ViewerIcons {
 enum Kind { Open, Export, Exposure, ToneMapping, FalseColor, Layers, Attributes,
-            AutoRange, ColorScale };
+            AutoRange, ColorScale, Hdr };
 
 QIcon icon(Kind kind);
 void setupButton(QAbstractButton* button, Kind kind, const QString& name,

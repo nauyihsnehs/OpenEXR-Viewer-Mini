@@ -55,6 +55,7 @@ class RGBFramebufferModel: public FramebufferModel
         Preview_Exposure,
         Preview_ToneMapping,
         Preview_FalseColor,
+        Preview_HDR,
     };
 
     typedef ToneMapping::Method    ToneMappingMethod;
