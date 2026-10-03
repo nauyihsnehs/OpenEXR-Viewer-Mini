@@ -1,0 +1,10 @@
+#pragma once
+#define IDD_CONFIG 101
+#define IDC_ICONS 1001
+#define IDC_THUMBNAILS 1002
+#define IDC_PREVIEW 1003
+#define IDC_STATUS 1004
+#define IDC_APPLY 1005
+#define IDC_UNDO 1006
+#define IDC_REFRESH 1007
+#define IDC_DEFAULTS 1008

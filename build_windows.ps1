@@ -1,12 +1,14 @@
 param(
   [string]$Configuration = "RelWithDebInfo",
   [switch]$Package,
-  [switch]$Portable
+  [switch]$Portable,
+  [switch]$WithoutShell
 )
 
 $root_dir = (Get-Location).Path
 $dir = $root_dir -replace '\\', '/'
 $build_dir = Join-Path $root_dir "build"
+$shell_enabled = if ($WithoutShell) { 'OFF' } else { 'ON' }
 
 if ($Package -and $Portable) {
   Write-Error "-Package and -Portable cannot be used together."
@@ -27,10 +29,14 @@ cmake .. `
   -DImath_DIR="$dir/build/depends/lib/lib/cmake/Imath" `
   -DOpenEXR_DIR="$dir/build/depends/lib/lib/cmake/OpenEXR" `
   -DCMAKE_INSTALL_PREFIX="$dir/build/install" `
+  -DBUILD_WINDOWS_SHELL="$shell_enabled" `
+  -DOPENEXR_SHELL_DEPENDENCIES="$dir/build/depends/shell" `
   -DCMAKE_BUILD_TYPE="$Configuration" `
   -DCMAKE_CONFIGURATION_TYPES="$Configuration"
+if ($LASTEXITCODE -ne 0) { Set-Location $root_dir; throw 'CMake configuration failed.' }
 
 cmake --build . --config $Configuration
+if ($LASTEXITCODE -ne 0) { Set-Location $root_dir; throw 'Build failed.' }
 
 if ($Package) {
   if (!(Get-Command makensis -ErrorAction SilentlyContinue)) {
@@ -40,10 +46,12 @@ if ($Package) {
   }
 
   cpack -G NSIS -C $Configuration
+  if ($LASTEXITCODE -ne 0) { Set-Location $root_dir; throw 'NSIS packaging failed.' }
 }
 
 if ($Portable) {
   cpack -G ZIP -C $Configuration
+  if ($LASTEXITCODE -ne 0) { Set-Location $root_dir; throw 'ZIP packaging failed.' }
 }
 
 cd $root_dir

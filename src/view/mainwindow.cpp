@@ -71,6 +71,7 @@
 #include <QPen>
 #include <QPixmap>
 #include <QPushButton>
+#include <QProcess>
 #include <QResizeEvent>
 #include <QSizePolicy>
 #include <QStyle>
@@ -278,6 +279,17 @@ MainWindow::MainWindow(QWidget* parent)
   , m_titleBarDragging(false)
 {
     ui->setupUi(this);
+#ifdef _WIN32
+    const QString shellConfig = QCoreApplication::applicationDirPath() + "/openexr-shell-config.exe";
+    if (QFileInfo::exists(shellConfig)) {
+        ui->menu_File->addSeparator();
+        auto* integration = ui->menu_File->addAction(tr("Windows integration..."));
+        connect(integration, &QAction::triggered, this, [this, shellConfig] {
+            if (!QProcess::startDetached(shellConfig, QStringList()))
+                QMessageBox::warning(this, tr("Windows integration"), tr("Could not open the Windows integration settings."));
+        });
+    }
+#endif
     setAttribute(Qt::WA_StyledBackground, true);
     setupTitleBar();
     setupPreviewModeActions();

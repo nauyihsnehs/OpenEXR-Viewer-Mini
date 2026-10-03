@@ -307,6 +307,12 @@ if (WIN32)
 endif (WIN32)
 
 
+# Optional Explorer integration
+option(BUILD_WINDOWS_SHELL "Build optional Windows x64 Explorer integration" ${WIN32})
+if(WIN32 AND BUILD_WINDOWS_SHELL)
+    include(cmake/WindowsShell.cmake)
+endif()
+
 # Warnings
 if(MSVC)
    target_compile_options(openexr-viewer PUBLIC /W4)
@@ -414,18 +420,20 @@ if (WIN32)
 endif ()
 
 # NSIS specific settings
-if(CPACK_GENERATOR MATCHES "NSIS")
+if(WIN32)
+  # CPack's default template requests elevation and can switch to all-users.
+  set(CPACK_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/deploy/windows;${CMAKE_MODULE_PATH}")
   set(CPACK_NSIS_MUI_ICON "${CMAKE_CURRENT_LIST_DIR}/deploy/icon/openexr-viewer.ico")
   set(CPACK_NSIS_HELP_LINK "")
   set(CPACK_NSIS_URL_INFO_ABOUT "")
   set(CPACK_CREATE_DESKTOP_LINKS "OpenEXR Viewer")
-  set(CPACK_NSIS_INSTALLED_ICON_NAME "openexr-viewer.exe")
-  set(CPACK_NSIS_MENU_LINKS "openexr-viewer.exe" "OpenEXR Viewer")
+  set(CPACK_NSIS_INSTALLED_ICON_NAME "${CMAKE_INSTALL_BINDIR}/openexr-viewer.exe")
   set(CPACK_NSIS_MODIFY_PATH OFF)
-  set(CPACK_NSIS_EXECUTABLES_DIRECTORY ".")
-  set(CPACK_NSIS_MUI_FINISHPAGE_RUN "openexr-viewer.exe")
+  set(CPACK_NSIS_EXECUTABLES_DIRECTORY "${CMAKE_INSTALL_BINDIR}")
+  set(CPACK_NSIS_INSTALL_ROOT "$LOCALAPPDATA\\Programs")
+  set(CPACK_VIEWER_BINDIR "${CMAKE_INSTALL_BINDIR}")
   set(CPACK_PACKAGE_VENDOR "Lambda")
-endif(CPACK_GENERATOR MATCHES "NSIS")
+endif()
 
 if("${CPACK_GENERATOR}" STREQUAL "PackageMaker")
   set(CPACK_PACKAGE_DEFAULT_LOCATION "/Applications")

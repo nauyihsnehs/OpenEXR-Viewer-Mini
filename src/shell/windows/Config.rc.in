@@ -1,0 +1,21 @@
+#include <windows.h>
+#include "ConfigResource.h"
+1 ICON "@VIEWER_ROOT@/deploy/icon/openexr-viewer.ico"
+1 RT_MANIFEST "@CMAKE_CURRENT_SOURCE_DIR@/Config.manifest"
+
+IDD_CONFIG DIALOGEX 0, 0, 380, 284
+STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX
+CAPTION "OpenEXR Viewer - Windows integration"
+FONT 9, "Segoe UI"
+BEGIN
+    LTEXT "Optional integration for the current Windows user. Nothing is enabled automatically.", -1, 12, 10, 356, 22
+    CONTROL "File icon and Open with registration", IDC_ICONS, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 12, 38, 350, 14
+    CONTROL "Explorer thumbnails", IDC_THUMBNAILS, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 12, 58, 350, 14
+    CONTROL "Explorer preview pane (Alt+P)", IDC_PREVIEW, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 12, 78, 350, 14
+    EDITTEXT IDC_STATUS, 12, 100, 356, 132, ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL | WS_TABSTOP
+    DEFPUSHBUTTON "Apply", IDC_APPLY, 12, 244, 58, 18
+    PUSHBUTTON "Undo all", IDC_UNDO, 76, 244, 58, 18
+    PUSHBUTTON "Refresh", IDC_REFRESH, 140, 244, 58, 18
+    PUSHBUTTON "Default apps", IDC_DEFAULTS, 204, 244, 78, 18
+    PUSHBUTTON "Close", IDCANCEL, 302, 244, 66, 18
+END

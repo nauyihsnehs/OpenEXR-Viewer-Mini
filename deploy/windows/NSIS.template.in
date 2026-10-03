@@ -1,0 +1,116 @@
+; CPack supplies the staged file tree and exact removal list. Everything this
+; template registers belongs to the current user; Shell integration is opt-in.
+Unicode true
+RequestExecutionLevel user
+ManifestDPIAware true
+Name "OpenEXR Viewer"
+OutFile "@CPACK_TOPLEVEL_DIRECTORY@/@CPACK_OUTPUT_FILE_NAME@"
+InstallDir "$LOCALAPPDATA\Programs\@CPACK_PACKAGE_INSTALL_DIRECTORY@"
+InstallDirRegKey HKCU "Software\OpenEXRViewerMini\Installer" "Location"
+SetCompressor lzma
+
+!include MUI2.nsh
+!include LogicLib.nsh
+!define UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\OpenEXRViewerMini"
+!define APP_BIN "@CPACK_VIEWER_BINDIR@"
+!define MUI_ICON "@CPACK_NSIS_MUI_ICON@"
+!define MUI_UNICON "@CPACK_NSIS_MUI_ICON@"
+!define MUI_ABORTWARNING
+!insertmacro MUI_PAGE_WELCOME
+!insertmacro MUI_PAGE_LICENSE "@CPACK_RESOURCE_FILE_LICENSE@"
+!insertmacro MUI_PAGE_DIRECTORY
+!insertmacro MUI_PAGE_INSTFILES
+!insertmacro MUI_PAGE_FINISH
+!insertmacro MUI_UNPAGE_CONFIRM
+!insertmacro MUI_UNPAGE_INSTFILES
+!insertmacro MUI_LANGUAGE "English"
+
+Function .onInit
+  SetShellVarContext current
+  SetRegView 64
+FunctionEnd
+Function un.onInit
+  SetShellVarContext current
+  SetRegView 64
+FunctionEnd
+
+Section "OpenEXR Viewer"
+  ; Stop before overwriting files if the previous installation cannot be undone
+  ; or is still loaded. Integration remains off after an upgrade until reenabled.
+  IfFileExists "$INSTDIR\${APP_BIN}\openexr-shell-config.exe" install_check
+  IfFileExists "$INSTDIR\${APP_BIN}\.openexr-shell-*.state" 0 install_files
+  MessageBox MB_OK|MB_ICONSTOP "Rollback information exists but its configuration program is missing. Restore openexr-shell-config.exe and undo integration before updating." /SD IDOK
+  SetErrorLevel 1
+  Abort
+install_check:
+  ClearErrors
+  ExecWait '"$INSTDIR\${APP_BIN}\openexr-shell-config.exe" --prepare-uninstall --quiet' $0
+  ${If} ${Errors}
+    MessageBox MB_OK|MB_ICONSTOP "Cannot run the existing Windows integration manager. Keep the program folder and undo integration before retrying." /SD IDOK
+    SetErrorLevel 1
+    Abort
+  ${EndIf}
+  ${If} $0 != 0
+    MessageBox MB_OK|MB_ICONSTOP "Cannot update this installation yet. Close OpenEXR Viewer, integration settings and Explorer preview windows, then retry. If registration rollback failed, run Windows integration > Undo all. Signing out releases remaining Shell hosts." /SD IDOK
+    SetErrorLevel 1
+    Abort
+  ${EndIf}
+install_files:
+  SetOutPath "$INSTDIR"
+  @CPACK_NSIS_FULL_INSTALL@
+  WriteUninstaller "$INSTDIR\Uninstall.exe"
+  WriteRegStr HKCU "Software\OpenEXRViewerMini\Installer" "Location" "$INSTDIR"
+  WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayName" "OpenEXR Viewer"
+  WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayVersion" "@CPACK_PACKAGE_VERSION@"
+  WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayIcon" "$INSTDIR\${APP_BIN}\openexr-viewer.exe,0"
+  WriteRegStr HKCU "${UNINSTALL_KEY}" "InstallLocation" "$INSTDIR"
+  WriteRegStr HKCU "${UNINSTALL_KEY}" "UninstallString" '$\"$INSTDIR\Uninstall.exe$\"'
+  WriteRegStr HKCU "${UNINSTALL_KEY}" "QuietUninstallString" '$\"$INSTDIR\Uninstall.exe$\" /S'
+  WriteRegDWORD HKCU "${UNINSTALL_KEY}" "NoModify" 1
+  WriteRegDWORD HKCU "${UNINSTALL_KEY}" "NoRepair" 1
+  CreateDirectory "$SMPROGRAMS\OpenEXR Viewer"
+  CreateShortCut "$SMPROGRAMS\OpenEXR Viewer\OpenEXR Viewer.lnk" "$INSTDIR\${APP_BIN}\openexr-viewer.exe"
+  IfFileExists "$INSTDIR\${APP_BIN}\openexr-shell-config.exe" 0 no_config_shortcut
+  CreateShortCut "$SMPROGRAMS\OpenEXR Viewer\Windows integration.lnk" "$INSTDIR\${APP_BIN}\openexr-shell-config.exe"
+no_config_shortcut:
+  CreateShortCut "$SMPROGRAMS\OpenEXR Viewer\Uninstall.lnk" "$INSTDIR\Uninstall.exe"
+SectionEnd
+
+Section "Uninstall"
+  IfFileExists "$INSTDIR\${APP_BIN}\openexr-shell-config.exe" uninstall_check
+  IfFileExists "$INSTDIR\${APP_BIN}\.openexr-shell-*.state" 0 remove_files
+  MessageBox MB_OK|MB_ICONSTOP "Rollback information exists but its configuration program is missing. Restore openexr-shell-config.exe and undo integration before uninstalling." /SD IDOK
+  SetErrorLevel 1
+  Abort
+uninstall_check:
+  ClearErrors
+  ExecWait '"$INSTDIR\${APP_BIN}\openexr-shell-config.exe" --prepare-uninstall --quiet' $0
+  ${If} ${Errors}
+    MessageBox MB_OK|MB_ICONSTOP "Cannot run the Windows integration manager. Keep the program folder and undo integration before retrying." /SD IDOK
+    SetErrorLevel 1
+    Abort
+  ${EndIf}
+  ${If} $0 != 0
+    MessageBox MB_OK|MB_ICONSTOP "Uninstall paused. Close OpenEXR Viewer, integration settings and Explorer preview windows, then retry. If rollback failed, run Windows integration > Undo all. Signing out releases remaining Shell hosts. Your uninstall entry and files have been kept." /SD IDOK
+    SetErrorLevel 1
+    Abort
+  ${EndIf}
+remove_files:
+  ; Only the files staged by CPack are removed. Never recursively delete an
+  ; installation directory that can also contain the user's EXR images.
+  @CPACK_NSIS_DELETE_FILES@
+  @CPACK_NSIS_DELETE_DIRECTORIES@
+  Delete "$SMPROGRAMS\OpenEXR Viewer\OpenEXR Viewer.lnk"
+  Delete "$SMPROGRAMS\OpenEXR Viewer\Windows integration.lnk"
+  Delete "$SMPROGRAMS\OpenEXR Viewer\Uninstall.lnk"
+  RMDir "$SMPROGRAMS\OpenEXR Viewer"
+  ; A second installation may have replaced these shared installer entries.
+  ReadRegStr $0 HKCU "Software\OpenEXRViewerMini\Installer" "Location"
+  ${If} $0 == $INSTDIR
+    DeleteRegKey HKCU "${UNINSTALL_KEY}"
+    DeleteRegKey HKCU "Software\OpenEXRViewerMini\Installer"
+    DeleteRegKey /ifempty HKCU "Software\OpenEXRViewerMini"
+  ${EndIf}
+  Delete "$INSTDIR\Uninstall.exe"
+  RMDir "$INSTDIR"
+SectionEnd

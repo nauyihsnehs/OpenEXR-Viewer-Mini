@@ -49,3 +49,5 @@ cmake .. `
 cmake --build . --target install --config Release
 
 cd $start_dir
+
+& (Join-Path $PSScriptRoot 'build_shell_dependencies.ps1')

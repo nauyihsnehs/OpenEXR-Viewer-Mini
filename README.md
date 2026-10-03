@@ -378,6 +378,35 @@ To build the existing NSIS installer instead, run:
 The Qt installation path is configured in `build_windows.ps1` and may need to
 be adjusted for a different Qt installation.
 
+### Optional Windows 11 Explorer integration
+
+Windows x64 packages also include `openexr-shell.dll` and
+`openexr-shell-config.exe` beside the viewer executable. Integration starts **off**.
+Open **File > Windows integration...**, or run the configuration program directly,
+to enable file association/icons, thumbnails, and the Alt+P preview pane separately.
+The file icon follows the default application you select in Windows Settings.
+
+**Undo all integration before moving or deleting a portable directory.** Use
+**Undo all** in the configuration window. Its per-user rollback records stay in
+hidden `.openexr-shell-<SID>.state` files beside the executables; keep those files
+until undo succeeds. The installer also undoes integration before upgrades and
+uninstall, and pauses if a Shell host still has the DLL loaded. Components are
+not copied into a second location, and no service or startup task is installed.
+
+The first version decodes single-part Scanline or single-level Tiled RGB/RGBA
+images. Other EXR layouts use an embedded preview when available. The preview is
+SDR at 0 EV; exposure controls, Deep decoding, layer switching and HDR output remain
+in the main viewer. See [Windows integration](docs/windows-shell.md) for limits,
+command-line management and the verification checklist.
+
+`build_dependencies.ps1` also builds a separate static dependency prefix for the
+Shell DLL. If the dependency sources already exist, run
+`build_shell_dependencies.ps1` to build only that prefix. This requires CMake 3.18+
+and MSVC x64. The main viewer continues using its shared Qt/OpenEXR dependencies.
+Use `build_windows.ps1 -WithoutShell` or `-DBUILD_WINDOWS_SHELL=OFF` for a viewer-only
+package. The NSIS installer is now per-user, defaults to LocalAppData/Programs,
+and does not enable integration automatically.
+
 macOS
 -----
 
