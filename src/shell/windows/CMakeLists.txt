@@ -10,7 +10,7 @@ set(CMAKE_MSVC_RUNTIME_LIBRARY MultiThreaded)
 get_filename_component(VIEWER_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../.." ABSOLUTE)
 
 if(NOT SHELL_DEPENDENCIES)
-    message(FATAL_ERROR "Set SHELL_DEPENDENCIES to the static dependency prefix from build_shell_dependencies.ps1.")
+    message(FATAL_ERROR "Set SHELL_DEPENDENCIES to the static dependency prefix prepared by build_windows.ps1.")
 endif()
 set(CMAKE_PREFIX_PATH "${SHELL_DEPENDENCIES}")
 set(Imath_DIR "${SHELL_DEPENDENCIES}/lib/cmake/Imath")

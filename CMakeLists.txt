@@ -1,9 +1,9 @@
-cmake_minimum_required(VERSION 3.5)
+cmake_minimum_required(VERSION 3.18)
 
 project(openexr-viewer
     VERSION 0.6.1
     DESCRIPTION "Simple Viewer for OpenEXR files with detailed metadata display"
-    HOMEPAGE_URL "https://github.com/afichet/openexr-viewer"
+    HOMEPAGE_URL "https://github.com/nauyihsnehs/OpenEXR-Viewer-Mini"
     LANGUAGES CXX
     )
 
@@ -18,13 +18,10 @@ if (NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE "Release")
 endif()
 
-cmake_policy(SET CMP0074 NEW)
-
 include(GNUInstallDirs)
 
 
 if (APPLE)
-    set(CMAKE_OSX_DEPLOYMENT_TARGET 10.9)
     set(CMAKE_SKIP_BUILD_RPATH FALSE)
     set(CMAKE_BUILD_WITH_INSTALL_RPATH FALSE)
     set(CMAKE_INSTALL_RPATH "${CMAKE_INSTALL_PREFIX}/lib")
@@ -32,11 +29,11 @@ if (APPLE)
 
     set(MACOSX_BUNDLE_BUNDLE_NAME "OpenEXR-Viewer")
     set(MACOSX_BUNDLE_CONTENTS "${CMAKE_CURRENT_BINARY_DIR}/${MACOSX_BUNDLE_BUNDLE_NAME}.app/Contents")
-    set(MACOSX_BUNDLE_RESOUCES "${MACOSX_BUNDLE_CONTENTS}/Resources")
+    set(MACOSX_BUNDLE_RESOURCES "${MACOSX_BUNDLE_CONTENTS}/Resources")
     set(MACOSX_BUNDLE_ICON_FILE "openexr-viewer.icns")
     set(MACOSX_BUNDLE_ICON "${PROJECT_SOURCE_DIR}/deploy/icon/${MACOSX_BUNDLE_ICON_FILE}")
-    execute_process(COMMAND ${CMAKE_COMMAND} -E make_directory "${MACOSX_BUNDLE_RESOUCES}")
-    execute_process(COMMAND ${CMAKE_COMMAND} -E copy_if_different "${MACOSX_BUNDLE_ICON}" "${MACOSX_BUNDLE_RESOUCES}")
+    execute_process(COMMAND ${CMAKE_COMMAND} -E make_directory "${MACOSX_BUNDLE_RESOURCES}")
+    execute_process(COMMAND ${CMAKE_COMMAND} -E copy_if_different "${MACOSX_BUNDLE_ICON}" "${MACOSX_BUNDLE_RESOURCES}")
 endif (APPLE)
 
 
@@ -118,8 +115,6 @@ set(PROJECT_SOURCES
 
     src/io/ImageSave.cpp
     src/io/ImageSave.h
-    src/io/ImageSavePlan.cpp
-    src/io/ImageSavePlan.h
 
     src/view/SaveImageDialog.cpp
     src/view/SaveImageDialog.h
@@ -165,7 +160,6 @@ set(PROJECT_SOURCES
     src/model/attribute/HeaderItem.cpp
     src/model/attribute/HeaderItem.h
     src/model/attribute/HeaderModel.cpp
-    src/model/attribute/HeaderModelAttributes.cpp
     src/model/attribute/HeaderModel.h
 
     # OpenEXR layer fields (specific kind of attributes)
@@ -199,14 +193,7 @@ set(PROJECT_SOURCES
     # ------------------------------------------------------------------------
     src/util/Colormap.cpp
     src/util/Colormap.h
-    src/util/TabulatedColormap.cpp
-    src/util/TabulatedColormap.h
-    src/util/BBGRColormap.cpp
-    src/util/BBGRColormap.h
-    src/util/YColormap.cpp
-    src/util/YColormap.h
-    src/util/ColormapModule.h
-    src/util/ColormapModule.cpp
+    src/util/ColormapData.h
     src/util/ColorTransform.h
     src/util/ColorTransform.cpp
     src/util/AnomalyMarkers.h
@@ -220,43 +207,24 @@ set(PROJECT_SOURCES
     src/util/ViewMetadata.h
     src/util/ViewMetadata.cpp
 
-    openexr-viewer.rc
     assets/themes/dark_flat.qrc
     assets/icons/icons.qrc
 )
 
 if(WIN32)
-    list(APPEND PROJECT_SOURCES src/view/HdrRenderer.cpp src/view/HdrRenderer.h)
+    list(APPEND PROJECT_SOURCES src/view/HdrRenderer.cpp src/view/HdrRenderer.h openexr-viewer.rc)
 endif()
 
-if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
-    if (WIN32)
-        qt_add_executable(openexr-viewer WIN32
-            ${PROJECT_SOURCES}
-        )
-    elseif(APPLE)
-        qt_add_executable(openexr-viewer MACOSX_BUNDLE
-            ${PROJECT_SOURCES}
-        )
-    else()
-        qt_add_executable(openexr-viewer
-            ${PROJECT_SOURCES}
-        )
-    endif()
+set(VIEWER_APP_FLAGS)
+if(WIN32)
+    list(APPEND VIEWER_APP_FLAGS WIN32)
+elseif(APPLE)
+    list(APPEND VIEWER_APP_FLAGS MACOSX_BUNDLE)
+endif()
+if(QT_VERSION_MAJOR GREATER_EQUAL 6)
+    qt_add_executable(openexr-viewer ${VIEWER_APP_FLAGS} ${PROJECT_SOURCES})
 else()
-    if(WIN32)
-        add_executable(openexr-viewer WIN32
-            ${PROJECT_SOURCES}
-        )
-    elseif(APPLE)
-        add_executable(openexr-viewer MACOSX_BUNDLE
-            ${PROJECT_SOURCES}
-        )
-    else()
-        add_executable(openexr-viewer
-            ${PROJECT_SOURCES}
-        )
-    endif()
+    add_executable(openexr-viewer ${VIEWER_APP_FLAGS} ${PROJECT_SOURCES})
 endif()
 
 
@@ -274,21 +242,24 @@ if (APPLE)
 
 endif ()
 
-target_include_directories(openexr-viewer PRIVATE src)
-target_include_directories(openexr-viewer PRIVATE 3rdparty/data)
-target_include_directories(openexr-viewer PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
-
-target_link_libraries(openexr-viewer PRIVATE Qt${QT_VERSION_MAJOR}::Widgets)
-target_link_libraries(openexr-viewer PRIVATE Qt${QT_VERSION_MAJOR}::Concurrent)
-target_link_libraries(openexr-viewer PRIVATE Imath::Imath OpenEXR::OpenEXR)
-if(WIN32)
-    target_link_libraries(openexr-viewer PRIVATE d3d11 dxgi d3dcompiler)
-endif()
-
-if((OpenMP_CXX_FOUND) OR (OpenMP_FOUND))
-    target_link_libraries(openexr-viewer PRIVATE OpenMP::OpenMP_CXX)
-    # target_link_libraries(openexr-viewer PRIVATE OpenMP::OpenMP_C)
-endif()
+# Viewer dependencies and compiler settings.
+function(configure_viewer_target target)
+    target_include_directories(${target} PRIVATE src "${CMAKE_CURRENT_BINARY_DIR}")
+    target_link_libraries(${target} PRIVATE Qt${QT_VERSION_MAJOR}::Widgets
+        Qt${QT_VERSION_MAJOR}::Concurrent Imath::Imath OpenEXR::OpenEXR)
+    if(OpenMP_CXX_FOUND)
+        target_link_libraries(${target} PRIVATE OpenMP::OpenMP_CXX)
+    endif()
+    if(WIN32)
+        target_link_libraries(${target} PRIVATE d3d11 dxgi d3dcompiler)
+    endif()
+    if(MSVC)
+        target_compile_options(${target} PRIVATE /W4 /utf-8)
+    else()
+        target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+endfunction()
+configure_viewer_target(openexr-viewer)
 
 
 if (WIN32)
@@ -298,6 +269,7 @@ if (WIN32)
         $<TARGET_FILE:Qt${QT_VERSION_MAJOR}::Widgets>
         $<TARGET_FILE:Qt${QT_VERSION_MAJOR}::Core>
         $<TARGET_FILE:Qt${QT_VERSION_MAJOR}::Gui>
+        $<TARGET_FILE:Qt${QT_VERSION_MAJOR}::Concurrent>
         "${OPENEXR_VIEWER_ZLIB_RUNTIME}"
         $<TARGET_FILE:Imath::Imath>
         $<TARGET_FILE:OpenEXR::Iex>
@@ -313,14 +285,6 @@ option(BUILD_WINDOWS_SHELL "Build optional Windows x64 Explorer integration" ${W
 if(WIN32 AND BUILD_WINDOWS_SHELL)
     include(cmake/WindowsShell.cmake)
 endif()
-
-# Warnings
-if(MSVC)
-   target_compile_options(openexr-viewer PUBLIC /W4)
-else()
-   target_compile_options(openexr-viewer PUBLIC -Wall -Wextra -Wpedantic)
-endif()
-
 
 # ----------------------------------------------------------------------------
 # Install Rules
@@ -380,7 +344,12 @@ elseif (WIN32)
             .
     )
 
+    install(FILES
+        docs/user-guide.md docs/development.md docs/release-readiness.md docs/windows-shell.md
+        DESTINATION docs)
+
     set(CMAKE_INSTALL_OPENMP_LIBRARIES TRUE)
+    set(CMAKE_INSTALL_UCRT_LIBRARIES TRUE)
     include(InstallRequiredSystemLibraries)
 
     install(
@@ -449,44 +418,3 @@ endif (APPLE)
 
 # CPack
 include(CPack)
-
-option(BUILD_TESTING "Build viewer regression tests" OFF)
-include(CTest)
-if(BUILD_TESTING)
-    find_package(Qt${QT_VERSION_MAJOR} COMPONENTS Test REQUIRED)
-    set(TEST_SOURCES ${PROJECT_SOURCES})
-    list(REMOVE_ITEM TEST_SOURCES src/main.cpp openexr-viewer.rc)
-    add_executable(viewer-tests tests/ViewerTests.cpp ${TEST_SOURCES})
-    target_include_directories(viewer-tests PRIVATE src 3rdparty/data "${CMAKE_CURRENT_BINARY_DIR}")
-    target_link_libraries(viewer-tests PRIVATE Qt${QT_VERSION_MAJOR}::Test
-        Qt${QT_VERSION_MAJOR}::Widgets Qt${QT_VERSION_MAJOR}::Concurrent
-        Imath::Imath OpenEXR::OpenEXR)
-    if(OpenMP_CXX_FOUND)
-        target_link_libraries(viewer-tests PRIVATE OpenMP::OpenMP_CXX)
-    endif()
-    if(WIN32)
-        target_link_libraries(viewer-tests PRIVATE d3d11 dxgi d3dcompiler)
-        add_custom_command(TARGET viewer-tests POST_BUILD COMMAND ${CMAKE_COMMAND}
-            -E copy_if_different $<TARGET_FILE:Qt${QT_VERSION_MAJOR}::Test>
-            $<TARGET_FILE_DIR:viewer-tests>
-            COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:viewer-tests>/platforms"
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "$<TARGET_FILE_DIR:Qt${QT_VERSION_MAJOR}::Core>/../plugins/platforms/qoffscreen$<$<CONFIG:Debug>:d>.dll"
-            "$<TARGET_FILE_DIR:viewer-tests>/platforms")
-        add_dependencies(viewer-tests openexr-viewer)
-    endif()
-    add_test(NAME viewer-regressions COMMAND viewer-tests -o -,txt -o test-results.txt,txt)
-    set_tests_properties(viewer-regressions PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 90)
-    add_executable(viewer-benchmark EXCLUDE_FROM_ALL tests/RenderBenchmark.cpp ${TEST_SOURCES})
-    target_include_directories(viewer-benchmark PRIVATE src 3rdparty/data "${CMAKE_CURRENT_BINARY_DIR}")
-    target_link_libraries(viewer-benchmark PRIVATE Qt${QT_VERSION_MAJOR}::Widgets
-        Qt${QT_VERSION_MAJOR}::Concurrent Imath::Imath OpenEXR::OpenEXR)
-    if(OpenMP_CXX_FOUND)
-        target_link_libraries(viewer-benchmark PRIVATE OpenMP::OpenMP_CXX)
-    endif()
-    if(WIN32)
-        target_link_libraries(viewer-benchmark PRIVATE psapi d3d11 dxgi d3dcompiler)
-        add_dependencies(viewer-benchmark openexr-viewer)
-    endif()
-endif()

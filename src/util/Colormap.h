@@ -34,6 +34,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <string>
 
 class Colormap
 {
@@ -61,4 +62,25 @@ class Colormap
           static_cast<float>(std::max(0., std::min(1., normalized))),
           RGB);
     }
+};
+
+class ColormapModule
+{
+  public:
+    enum Map
+    {
+        GRAYSCALE = 0,
+        BBGR,
+        TURBO,
+        MAGMA,
+        INFERNO,
+        PLASMA,
+        VIRIDIS,
+        N_MAPS
+    };
+
+    static Colormap* create(const std::string& name);
+    static Colormap* create(Map map);
+
+    static std::string toString(Map map);
 };

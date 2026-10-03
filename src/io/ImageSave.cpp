@@ -7,7 +7,6 @@
 #include <QPainter>
 #include <OpenEXR/ImfEnvmapAttribute.h>
 
-#include <io/ImageSavePlan.h>
 #include <model/OpenEXRImage.h>
 #include <model/framebuffer/FramebufferModel.h>
 #include <model/framebuffer/ToneMapping.h>
@@ -31,8 +30,9 @@
 #include <Imath/ImathBox.h>
 
 #include <QDir>
-#include <QFile>
 #include <QFileInfo>
+#include <QSaveFile>
+#include <OpenEXR/ImfIO.h>
 #include <QImage>
 #include <model/framebuffer/FramebufferLoader.h>
 #include <QImageWriter>
@@ -87,16 +87,120 @@ namespace
         return r;
     }
 
-    QByteArray nativePath(const QString& path)
+    // Qt owns the path and the temporary file, so all OpenEXR writers support Unicode.
+    class QtOutputStream : public Imf::OStream {
+      public:
+        explicit QtOutputStream(const QString& path)
+          : Imf::OStream(path.toUtf8().constData()), file(path)
+        {
+            file.setDirectWriteFallback(false);
+            if (!file.open(QIODevice::WriteOnly)) fail();
+        }
+        void write(const char bytes[], int count) override
+        {
+            if (count < 0) fail(QStringLiteral("Invalid EXR write size."));
+            if (file.write(bytes, count) != count) fail();
+        }
+        uint64_t tellp() override
+        {
+            const qint64 position = file.pos();
+            if (position < 0) fail();
+            return uint64_t(position);
+        }
+        void seekp(uint64_t position) override
+        {
+            if (position > uint64_t(std::numeric_limits<qint64>::max()))
+                fail(QStringLiteral("EXR output offset exceeds the file size limit."));
+            if (!file.seek(qint64(position))) fail();
+        }
+        void commit()
+        {
+            if (!file.commit()) fail();
+        }
+      private:
+        void fail(const QString& reason = QString())
+        {
+            const QString error = reason.isEmpty() ? file.errorString() : reason;
+            // Some OpenEXR destructors absorb stream errors. Never commit after one.
+            file.cancelWriting();
+            throw std::runtime_error(error.toUtf8().constData());
+        }
+        QSaveFile file;
+    };
+
+    QString normalizedPath(const QString& path, ImageSave::Format format)
     {
-        return QDir::toNativeSeparators(path).toLocal8Bit();
+        const QFileInfo info(path);
+        return info.path() + "/" + info.completeBaseName() + "." + ImageSave::extension(format);
     }
 
+    std::vector<double> bracketExposureValues(const ImageSave::Options& options)
+    {
+        int count = std::max(3, std::min(9, options.bracketCount));
+        if (count % 2 == 0) ++count;
+        const double step = options.bracketStepEv <= 0. ? 2. : options.bracketStepEv;
+        const double start = options.bracketCenterEv - step * (count / 2);
+        std::vector<double> values;
+        for (int i = 0; i < count; ++i) values.push_back(start + step * i);
+        return values;
+    }
+
+    QStringList plannedPaths(const ImageSave::Options& options)
+    {
+        const QString path = normalizedPath(options.path, options.format);
+        if (options.target != ImageSave::TargetHdrBracketedImages) return {path};
+        const QFileInfo info(path);
+        QStringList paths;
+        for (double ev : bracketExposureValues(options)) {
+            QString token = QString::number(std::fabs(ev), 'f', 3);
+            while (token.contains('.') && token.endsWith('0')) token.chop(1);
+            if (token.endsWith('.')) token.chop(1);
+            token.replace('.', 'p');
+            paths << info.path() + "/" + info.completeBaseName() + "_ev"
+              + (ev < -0.0005 ? "-" : "+") + token + "." + info.suffix();
+        }
+        return paths;
+    }
+
+    QStringList existingPaths(const ImageSave::Options& options)
+    {
+        QStringList conflicts;
+        for (const auto& path : plannedPaths(options))
+            if (QFileInfo::exists(path)) conflicts << path;
+        return conflicts;
+    }
+
+    QString uniqueOutputPath(const ImageSave::Options& options)
+    {
+        const QFileInfo info(normalizedPath(options.path, options.format));
+        const QString base = info.path() + "/" + info.completeBaseName();
+        for (int i = 1; i < 10000; ++i) {
+            auto candidate = options;
+            candidate.path = QString("%1_%2.%3").arg(base).arg(i, 3, 10, QChar('0')).arg(info.suffix());
+            if (existingPaths(candidate).isEmpty()) return candidate.path;
+        }
+        return {}; // Exhaustion must never turn Auto Rename into Overwrite.
+    }
 
     QByteArray writerFormat(ImageSave::Format format)
     {
         if (format == ImageSave::FormatJpeg) return "jpg";
         return "png";
+    }
+
+    ImageSave::Result writeImage(const QImage& image, const ImageSave::Options& options,
+                                 const QString& path)
+    {
+        QSaveFile file(path);
+        file.setDirectWriteFallback(false);
+        if (!file.open(QIODevice::WriteOnly)) return result(ImageSave::StatusFailed, file.errorString());
+        {
+            QImageWriter writer(&file, writerFormat(options.format));
+            if (options.format == ImageSave::FormatJpeg) writer.setQuality(options.quality);
+            if (!writer.write(image)) return result(ImageSave::StatusFailed, writer.errorString());
+        }
+        if (!file.commit()) return result(ImageSave::StatusFailed, file.errorString());
+        return result(ImageSave::StatusSaved, QObject::tr("Saved %1").arg(path), {path});
     }
 
     Imf::Compression exrCompression(ImageSave::ExrCompression compression)
@@ -484,21 +588,22 @@ namespace
             return result(ImageSave::StatusFailed,
                           QObject::tr("No channels match the selected channel filter."));
         try {
-            const QByteArray filename = nativePath(options.path);
+            QtOutputStream stream(options.path);
             Imf::Header      header   = exrHeader(part, options);
             if (part.deep) {
-                Imf::DeepScanLineOutputFile file(filename.constData(), header);
+                Imf::DeepScanLineOutputFile file(stream, header);
                 writeDeepPixels(file, part);
             } else {
-                Imf::OutputFile file(filename.constData(), header);
+                Imf::OutputFile file(stream, header);
                 Imf::FrameBuffer framebuffer = exrFrameBuffer(part);
                 file.setFrameBuffer(framebuffer);
                 file.writePixels(part.height);
             }
+            stream.commit(); // All OpenEXR objects have finished updating chunk offsets.
         } catch (const std::exception& e) {
             return result(
               ImageSave::StatusFailed,
-              QString::fromLocal8Bit(e.what()));
+              QString::fromUtf8(e.what()));
         }
 
         return result(
@@ -526,27 +631,30 @@ namespace
                 headers.push_back(exrHeader(part, options));
             }
 
-            const QByteArray         filename = nativePath(options.path);
-            Imf::MultiPartOutputFile file(
-              filename.constData(),
-              headers.data(),
-              static_cast<int>(headers.size()));
+            QtOutputStream stream(options.path);
+            {
+                Imf::MultiPartOutputFile file(
+                  stream,
+                  headers.data(),
+                  static_cast<int>(headers.size()));
 
-            for (int i = 0; i < static_cast<int>(parts.size()); i++) {
-                if (parts[i].deep) {
-                    Imf::DeepScanLineOutputPart output(file, i);
-                    writeDeepPixels(output, parts[i]);
-                    continue;
+                for (int i = 0; i < static_cast<int>(parts.size()); i++) {
+                    if (parts[i].deep) {
+                        Imf::DeepScanLineOutputPart output(file, i);
+                        writeDeepPixels(output, parts[i]);
+                        continue;
+                    }
+                    Imf::OutputPart  output(file, i);
+                    Imf::FrameBuffer framebuffer = exrFrameBuffer(parts[i]);
+                    output.setFrameBuffer(framebuffer);
+                    output.writePixels(parts[i].height);
                 }
-                Imf::OutputPart  output(file, i);
-                Imf::FrameBuffer framebuffer = exrFrameBuffer(parts[i]);
-                output.setFrameBuffer(framebuffer);
-                output.writePixels(parts[i].height);
             }
+            stream.commit();
         } catch (const std::exception& e) {
             return result(
               ImageSave::StatusFailed,
-              QString::fromLocal8Bit(e.what()));
+              QString::fromUtf8(e.what()));
         }
 
         return result(
@@ -660,8 +768,9 @@ namespace
 
         const auto rgb = model->displayRgbComponents();
 
-        QFile file(options.path);
-        if (!file.open(QFile::WriteOnly)) {
+        QSaveFile file(options.path);
+        file.setDirectWriteFallback(false);
+        if (!file.open(QIODevice::WriteOnly)) {
             return result(ImageSave::StatusFailed, file.errorString());
         }
 
@@ -688,7 +797,7 @@ namespace
             }
         }
 
-        if (!file.flush()) {
+        if (!file.commit()) {
             return result(ImageSave::StatusFailed, file.errorString());
         }
 
@@ -720,19 +829,7 @@ namespace
             image = image.convertToFormat(QImage::Format_RGB888);
         }
 
-        QImageWriter writer(options.path, writerFormat(options.format));
-        if (options.format == ImageSave::FormatJpeg) {
-            writer.setQuality(options.quality);
-        }
-
-        if (!writer.write(image)) {
-            return result(ImageSave::StatusFailed, writer.errorString());
-        }
-
-        return result(
-          ImageSave::StatusSaved,
-          QObject::tr("Saved %1").arg(options.path),
-          QStringList() << options.path);
+        return writeImage(image, options, options.path);
     }
 
     unsigned char bracketByte(float value, double exposureMul)
@@ -773,45 +870,47 @@ namespace
 
         const auto rgb = model->displayRgbComponents();
 
-        const QStringList         paths = ImageSavePlan::outputPaths(options);
+        const QStringList         paths = plannedPaths(options);
         const std::vector<double> values
-          = ImageSavePlan::bracketExposureValues(options);
+          = bracketExposureValues(options);
 
+        QStringList completed;
+        const auto failed = [&completed](const QString& path, const QString& error) {
+            QString message = QObject::tr("Could not save %1: %2").arg(path, error);
+            if (!completed.isEmpty()) message += QObject::tr("\nAlready saved:\n%1").arg(completed.join("\n"));
+            return result(ImageSave::StatusFailed, message, completed);
+        };
         for (int i = 0; i < static_cast<int>(values.size()); i++) {
-            QImage      image(width, height, QImage::Format_RGB888);
-            const double exposureMul = std::exp2(values[i]);
+            try {
+                QImage      image(width, height, QImage::Format_RGB888);
+                if (image.isNull()) return failed(paths[i], QObject::tr("Unable to allocate the output image."));
+                const double exposureMul = std::exp2(values[i]);
 
-            for (int y = 0; y < height; y++) {
-                unsigned char* line = image.scanLine(y);
+                for (int y = 0; y < height; y++) {
+                    unsigned char* line = image.scanLine(y);
 
-                for (int x = 0; x < width; x++) {
-                    const size_t offset = model->rawPixelStride() * (size_t(y) * width + x);
-                    line[3 * x + 0]
-                      = bracketByte(rgbSample(pixels, offset, rgb[0]), exposureMul);
-                    line[3 * x + 1]
-                      = bracketByte(rgbSample(pixels, offset, rgb[1]), exposureMul);
-                    line[3 * x + 2]
-                      = bracketByte(rgbSample(pixels, offset, rgb[2]), exposureMul);
+                    for (int x = 0; x < width; x++) {
+                        const size_t offset = model->rawPixelStride() * (size_t(y) * width + x);
+                        line[3 * x + 0]
+                          = bracketByte(rgbSample(pixels, offset, rgb[0]), exposureMul);
+                        line[3 * x + 1]
+                          = bracketByte(rgbSample(pixels, offset, rgb[1]), exposureMul);
+                        line[3 * x + 2]
+                          = bracketByte(rgbSample(pixels, offset, rgb[2]), exposureMul);
+                    }
                 }
-            }
 
-            if (options.maxWidth > 0 && image.width() > options.maxWidth) {
-                image = image.scaledToWidth(
-                  options.maxWidth,
-                  Qt::SmoothTransformation);
-            }
+                if (options.maxWidth > 0 && image.width() > options.maxWidth) {
+                    image = image.scaledToWidth(
+                      options.maxWidth,
+                      Qt::SmoothTransformation);
+                }
 
-            QImageWriter writer(paths[i], writerFormat(options.format));
-            if (options.format == ImageSave::FormatJpeg) {
-                writer.setQuality(options.quality);
-            }
-
-            if (!writer.write(image)) {
-                return result(
-                  ImageSave::StatusFailed,
-                  QObject::tr("Could not save %1: %2")
-                    .arg(paths[i])
-                    .arg(writer.errorString()));
+                const auto saved = writeImage(image, options, paths[i]);
+                if (saved.status != ImageSave::StatusSaved) return failed(paths[i], saved.message);
+                completed << paths[i];
+            } catch (const std::exception& error) {
+                return failed(paths[i], QString::fromUtf8(error.what()));
             }
         }
 
@@ -896,7 +995,7 @@ namespace
         } catch (const std::exception& e) {
             return result(
               ImageSave::StatusFailed,
-              QString::fromLocal8Bit(e.what()));
+              QString::fromUtf8(e.what()));
         }
 
         if (options.multipart == ImageSave::MultipartFlatten && image->parts() > 1) {
@@ -970,10 +1069,7 @@ namespace
             AnomalyMarkers::draw(painter, projected->anomalyRegions, image.rect(),
               EnvironmentProjection::coverage(*projected), QTransform(), image.rect());
         }
-        QImageWriter writer(options.path, writerFormat(options.format));
-        if (options.format == ImageSave::FormatJpeg) writer.setQuality(options.quality);
-        if (!writer.write(image)) return result(ImageSave::StatusFailed, writer.errorString());
-        return result(ImageSave::StatusSaved, QObject::tr("Saved %1").arg(options.path), {options.path});
+        return writeImage(image, options, options.path);
     }
 
     ImageSave::Result saveResolved(
@@ -1054,10 +1150,10 @@ namespace ImageSave
 
     QStringList outputPaths(const Source&, const Options& options)
     {
-        return ImageSavePlan::outputPaths(options);
+        return plannedPaths(options);
     }
 
-    Result save(const Source& source, const Options& options)
+    Result save(const Source& source, const Options& options) try
     {
         if (source.activeModel && source.activeModel->isDerivedPreview()
             && (options.format == FormatHdr
@@ -1070,13 +1166,8 @@ namespace ImageSave
 
         Options resolved = options;
         resolved.path
-          = ImageSavePlan::normalizedPath(resolved.path, resolved.format);
-        QStringList paths = ImageSavePlan::outputPaths(resolved);
-        QStringList conflicts;
-
-        for (const QString& path : paths) {
-            if (QFileInfo::exists(path)) conflicts << path;
-        }
+          = normalizedPath(resolved.path, resolved.format);
+        const QStringList conflicts = existingPaths(resolved);
 
         if (!conflicts.isEmpty() && options.conflict == ConflictAsk) {
             return result(
@@ -1086,9 +1177,13 @@ namespace ImageSave
         }
 
         if (!conflicts.isEmpty() && options.conflict == ConflictRename) {
-            resolved.path = ImageSavePlan::uniqueOutputPath(resolved);
+            resolved.path = uniqueOutputPath(resolved);
+            if (resolved.path.isEmpty())
+                return result(StatusFailed, QObject::tr("No unused output name is available. Choose another name or folder."));
         }
 
         return saveResolved(source, resolved);
+    } catch (const std::exception& error) {
+        return result(StatusFailed, QString::fromUtf8(error.what()));
     }
 }   // namespace ImageSave

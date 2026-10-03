@@ -1,4 +1,9 @@
-# Windows 11 Explorer integration
+# Windows integration
+
+[Overview](../README.md) · [User guide](user-guide.md) · [Development](development.md) · [Release readiness](release-readiness.md)
+
+The implementation targets Windows x64 with MSVC. This preparation pass reviewed
+source only; Explorer, registration, rollback and package acceptance remain pending.
 
 ## Enable and undo
 

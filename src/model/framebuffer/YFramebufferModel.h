@@ -34,7 +34,7 @@
 
 #include "FramebufferModel.h"
 
-#include <util/ColormapModule.h>
+#include <util/Colormap.h>
 #include <model/ExrInput.h>
 
 #include <memory>

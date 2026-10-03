@@ -50,7 +50,7 @@
 #include <QStyle>
 #include <QtGlobal>
 
-#include <util/ColormapModule.h>
+#include <util/Colormap.h>
 
 YFramebufferWidget::YFramebufferWidget(QWidget* parent)
   : QWidget(parent)

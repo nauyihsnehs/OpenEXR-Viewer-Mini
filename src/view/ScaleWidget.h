@@ -33,7 +33,7 @@
 #pragma once
 
 #include <QWidget>
-#include <util/ColormapModule.h>
+#include <util/Colormap.h>
 
 #include <memory>
 

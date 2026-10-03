@@ -35,7 +35,7 @@
 #include "FramebufferModel.h"
 #include "ToneMapping.h"
 #include <model/ExrInput.h>
-#include <util/ColormapModule.h>
+#include <util/Colormap.h>
 
 #include <memory>
 #include <array>

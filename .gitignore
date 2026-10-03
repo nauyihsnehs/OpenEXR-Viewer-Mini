@@ -1,4 +1,7 @@
 build/
+# Local dependency checkouts and reference material survive build cleanup.
+/dependencies/
+/local/
 CMakeUserPresets.json
 CMakeLists.txt.user
 .vscode
