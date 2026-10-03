@@ -113,7 +113,7 @@ namespace
 }   // namespace
 
 
-LayerModel::LayerModel(Imf::MultiPartInputFile& file, QObject* parent)
+LayerModel::LayerModel(const ExrInput& file, QObject* parent)
   : QAbstractItemModel(parent)
   , m_rootItem(new LayerItem(file))
   , m_fileHandle(file)

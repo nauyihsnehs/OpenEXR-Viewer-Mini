@@ -32,6 +32,8 @@
 
 #pragma once
 
+#include <model/ExrInput.h>
+
 #include <QAbstractItemModel>
 
 #include <memory>
@@ -55,7 +57,7 @@ class LayerModel: public QAbstractItemModel
         N_LAYER_INFO
     };
 
-    LayerModel(Imf::MultiPartInputFile& file, QObject* parent);
+    LayerModel(const ExrInput& file, QObject* parent);
 
     ~LayerModel();
 
@@ -102,5 +104,5 @@ class LayerModel: public QAbstractItemModel
     std::string m_defaultView;
     std::unique_ptr<LayerItem> m_rootItem;
 
-    Imf::MultiPartInputFile& m_fileHandle;
+    const ExrInput& m_fileHandle;
 };

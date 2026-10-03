@@ -1,4 +1,5 @@
 #include "FramebufferLoader.h"
+#include <model/RadianceInput.h>
 #include <OpenEXR/ImfEnvmapAttribute.h>
 #include <util/ResolutionLevels.h>
 #include "ToneMapping.h"
@@ -124,9 +125,9 @@ DecodeResult FramebufferLoader::decode(
   const Cancellation&                             cancel, ResolutionLevel level, const Progress& progress)
 {
     const auto file = source ? source->file : nullptr;
-    if (!file || partId < 0 || partId >= file->parts())
+    if (!source || partId < 0 || partId >= source->parts())
         throw std::runtime_error("Invalid image part.");
-    const Imf::Header& header = file->header(partId);
+    const Imf::Header& header = source->header(partId);
     if (
       names[0].empty()
       || ((layout == RGB || layout == Chroma) && (names[1].empty() || names[2].empty())))
@@ -164,6 +165,19 @@ DecodeResult FramebufferLoader::decode(
         data->completeEnvironment = w > 0 && h > 0 &&
           ((data->envmap == Imf::ENVMAP_LATLONG && w == 2 * h)
            || (data->envmap == Imf::ENVMAP_CUBE && h == 6 * w));
+    } else if (layout != Scalar
+               && (!header.hasType() || (header.type() != Imf::DEEPSCANLINE && header.type() != Imf::DEEPTILE))
+               && header.pixelAspectRatio() == 1.f
+               && header.dataWindow() == header.displayWindow()) {
+        // Infer only from the complete base image, not a crop or a mip/ripmap shape.
+        // Stereo composites start with separate metadata and do not inherit this.
+        const auto& base = header.dataWindow();
+        const int64_t w = int64_t(base.max.x) - base.min.x + 1;
+        const int64_t h = int64_t(base.max.y) - base.min.y + 1;
+        if (w > 0 && h > 0 && w == 2 * h) {
+            data->envmap = Imf::ENVMAP_LATLONG;
+            data->completeEnvironment = true;
+        }
     }
     data->width                = dimension(window.min.x, window.max.x);
     data->height               = dimension(window.min.y, window.max.y);
@@ -197,7 +211,23 @@ DecodeResult FramebufferLoader::decode(
         if (cancel->load()) return DecodeResult();
     }
     if (progress) progress->begin(LoadProgress::Decoding);
-    if (tiled) {
+    if (source->radiance) {
+        const auto rgb = source->radiance->pixels(cancel, progress);
+        if (!rgb) return {};
+        if (progress) progress->begin(LoadProgress::Processing, data->height, QObject::tr("Channels"));
+        for (int y = 0; y < data->height; ++y) {
+            if (cancel->load()) return {};
+            for (size_t c = 0; c < names.size(); ++c) {
+                if (names[c].empty()) continue;
+                const int component = names[c] == "R" ? 0 : names[c] == "G" ? 1 : 2;
+                for (int x = 0; x < data->width; ++x) {
+                    const size_t index = size_t(y) * data->width + x;
+                    channels[c].pixels[index] = (*rgb)[3 * index + component];
+                }
+            }
+            if (progress) progress->advance();
+        }
+    } else if (tiled) {
         const auto makePart = [&] {
             const std::lock_guard<std::mutex> lock(source->mutex);
             return Imf::TiledInputPart(*file, partId);

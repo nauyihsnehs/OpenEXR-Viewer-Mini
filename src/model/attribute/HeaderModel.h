@@ -32,6 +32,8 @@
 
 #pragma once
 
+#include <model/ExrInput.h>
+
 #include <QAbstractItemModel>
 
 #include <model/attribute/HeaderItem.h>
@@ -66,11 +68,11 @@
 class HeaderModel: public QAbstractItemModel
 {
   public:
-    HeaderModel(Imf::MultiPartInputFile& file, int n_parts, QObject* parent);
+    HeaderModel(const ExrInput& file, int n_parts, QObject* parent);
 
     ~HeaderModel();
 
-    void addFile(const Imf::MultiPartInputFile& file, const QString& filename);
+    void addFile(const ExrInput& file, const QString& filename);
 
     const std::vector<LayerItem*>& getLayers() const { return m_partRootLayer; }
 
@@ -363,5 +365,5 @@ class HeaderModel: public QAbstractItemModel
 
     std::vector<LayerItem*> m_partRootLayer;
 
-    Imf::MultiPartInputFile& m_fileHandle;
+    const ExrInput& m_fileHandle;
 };

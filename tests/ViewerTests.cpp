@@ -39,6 +39,7 @@
 #include <QtConcurrent/QtConcurrentRun>
 #include <QtEndian>
 #include <model/OpenEXRImage.h>
+#include <model/RadianceInput.h>
 #include <io/ImageSave.h>
 #include <model/StdIStream.h>
 #include <model/framebuffer/FramebufferLoader.h>
@@ -172,6 +173,24 @@ namespace
             output.setFrameBuffer(buffer);
             output.writePixels(2);
         }
+    }
+
+    QByteArray rgbeBytes(std::initializer_list<unsigned> values)
+    {
+        QByteArray bytes;
+        for (unsigned value : values) bytes.append(char(value));
+        return bytes;
+    }
+
+    void writeRadianceFixture(const QString& path, const QByteArray& resolution,
+                              const QByteArray& pixels, const QByteArray& fields = {},
+                              const QByteArray& magic = "#?RADIANCE")
+    {
+        QFile file(path);
+        const QByteArray bytes = magic + "\nFORMAT=32-bit_rle_rgbe\n" + fields
+          + "\n" + resolution + "\n" + pixels;
+        if (!file.open(QFile::WriteOnly) || file.write(bytes) != bytes.size())
+            throw std::runtime_error("Cannot write Radiance fixture.");
     }
 
     void writeFixture(
@@ -497,6 +516,319 @@ class ViewerTests: public QObject
 #ifdef _WIN32
         QApplication::setFont(QFont("Segoe UI", 9));
 #endif
+    }
+
+    void radianceEncodings_data()
+    {
+        QTest::addColumn<QByteArray>("resolution");
+        QTest::addColumn<QByteArray>("payload");
+        QTest::addColumn<QVector<float>>("red");
+        QTest::newRow("flat-black-and-highlights") << QByteArray("-Y 1 +X 3")
+          << rgbeBytes({200, 100, 50, 0, 128, 0, 0, 129, 128, 0, 0, 131})
+          << QVector<float>({0.f, 1.f, 4.f});
+        QTest::newRow("legacy-repeat") << QByteArray("-Y 1 +X 4")
+          << rgbeBytes({128, 0, 0, 129, 1, 1, 1, 3}) << QVector<float>(4, 1.f);
+        QTest::newRow("legacy-multibyte-repeat") << QByteArray("-Y 1 +X 258")
+          << rgbeBytes({128, 0, 0, 129, 1, 1, 1, 1, 1, 1, 1, 1}) << QVector<float>(258, 1.f);
+        QTest::newRow("legacy-zero-low-byte") << QByteArray("-Y 1 +X 257")
+          << rgbeBytes({128, 0, 0, 129, 1, 1, 1, 0, 1, 1, 1, 1}) << QVector<float>(257, 1.f);
+        const auto rle = rgbeBytes({2, 2, 0, 8, 136, 128,
+          8, 0, 0, 0, 0, 0, 0, 0, 0, 136, 0, 4, 129, 129, 129, 129, 132, 131});
+        const QVector<float> bright = {1.f, 1.f, 1.f, 1.f, 4.f, 4.f, 4.f, 4.f};
+        QTest::newRow("modern-literals-and-runs") << QByteArray("-Y 1 +X 8") << rle << bright;
+        QTest::newRow("modern-column-scan") << QByteArray("+X 1 -Y 8") << rle << bright;
+        auto twoLines = bright; twoLines += bright;
+        QTest::newRow("modern-multiple-lines") << QByteArray("-Y 2 +X 8") << (rle + rle) << twoLines;
+    }
+
+    void radianceEncodings()
+    {
+        QFETCH(QByteArray, resolution);
+        QFETCH(QByteArray, payload);
+        QFETCH(QVector<float>, red);
+        // Deliberately use an EXR suffix: content determines the decoder.
+        const QString path = fixture(QString::fromLatin1(QTest::currentDataTag()));
+        writeRadianceFixture(path, resolution, payload, {}, "#?RGBE");
+        OpenEXRImage source(path, nullptr);
+        QVERIFY(source.isRadiance()); QCOMPARE(source.parts(), 1);
+        const auto input = source.sharedEXR();
+        const auto pixels = input->radiance->pixels({});
+        QCOMPARE(pixels->size(), size_t(red.size()) * 3);
+        for (int i = 0; i < red.size(); ++i) {
+            QCOMPARE((*pixels)[size_t(i) * 3], red[i]);
+            QCOMPARE((*pixels)[size_t(i) * 3 + 1], 0.f);
+            QCOMPARE((*pixels)[size_t(i) * 3 + 2], 0.f);
+        }
+        const auto cancel = std::make_shared<std::atomic_bool>(false);
+        const auto frame = FramebufferLoader::decode(input, 0, FramebufferLoader::RGB,
+                                                      {{"R", "G", "B", ""}}, cancel).data;
+        QVERIFY(frame); QCOMPARE(frame->pixels.size(), size_t(red.size()) * 4);
+        for (int i = 0; i < red.size(); ++i) {
+            QCOMPARE(frame->pixels[size_t(i) * 4], red[i]);
+            QCOMPARE(frame->pixels[size_t(i) * 4 + 3], 1.f);
+        }
+        for (const auto* name : {"R", "G", "B"})
+            QVERIFY(source.getLayerModel()->findChannel(0, name));
+        QCOMPARE(ResolutionLevels::commonLevels(input).size(), size_t(1));
+        QVERIFY_EXCEPTION_THROWN(ResolutionLevels::query(input, 0, {1, 1}), std::runtime_error);
+    }
+
+    void radianceScanDirections_data()
+    {
+        QTest::addColumn<QByteArray>("resolution");
+        QTest::addColumn<QVector<float>>("red");
+        QTest::newRow("-Y+X") << QByteArray("-Y 3 +X 2") << QVector<float>({1,2,3,4,5,6});
+        QTest::newRow("+Y+X") << QByteArray("+Y 3 +X 2") << QVector<float>({5,6,3,4,1,2});
+        QTest::newRow("-Y-X") << QByteArray("-Y 3 -X 2") << QVector<float>({2,1,4,3,6,5});
+        QTest::newRow("+Y-X") << QByteArray("+Y 3 -X 2") << QVector<float>({6,5,4,3,2,1});
+        QTest::newRow("+X-Y") << QByteArray("+X 2 -Y 3") << QVector<float>({1,4,2,5,3,6});
+        QTest::newRow("-X-Y") << QByteArray("-X 2 -Y 3") << QVector<float>({4,1,5,2,6,3});
+        QTest::newRow("+X+Y") << QByteArray("+X 2 +Y 3") << QVector<float>({3,6,2,5,1,4});
+        QTest::newRow("-X+Y") << QByteArray("-X 2 +Y 3") << QVector<float>({6,3,5,2,4,1});
+    }
+
+    void radianceScanDirections()
+    {
+        QFETCH(QByteArray, resolution);
+        QFETCH(QVector<float>, red);
+        QByteArray payload;
+        for (unsigned i = 1; i <= 6; ++i) payload += rgbeBytes({32 * i, 0, 0, 131});
+        const QString path = m_directory.filePath(QString::fromUtf8("中文环境图.hdr"));
+        writeRadianceFixture(path, resolution, payload);
+        OpenEXRImage source(path, nullptr);
+        QCOMPARE(source.header(0).dataWindow().max, Imath::V2i(1, 2));
+        const auto pixels = source.sharedEXR()->radiance->pixels({});
+        for (int i = 0; i < red.size(); ++i) QCOMPARE((*pixels)[size_t(i) * 3], red[i]);
+    }
+
+    void radianceInvalidFilesAndCancellation()
+    {
+        const QString path = m_directory.filePath("malformed.hdr");
+        const QByteArray header("#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n");
+        const QList<QByteArray> malformed = {
+          QByteArray("#?RADIANCE\nFORMAT=32-bit_rle_xyze\n\n-Y 1 +X 1\n"),
+          QByteArray("#?RADIANCE\n\n-Y 1 +X 1\n"),
+          QByteArray("#?RADIANCE\nFORMAT=32-bit_rle_rgbe"), // Unterminated header.
+          header + "-Y 0 +X 1\n", header + "-Y 1 +Y 2\n",
+          header + "-Y 2147483647 +X 2147483647\n", header + "-Y 32768 +X 32768\n",
+          header + "-Y 1 +X 1\n" + rgbeBytes({128, 0, 0}), // Truncated pixel.
+          header + "-Y 1 +X 8\n" + rgbeBytes({2, 2, 0, 9}), // Wrong scanline length.
+          header + "-Y 1 +X 8\n" + rgbeBytes({2, 2, 0, 8, 0}), // Zero packet.
+          header + "-Y 1 +X 8\n" + rgbeBytes({2, 2, 0, 8, 137, 0}), // Run overrun.
+          header + "-Y 1 +X 8\n" + rgbeBytes({2, 2, 0, 8, 9}), // Literal overrun.
+          header + "-Y 1 +X 8\n" + rgbeBytes({2, 2, 0, 8, 8, 1, 2}), // Truncated literal.
+          header + "-Y 1 +X 1\n" + rgbeBytes({1, 1, 1, 1}), // Repeat without predecessor.
+          header + "-Y 1 +X 2\n" + rgbeBytes({128, 0, 0, 129, 1, 1, 1, 2}),
+          header + "-Y 1 +X 2\n" + rgbeBytes({128, 0, 0, 129,
+              1,1,1,0, 1,1,1,0, 1,1,1,0, 1,1,1,0, 1,1,1,1})
+        };
+        for (const auto& bytes : malformed) {
+            QFile file(path); QVERIFY(file.open(QFile::WriteOnly));
+            QCOMPARE(file.write(bytes), qint64(bytes.size())); file.close();
+            const auto read = [&] {
+                const auto input = OpenEXRImage::prepareInput(path);
+                input->radiance->pixels({});
+            };
+            QVERIFY_EXCEPTION_THROWN(read(), std::runtime_error);
+        }
+        for (const auto& field : {QByteArray("PIXASPECT=0\n"), QByteArray("PIXASPECT=1e300\nPIXASPECT=1e300\n"),
+                                 QByteArray("PRIMARIES=0 0 0 0 0 0 0 0\n")}) {
+            writeRadianceFixture(path, "-Y 1 +X 1", rgbeBytes({128, 0, 0, 129}), field);
+            QVERIFY_EXCEPTION_THROWN(OpenEXRImage::prepareInput(path), std::runtime_error);
+        }
+        writeRadianceFixture(path, "-Y 1 +X 1", rgbeBytes({128, 0, 0, 129}));
+        const auto cancel = std::make_shared<std::atomic_bool>(true);
+        QVERIFY(!OpenEXRImage::prepareInput(path, cancel));
+        const auto input = OpenEXRImage::prepareInput(path);
+        QVERIFY(!input->radiance->pixels(cancel));
+        cancel->store(false);
+        QCOMPARE(input->radiance->pixels(cancel)->front(), 1.f);
+        cancel->store(true);
+        QVERIFY(!input->radiance->pixels(cancel)); // Cached data also observes cancellation.
+    }
+
+    void radianceMetadataColorAndSourceExports()
+    {
+        const QString path = m_directory.filePath("primaries.hdr");
+        writeRadianceFixture(path, "-Y 1 +X 2",
+          rgbeBytes({128, 64, 32, 131, 128, 32, 64, 129}),
+          "EXPOSURE=4\nEXPOSURE=2\nCOLORCORR=2 3 4\nPIXASPECT=4\nPIXASPECT=0.5\n"
+          "PRIMARIES=0.68 0.32 0.265 0.69 0.15 0.06 0.3127 0.3290\n");
+        OpenEXRImage source(path, nullptr);
+        const auto input = source.sharedEXR();
+        QCOMPARE(source.header(0).pixelAspectRatio(), .5f);
+        QVERIFY(input->radiance->headerLines().contains("EXPOSURE=4"));
+        QVERIFY(input->radiance->headerLines().contains("COLORCORR=2 3 4"));
+        const auto cancel = std::make_shared<std::atomic_bool>(false);
+        const auto frame = FramebufferLoader::decode(input, 0, FramebufferLoader::RGB,
+          {{"R", "G", "B", ""}}, cancel).data;
+        QVERIFY(frame && frame->hasRawChromaticities);
+        const std::vector<float> raw = {4.f, 2.f, 1.f, 1.f, 1.f, .25f, .5f, 1.f};
+        QVERIFY(frame->sourcePixels == raw); // Stored exposure/correction are not applied again.
+        QVERIFY(frame->pixels != raw);
+        QCOMPARE(frame->envmap, -1); // Non-square pixels exclude inference.
+        const auto scalar = FramebufferLoader::decode(input, 0, FramebufferLoader::Scalar,
+          {{"R", "", "", ""}}, cancel).data;
+        QCOMPARE(scalar->pixels[0], 4.f);
+        const auto root = source.getHeaderModel()->index(0, 0);
+        for (int row = 0; row < source.getHeaderModel()->rowCount(root); ++row)
+            QVERIFY(source.getHeaderModel()->index(row, 0, root).data().toString() != "compression");
+
+        ImageSave::Source exportSource; exportSource.sourceImage = &source;
+        ImageSave::Options options; options.target = ImageSave::TargetLayeredOriginal;
+        options.format = ImageSave::FormatExr; options.pixelType = ImageSave::PixelFloat;
+        options.path = fixture("radiance-source");
+        QCOMPARE(ImageSave::save(exportSource, options).status, ImageSave::StatusSaved);
+        OpenEXRImage saved(options.path, nullptr);
+        QVERIFY(!saved.isRadiance()); QCOMPARE(saved.parts(), 1);
+        const auto output = FramebufferLoader::decode(saved.sharedEXR(), 0, FramebufferLoader::RGB,
+          {{"R", "G", "B", ""}}, cancel).data;
+        QVERIFY(output->sourcePixels == raw);
+        QVERIFY(output->pixels == frame->pixels);
+        QCOMPARE(output->pixelAspect, .5f);
+        QVERIFY(saved.header(0).channels().findChannel("R"));
+        QVERIFY(!saved.header(0).channels().findChannel("A"));
+    }
+
+    void radiancePreviewHdrRoundTripAndRefresh()
+    {
+        const QString path = m_directory.filePath("panorama.HDR");
+        QByteArray payload;
+        for (int i = 0; i < 8; ++i) payload += rgbeBytes({128, 64, 32, 131});
+        writeRadianceFixture(path, "-Y 2 +X 4", payload);
+        QMimeData mime; mime.setUrls({QUrl::fromLocalFile(path), QUrl("https://example.com/a.hdr")});
+        QCOMPARE(localImageFiles(&mime), QStringList({path}));
+        FileWidget document(path, nullptr, true);
+        QTRY_VERIFY(document.activeFramebufferModel() && document.activeFramebufferModel()->isPreviewReady());
+        auto* model = const_cast<RGBFramebufferModel*>(qobject_cast<const RGBFramebufferModel*>(document.activeFramebufferModel())); QVERIFY(model);
+        QVERIFY(model->environmentSource().available()); QVERIFY(!model->isProjected());
+        QCOMPARE(model->projectionState().type, EnvironmentProjection::LatLong);
+        const auto original = model->getRawPixels();
+        const auto scalar = FramebufferLoader::decode(document.sourceImage()->sharedEXR(), 0,
+          FramebufferLoader::Scalar, {{"R", "", "", ""}}, std::make_shared<std::atomic_bool>(false)).data;
+        QCOMPARE(scalar->envmap, -1);
+        QCOMPARE(model->getDatasetMin(), 1.);
+        QCOMPARE(model->getDatasetMax(), 4.);
+        ImageSave::Source input; input.sourceImage = document.sourceImage(); input.activeModel = model;
+        ImageSave::Options options;
+        for (auto mode : {RGBFramebufferModel::Preview_Exposure, RGBFramebufferModel::Preview_ToneMapping,
+                          RGBFramebufferModel::Preview_FalseColor, RGBFramebufferModel::Preview_HDR}) {
+            model->setPreviewMode(mode); model->setExposure(-2.);
+            QTRY_VERIFY(model->isPreviewReady());
+            QVERIFY(model->getRawPixels() == original);
+        }
+        QVERIFY(model->hdrPreview());
+        QCOMPARE(model->hdrPreview()->exposure, -2.);
+        options.path = m_directory.filePath("radiance-preview.png");
+        QCOMPARE(ImageSave::save(input, options).status, ImageSave::StatusSaved);
+        QCOMPARE(QImage(options.path).convertToFormat(QImage::Format_RGBA8888),
+                 model->getLoadedImage().convertToFormat(QImage::Format_RGBA8888));
+        options.format = ImageSave::FormatJpeg; options.path = m_directory.filePath("radiance-preview.jpg");
+        QCOMPARE(ImageSave::save(input, options).status, ImageSave::StatusSaved);
+        QCOMPARE(QImage(options.path).size(), model->getLoadedImage().size());
+        options.target = ImageSave::TargetActiveOriginal; options.format = ImageSave::FormatHdr;
+        options.path = m_directory.filePath("radiance-roundtrip.hdr");
+        QCOMPARE(ImageSave::save(input, options).status, ImageSave::StatusSaved);
+        OpenEXRImage reopened(options.path, nullptr);
+        const auto frame = FramebufferLoader::decode(reopened.sharedEXR(), 0, FramebufferLoader::RGB,
+          {{"R", "G", "B", ""}}, std::make_shared<std::atomic_bool>(false)).data;
+        QVERIFY(frame->pixels == original); // Linear export ignores display EV.
+        QVERIFY(frame->completeEnvironment);
+
+        EnvironmentProjection::State state; state.type = EnvironmentProjection::Sphere;
+        model->setProjectionState(state); QTRY_VERIFY(model->isFullPreviewReady());
+        QVERIFY(model->isProjected()); QVERIFY(model->getRawPixels() == original);
+        options.target = ImageSave::TargetProjectionConversion; options.format = ImageSave::FormatExr;
+        options.pixelType = ImageSave::PixelFloat; options.projection.type = EnvironmentProjection::Cube;
+        options.projectionSize = QSize(2, 12); options.path = fixture("radiance-cube");
+        QCOMPARE(ImageSave::save(input, options).status, ImageSave::StatusSaved);
+        OpenEXRImage cube(options.path, nullptr);
+        QCOMPARE(cube.header(0).typedAttribute<Imf::EnvmapAttribute>("envmap").value(), Imf::ENVMAP_CUBE);
+        const auto* previousSource = document.sourceImage();
+        const QImage previousImage = model->getLoadedImage();
+        QVERIFY(QFile::rename(path, path + ".old"));
+        writeRadianceFixture(path, "-Y 2 +X 4", payload.left(5));
+        dismissNextError();
+        document.refresh(); QTRY_VERIFY(!document.isRefreshInProgress());
+        QCOMPARE(document.sourceImage(), previousSource);
+        QCOMPARE(document.activeFramebufferModel(), model);
+        QCOMPARE(model->getLoadedImage(), previousImage);
+        // A subsequent valid refresh can still replace the committed source.
+        QVERIFY(QFile::remove(path));
+        for (int i = 3; i < payload.size(); i += 4) payload[i] = char(132);
+        writeRadianceFixture(path, "-Y 2 +X 4", payload);
+        document.refresh(); QTRY_VERIFY(!document.isRefreshInProgress());
+        QVERIFY(document.sourceImage() != previousSource);
+        QCOMPARE(document.activeFramebufferModel()->getRawPixels()[0], 8.f);
+    }
+
+    void inferUnmarkedExrEnvironment()
+    {
+        const auto cancel = std::make_shared<std::atomic_bool>(false);
+        for (int variant = 0; variant < 6; ++variant) {
+            const int width = variant == 1 ? 3 : 4;
+            Imf::Header header(width, 2);
+            if (variant == 2) header.displayWindow().max.x += 2;
+            if (variant == 5) header.displayWindow().max.x -= 1;
+            if (variant == 4) header.insert("envmap", Imf::EnvmapAttribute(Imf::ENVMAP_CUBE));
+            const QString path = fixture(QString("infer-%1").arg(variant));
+            const std::vector<float> pixels(size_t(width) * 2, 1.f);
+            writeFixture(path, width, 2, {{"R", pixels}, {"G", pixels}, {"B", pixels}},
+                         0, 0, variant == 3 ? 2.f : 1.f, 1, &header);
+            OpenEXRImage source(path, nullptr);
+            const auto rgb = FramebufferLoader::decode(source.sharedEXR(), 0, FramebufferLoader::RGB,
+              {{"R", "G", "B", ""}}, cancel).data;
+            QCOMPARE(rgb->envmap, variant == 0 ? int(Imf::ENVMAP_LATLONG)
+                                  : variant == 4 ? int(Imf::ENVMAP_CUBE) : -1);
+            QCOMPARE(rgb->completeEnvironment, variant == 0);
+            const auto scalar = FramebufferLoader::decode(source.sharedEXR(), 0, FramebufferLoader::Scalar,
+              {{"R", "", "", ""}}, cancel).data;
+            QCOMPARE(scalar->envmap, variant == 4 ? int(Imf::ENVMAP_CUBE) : -1);
+        }
+    }
+
+    void environmentInferenceExcludesDeepAndStereo()
+    {
+        const QString stereoPath = fixture("infer-stereo");
+        Imf::Header stereoHeader(4, 2);
+        stereoHeader.insert("multiView", Imf::StringVectorAttribute({"left", "right"}));
+        const std::vector<float> values(8, 1.f);
+        writeFixture(stereoPath, 4, 2, {{"R", values}, {"G", values}, {"B", values},
+          {"right.R", values}, {"right.G", values}, {"right.B", values}}, 0, 0, 1.f, 1, &stereoHeader);
+        OpenEXRImage stereoSource(stereoPath, nullptr);
+        RGBFramebufferModel stereo("");
+        using Input = RGBFramebufferModel::Input;
+        stereo.loadStereo(stereoSource.sharedEXR(), {{
+          Input(0, RGBFramebufferModel::Layer_RGB, {{"R", "G", "B", ""}}),
+          Input(0, RGBFramebufferModel::Layer_RGB, {{"right.R", "right.G", "right.B", ""}})}});
+        QTRY_VERIFY(stereo.isPreviewReady());
+        QVERIFY(!stereo.environmentSource().available()); QCOMPARE(stereo.rawEnvmap(), -1);
+
+        // A complete 2:1 deep image must not acquire environment metadata.
+        const QString deepPath = fixture("infer-deep");
+        Imf::Header header(4, 2); header.setType(Imf::DEEPSCANLINE); header.setVersion(1);
+        header.compression() = Imf::ZIPS_COMPRESSION;
+        for (const auto* name : {"R", "G", "B", "A", "Z"})
+            header.channels().insert(name, Imf::Channel(Imf::FLOAT));
+        std::vector<uint32_t> counts(8, 1);
+        std::vector<float> samples(8, 1.f);
+        std::vector<char*> pointers(8);
+        for (size_t i = 0; i < pointers.size(); ++i) pointers[i] = reinterpret_cast<char*>(&samples[i]);
+        Imf::DeepFrameBuffer buffer;
+        buffer.insertSampleCountSlice(Imf::Slice(Imf::UINT, reinterpret_cast<char*>(counts.data()),
+                                                 sizeof(uint32_t), 4 * sizeof(uint32_t)));
+        for (const auto* name : {"R", "G", "B", "A", "Z"})
+            buffer.insert(name, Imf::DeepSlice(Imf::FLOAT, reinterpret_cast<char*>(pointers.data()),
+                                               sizeof(char*), 4 * sizeof(char*), sizeof(float)));
+        {
+            Imf::DeepScanLineOutputFile file(deepPath.toLocal8Bit().constData(), header);
+            file.setFrameBuffer(buffer); file.writePixels(2);
+        }
+        OpenEXRImage deepSource(deepPath, nullptr);
+        const auto deep = FramebufferLoader::decode(deepSource.sharedEXR(), 0, FramebufferLoader::RGB,
+          {{"R", "G", "B", "A"}}, std::make_shared<std::atomic_bool>(false)).data;
+        QVERIFY(deep && deep->hasDeep());
+        QCOMPARE(deep->envmap, -1); QVERIFY(!deep->completeEnvironment);
     }
 
     void environmentDirectionsSeamsAndDegenerateLevels()
@@ -4426,7 +4758,7 @@ class ViewerTests: public QObject
            QUrl("https://example.com/a.exr"),
            QUrl::fromLocalFile(m_directory.path()),
            QUrl::fromLocalFile(path)});
-        QCOMPARE(localExrFiles(&mime).size(), 2);
+        QCOMPARE(localImageFiles(&mime).size(), 2);
         MainWindow window;
         window.resize(1000, 700);
         window.show();

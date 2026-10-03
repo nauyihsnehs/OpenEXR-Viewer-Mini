@@ -42,7 +42,7 @@
 #include <ImfHeader.h>
 
 LayerItem::LayerItem(
-  Imf::MultiPartInputFile& file,
+  const ExrInput& file,
   LayerItem*               pParent,
   const std::string&       leafName,
   const std::string&       originalChannelName,

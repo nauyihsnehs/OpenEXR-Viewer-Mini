@@ -35,9 +35,10 @@
 #include <cassert>
 
 #include <QFileInfo>
+#include <model/RadianceInput.h>
 
 HeaderModel::HeaderModel(
-  Imf::MultiPartInputFile& file, int n_parts, QObject* parent)
+  const ExrInput& file, int n_parts, QObject* parent)
   : QAbstractItemModel(parent)
   , m_rootItem(new HeaderItem(nullptr, {tr("Name"), tr("Value"), tr("Type")}))
   , m_fileHandle(file)
@@ -56,7 +57,7 @@ HeaderModel::~HeaderModel()
 }
 
 void HeaderModel::addFile(
-  const Imf::MultiPartInputFile& file, const QString& filename)
+  const ExrInput& file, const QString& filename)
 {
     QString rootValue = QString::number(file.parts()) + " part";
     if (file.parts() > 1) {
@@ -68,6 +69,19 @@ void HeaderModel::addFile(
       {QFileInfo(filename).fileName(), rootValue, "file"});
 
     const int nParts = file.parts();
+    if (file.radiance) {
+        new HeaderItem(fileRoot, {tr("Format"), "Radiance RGBE", "format"});
+        new HeaderItem(fileRoot, {tr("Resolution"), file.radiance->resolutionLine(), "text"});
+        for (const QString& line : file.radiance->headerLines()) {
+            const int separator = line.indexOf('=');
+            if (separator < 0)
+                new HeaderItem(fileRoot, {tr("Header"), line, "text"});
+            else
+                new HeaderItem(fileRoot, {line.left(separator).trimmed(), line.mid(separator + 1).trimmed(), "text"});
+        }
+        addItem("channels", file.header(0)["channels"], fileRoot, QString(), 0);
+        return;
+    }
 
     if (nParts > 1) {
         for (int i = 0; i < nParts; i++) {

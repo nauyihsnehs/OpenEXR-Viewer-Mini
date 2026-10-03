@@ -45,10 +45,10 @@ namespace ResolutionLevels
 
     inline Geometry query(const std::shared_ptr<ExrInput>& source, int part, ResolutionLevel level = {})
     {
-        if (!source || !source->file || part < 0 || part >= source->file->parts())
+        if (!source || part < 0 || part >= source->parts())
             throw std::runtime_error("Invalid image part.");
         const std::lock_guard<std::mutex> lock(source->mutex);
-        const auto& header = source->file->header(part);
+        const auto& header = source->header(part);
         if (header.hasType() && header.type() != Imf::SCANLINEIMAGE
             && header.type() != Imf::TILEDIMAGE && header.type() != Imf::DEEPSCANLINE)
             throw std::runtime_error("Deep Tiled image parts are not supported.");
@@ -88,7 +88,7 @@ namespace ResolutionLevels
     inline std::vector<ResolutionLevel> commonLevels(const std::shared_ptr<ExrInput>& source)
     {
         auto levels = query(source, 0).levels;
-        for (int part = 1; part < source->file->parts(); ++part)
+        for (int part = 1; part < source->parts(); ++part)
             levels = intersection(levels, query(source, part).levels);
         return levels;
     }

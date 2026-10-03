@@ -1,4 +1,5 @@
 #include "ImageSave.h"
+#include <model/RadianceInput.h>
 #include <util/ResolutionLevels.h>
 #include <limits>
 #include <util/PreviewImage.h>
@@ -268,8 +269,7 @@ namespace
       ImageSave::ChannelScope scope,
       bool                    prefixNames, ResolutionLevel level)
     {
-        Imf::MultiPartInputFile& file = image->getEXR();
-        const Imf::Header&       header     = file.header(partIndex);
+        const Imf::Header& header = image->header(partIndex);
         const auto geometry = ResolutionLevels::query(image->sharedEXR(), partIndex, level);
         const auto dataWindow = geometry.data;
         const bool tiled = geometry.tiled;
@@ -350,6 +350,16 @@ namespace
 
         if (part.channels.empty()) return part;
 
+        if (image->isRadiance()) {
+            const auto pixels = image->sharedEXR()->radiance->pixels({});
+            for (ChannelData& channel : part.channels) {
+                const int component = channel.sourceName == "R" ? 0 : channel.sourceName == "G" ? 1 : 2;
+                for (size_t i = 0; i < channel.pixels.size(); ++i)
+                    channel.pixels[i] = (*pixels)[3 * i + component];
+            }
+            return part;
+        }
+        Imf::MultiPartInputFile& file = image->getEXR();
         Imf::FrameBuffer framebuffer;
 
         for (ChannelData& channel : part.channels) {
@@ -849,15 +859,14 @@ namespace
         std::vector<PartData> parts;
         if (!image) return parts;
 
-        Imf::MultiPartInputFile& file      = image->getEXR();
-        const int                partCount = file.parts();
+        const int partCount = image->parts();
         parts.reserve(partCount);
         const bool prefix = partCount > 1 && options.multipart == ImageSave::MultipartFlatten;
         if (prefix) {
             for (int i = 0; i < partCount; ++i) {
-                if (file.header(i).type() == Imf::DEEPSCANLINE)
+                if (image->header(i).type() == Imf::DEEPSCANLINE)
                     throw std::runtime_error("Deep multipart export requires Preserve multipart.");
-                if (ViewMetadata::read(file.header(i)).present())
+                if (ViewMetadata::read(image->header(i)).present())
                     throw std::runtime_error(
                       "Flattening multiview parts is not supported. Use Preserve multipart instead.");
             }
@@ -890,7 +899,7 @@ namespace
               QString::fromLocal8Bit(e.what()));
         }
 
-        if (options.multipart == ImageSave::MultipartFlatten && image->getEXR().parts() > 1) {
+        if (options.multipart == ImageSave::MultipartFlatten && image->parts() > 1) {
             return writeFlattenedExr(parts, options);
         }
 

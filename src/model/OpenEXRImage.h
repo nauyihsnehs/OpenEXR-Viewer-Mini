@@ -55,7 +55,7 @@ class OpenEXRImage: public QObject
   public:
     OpenEXRImage(const QString& filename, QObject* parent);
     OpenEXRImage(const QString& filename, std::shared_ptr<ExrInput> input, QObject* parent);
-    static std::shared_ptr<ExrInput> prepareInput(const QString& filename);
+    static std::shared_ptr<ExrInput> prepareInput(const QString& filename, const Cancellation& cancel = {});
     OpenEXRImage(std::istream& stream, QObject* parent);
 
     ~OpenEXRImage();
@@ -63,7 +63,10 @@ class OpenEXRImage: public QObject
     HeaderModel* getHeaderModel() const { return m_headerModel.get(); }
     LayerModel*  getLayerModel() const { return m_layerModel.get(); }
 
-    Imf::MultiPartInputFile&                 getEXR() { return *m_input->file; }
+    Imf::MultiPartInputFile& getEXR();
+    int parts() const { return m_input->parts(); }
+    const Imf::Header& header(int part) const { return m_input->header(part); }
+    bool isRadiance() const { return bool(m_input->radiance); }
     std::shared_ptr<ExrInput> sharedEXR() const
     {
         return m_input;
@@ -78,7 +81,7 @@ class OpenEXRImage: public QObject
     bool    m_isStream;
 
     // Keep the declaration order aligned with the dependency order. Destruction
-    // happens in reverse: models, EXR input, stream adapter, then backing file.
+    // happens in reverse: models, source input, then its backing stream/file.
     std::shared_ptr<ExrInput> m_input = std::make_shared<ExrInput>();
     std::unique_ptr<HeaderModel>             m_headerModel;
     std::unique_ptr<LayerModel>              m_layerModel;

@@ -1234,9 +1234,9 @@ void MainWindow::on_action_Open_triggered()
 {
     const QStringList filenames = QFileDialog::getOpenFileNames(
       this,
-      tr("Open OpenEXR Images"),
+      tr("Open Images"),
       m_currentOpenedFolder,
-      tr("Images (*.exr *.EXR)"));
+      tr("OpenEXR / Radiance Images (*.exr *.EXR *.hdr *.HDR)"));
     for (const QString& filename : filenames)
         open(filename);
 }
@@ -1267,8 +1267,8 @@ void MainWindow::on_action_Save_triggered()
     bool multilevel = false;
     bool deepSource = false;
     if (guardedImage) {
-        for (int part = 0; part < guardedImage->getEXR().parts(); ++part) {
-            const auto& header = guardedImage->getEXR().header(part);
+        for (int part = 0; part < guardedImage->parts(); ++part) {
+            const auto& header = guardedImage->header(part);
             deepSource |= header.hasType() && header.type() == "deepscanline";
             if (header.hasTileDescription() && header.tileDescription().mode != Imf::ONE_LEVEL)
                 multilevel = true; // Also warn when another part restricts the document to level 0.
@@ -1563,7 +1563,7 @@ bool MainWindow::nativeEvent(
 
 void MainWindow::dropEvent(QDropEvent* event)
 {
-    const QStringList files = localExrFiles(event->mimeData());
+    const QStringList files = localImageFiles(event->mimeData());
     if (files.isEmpty()) {
         event->ignore();
         return;
@@ -1575,7 +1575,7 @@ void MainWindow::dropEvent(QDropEvent* event)
 
 void MainWindow::dragEnterEvent(QDragEnterEvent* event)
 {
-    if (!localExrFiles(event->mimeData()).isEmpty())
+    if (!localImageFiles(event->mimeData()).isEmpty())
         event->acceptProposedAction();
     else
         event->ignore();

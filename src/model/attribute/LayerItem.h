@@ -32,6 +32,8 @@
 
 #pragma once
 
+#include <model/ExrInput.h>
+
 #include <model/attribute/HeaderItem.h>
 
 #include <OpenEXR/ImfChannelListAttribute.h>
@@ -68,7 +70,7 @@ class LayerItem
     };
 
     LayerItem(
-      Imf::MultiPartInputFile& file,
+      const ExrInput& file,
       LayerItem*               pParent             = nullptr,
       const std::string&       leafName            = "",
       const std::string&       originalChannelName = "",
@@ -157,6 +159,6 @@ class LayerItem
 
     LayerType m_type;
 
-    Imf::MultiPartInputFile& m_fileHandle;
+    const ExrInput& m_fileHandle;
     Imf::PixelType           m_pixelType;
 };

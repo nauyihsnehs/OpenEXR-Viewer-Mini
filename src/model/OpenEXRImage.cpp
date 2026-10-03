@@ -32,6 +32,7 @@
 
 #include "OpenEXRImage.h"
 #include "StdIStream.h"
+#include "RadianceInput.h"
 
 #include <OpenEXR/ImfChannelList.h>
 #include <OpenEXR/ImfHeader.h>
@@ -95,7 +96,7 @@ OpenEXRImage::OpenEXRImage(const QString& filename, QObject* parent)
   : OpenEXRImage(filename, prepareInput(filename), parent)
 {}
 
-std::shared_ptr<ExrInput> OpenEXRImage::prepareInput(const QString& filename)
+std::shared_ptr<ExrInput> OpenEXRImage::prepareInput(const QString& filename, const Cancellation& cancel)
 {
     std::shared_ptr<QFile> file(new QFile(filename));
 #ifdef _WIN32
@@ -119,7 +120,7 @@ std::shared_ptr<ExrInput> OpenEXRImage::prepareInput(const QString& filename)
       _O_RDONLY | _O_BINARY);
     if (descriptor == -1) {
         CloseHandle(handle);
-        throw std::runtime_error("Cannot open EXR file handle.");
+        throw std::runtime_error("Cannot open image file handle.");
     }
     const bool opened
       = file->open(descriptor, QFile::ReadOnly, QFileDevice::AutoCloseHandle);
@@ -133,9 +134,15 @@ std::shared_ptr<ExrInput> OpenEXRImage::prepareInput(const QString& filename)
                                    .toStdString());
     }
 
-    // Synchronous I/O only, serialized by ExrInput::mutex. No event-driven Qt
+    // Synchronous I/O only, serialized by the source decoder. No event-driven Qt
     // operations: the snapshot can outlive its creator and be released by a job.
     file->moveToThread(nullptr);
+    if (cancel && cancel->load()) return {};
+    if (file->peek(2) == "#?") {
+        auto input = std::make_shared<ExrInput>();
+        input->radiance = RadianceInput::open(file, cancel);
+        return input->radiance ? input : nullptr;
+    }
     std::shared_ptr<Imf::IStream> stream(new QFileIStream(filename.toUtf8(), *file));
     std::shared_ptr<Imf::MultiPartInputFile> exrIn(
       new Imf::MultiPartInputFile(*stream),
@@ -150,13 +157,12 @@ std::shared_ptr<ExrInput> OpenEXRImage::prepareInput(const QString& filename)
 OpenEXRImage::OpenEXRImage(const QString& filename, std::shared_ptr<ExrInput> input, QObject* parent)
   : QObject(parent), m_filename(filename), m_isStream(false), m_input(std::move(input))
 {
-    if (!m_input || !m_input->file) throw std::runtime_error("No source image.");
-    auto exrIn = m_input->file;
+    if (!m_input || !m_input->parts()) throw std::runtime_error("No source image.");
     std::unique_ptr<HeaderModel> headerModel(
-      new HeaderModel(*exrIn, exrIn->parts(), nullptr));
-    std::unique_ptr<LayerModel> layerModel(new LayerModel(*exrIn, nullptr));
+      new HeaderModel(*m_input, m_input->parts(), nullptr));
+    std::unique_ptr<LayerModel> layerModel(new LayerModel(*m_input, nullptr));
 
-    headerModel->addFile(*exrIn, filename);
+    headerModel->addFile(*m_input, filename);
 
     m_headerModel = std::move(headerModel);
     m_layerModel  = std::move(layerModel);
@@ -173,16 +179,22 @@ OpenEXRImage::OpenEXRImage(std::istream& stream, QObject* parent)
       [inputStream](Imf::MultiPartInputFile* input) {
           delete input;
       });
-    std::unique_ptr<HeaderModel> headerModel(
-      new HeaderModel(*exrIn, exrIn->parts(), nullptr));
-    std::unique_ptr<LayerModel> layerModel(new LayerModel(*exrIn, nullptr));
-
-    headerModel->addFile(*exrIn, "Stream");
-
     m_input->file = std::move(exrIn);
+    std::unique_ptr<HeaderModel> headerModel(
+      new HeaderModel(*m_input, m_input->parts(), nullptr));
+    std::unique_ptr<LayerModel> layerModel(new LayerModel(*m_input, nullptr));
+
+    headerModel->addFile(*m_input, "Stream");
+
     m_headerModel = std::move(headerModel);
     m_layerModel  = std::move(layerModel);
 }
 
+
+Imf::MultiPartInputFile& OpenEXRImage::getEXR()
+{
+    if (!m_input->file) throw std::runtime_error("This source is Radiance RGBE, not OpenEXR.");
+    return *m_input->file;
+}
 
 OpenEXRImage::~OpenEXRImage() = default;

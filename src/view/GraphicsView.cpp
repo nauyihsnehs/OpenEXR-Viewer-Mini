@@ -717,21 +717,21 @@ void GraphicsView::leaveEvent(QEvent* event)
 }
 void GraphicsView::dragEnterEvent(QDragEnterEvent* event)
 {
-    if (!localExrFiles(event->mimeData()).isEmpty())
+    if (!localImageFiles(event->mimeData()).isEmpty())
         event->acceptProposedAction();
     else
         event->ignore();
 }
 void GraphicsView::dragMoveEvent(QDragMoveEvent* event)
 {
-    if (!localExrFiles(event->mimeData()).isEmpty())
+    if (!localImageFiles(event->mimeData()).isEmpty())
         event->acceptProposedAction();
     else
         event->ignore();
 }
 void GraphicsView::dropEvent(QDropEvent* event)
 {
-    const QStringList files = localExrFiles(event->mimeData());
+    const QStringList files = localImageFiles(event->mimeData());
     if (files.isEmpty()) {
         event->ignore();
         return;

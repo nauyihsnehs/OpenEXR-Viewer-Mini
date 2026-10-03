@@ -4,7 +4,7 @@
 #include <QStringList>
 #include <QUrl>
 
-inline QStringList localExrFiles(const QMimeData* mime)
+inline QStringList localImageFiles(const QMimeData* mime)
 {
     QStringList files;
     if (!mime || !mime->hasUrls()) return files;
@@ -13,7 +13,8 @@ inline QStringList localExrFiles(const QMimeData* mime)
         const QFileInfo info(url.toLocalFile());
         if (
           info.isFile()
-          && info.suffix().compare("exr", Qt::CaseInsensitive) == 0)
+          && (info.suffix().compare("exr", Qt::CaseInsensitive) == 0
+              || info.suffix().compare("hdr", Qt::CaseInsensitive) == 0))
             files.append(info.absoluteFilePath());
     }
     return files;

@@ -441,7 +441,7 @@ void ImageFileWidget::startInputOpen(bool reopen, ResolutionLevel level)
     watcher->setFuture(QtConcurrent::run(imageLoadPool(), [filename, cancel] {
         InputResult result;
         try {
-            if (!cancel->load()) result.input = OpenEXRImage::prepareInput(filename);
+            if (!cancel->load()) result.input = OpenEXRImage::prepareInput(filename, cancel);
             if (cancel->load()) result.input.reset();
         } catch (const std::exception& error) {
             result.error = QString::fromUtf8(error.what());
@@ -554,8 +554,8 @@ ResolutionLevel ImageFileWidget::requestedResolutionLevel() const
 bool ImageFileWidget::hasRipmapLevels() const
 {
     if (!m_img) return false;
-    for (int part = 0; part < m_img->getEXR().parts(); ++part) {
-        const auto& header = m_img->getEXR().header(part);
+    for (int part = 0; part < m_img->parts(); ++part) {
+        const auto& header = m_img->header(part);
         if (header.hasTileDescription() && header.tileDescription().mode == Imf::RIPMAP_LEVELS)
             return true;
     }
@@ -570,7 +570,7 @@ QString ImageFileWidget::resolutionLevelLabel(ResolutionLevel level) const
     if (index.isValid()) item = static_cast<LayerItem*>(index.internalPointer());
     if (!item) item = m_img->getLayerModel()->defaultDisplayLayer();
     if (!item) return {};
-    const auto& header = m_img->getEXR().header(item->getPart());
+    const auto& header = m_img->header(item->getPart());
     const auto window = ResolutionLevels::displayWindow(header, level);
     return tr("Level %1 — %2 × %3").arg(QString::fromStdString(level.toString()))
       .arg(int64_t(window.max.x) - window.min.x + 1)
@@ -1076,8 +1076,8 @@ ImageFileWidget::PreparedPreview ImageFileWidget::createStereoPreview(OpenEXRIma
     preview.title = tr("Anaglyph 3D — Left red / Right cyan");
     preview.pixelType = tr("Derived preview; two-eye source statistics");
     preview.compression = tr("Left: %1; Right: %2")
-      .arg(compressionDescription(source->getEXR().header(pair.eyes[0]->getPart()).compression()),
-           compressionDescription(source->getEXR().header(pair.eyes[1]->getPart()).compression()));
+      .arg(compressionDescription(source->header(pair.eyes[0]->getPart()).compression()),
+           compressionDescription(source->header(pair.eyes[1]->getPart()).compression()));
     std::unique_ptr<RGBFramebufferWidget> widget(new RGBFramebufferWidget(this));
     auto* model = new RGBFramebufferModel("", RGBFramebufferModel::Layer_RGB, widget.get());
     widget->setPreviewMode(m_rgbPreviewMode);
@@ -1103,10 +1103,14 @@ ImageFileWidget::PreparedPreview ImageFileWidget::createPreview(
     preview.key       = layerKey(item);
     preview.pixelType = pixelTypeName(item);
     const int partId  = item->getPart();
-    const Imf::Compression compression
-      = source->getEXR().header(partId).compression();
-    preview.compressionShort = compressionShortName(compression);
-    preview.compression      = compressionDescription(compression);
+    if (source->isRadiance()) {
+        preview.compressionShort = QStringLiteral("RGBE");
+        preview.compression = QStringLiteral("Radiance RGBE");
+    } else {
+        const Imf::Compression compression = source->header(partId).compression();
+        preview.compressionShort = compressionShortName(compression);
+        preview.compression = compressionDescription(compression);
+    }
 
     const auto type   = item->getType();
     const bool scalar = type == LayerItem::R || type == LayerItem::G

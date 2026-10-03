@@ -153,6 +153,9 @@ set(PROJECT_SOURCES
     # ------------------------------------------------------------------------
     # Model
     # ------------------------------------------------------------------------
+    src/model/ExrInput.cpp
+    src/model/RadianceInput.cpp
+    src/model/RadianceInput.h
     src/model/OpenEXRImage.cpp
     src/model/OpenEXRImage.h
     src/model/DeepSamples.cpp

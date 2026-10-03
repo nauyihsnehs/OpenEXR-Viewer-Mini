@@ -3,12 +3,40 @@ OpenEXR Viewer
 
 [![openexr-viewer](https://snapcraft.io/openexr-viewer/badge.svg)](https://snapcraft.io/openexr-viewer)
 
-A simple viewer for OpenEXR files with detailed metadata probing.
+A simple viewer for OpenEXR and Radiance RGBE (.hdr) files with detailed metadata probing.
 
 You can display various types of layers, automatically combines RGB,
 Luminance-Chroma and Y layers.
 
 ![Screenshot from 2021-09-11 01-58-27](https://user-images.githubusercontent.com/7930348/132928984-fd31c2c3-c66f-43c9-b63b-2f1836a09fe8.png)
+
+Radiance images
+===============
+
+Open `.hdr` files through File > Open, drag and drop, the command line, or recent
+files. Refresh uses the same background loading and snapshot rules as EXR: a
+failed refresh leaves the previous image available. Files are identified by
+content; the open/drop filters accept `.exr` and `.hdr`.
+
+The reader accepts `#?RADIANCE` / `#?RGBE`, flat RGBE, modern channel RLE and
+legacy RLE, including either scan axis and all directions. XYZE is unsupported
+and reports a load error. RGBE becomes linear float RGB without gamma encoding
+or highlight clipping, with an RGB layer and R/G/B channel views. All color
+preview modes, including Windows HDR, use the existing float pipeline.
+No alpha or resolution pyramid is stored in RGBE; display alpha is 1.
+
+Attributes show the original Radiance header fields and scan resolution.
+Valid `PRIMARIES` use the viewer's existing chromaticity transform; absent
+primaries follow the viewer's linear sRGB convention. Raw readouts and EXR
+exports retain source values. Stored `EXPOSURE` and `COLORCORR` are descriptive
+metadata and are not applied a second time. Radiance's cumulative `PIXASPECT`
+(height/width) is inverted for display. Copy and PNG/JPEG use the current
+preview; source EXR/HDR export retains the existing raw/display-linear semantics.
+Whole-source EXR export contains one RGB part. System file associations and
+Explorer handlers are unchanged.
+
+See the [Radiance import checklist](docs/radiance-images.md) for pending runtime
+and hardware checks.
 
 Viewing controls
 ================
@@ -159,7 +187,11 @@ Viewing controls
   a source layer manually returns the menu to Default. See the
   [Beachball checklist](docs/beachball-images.md), including
   frame 6 cropping and the difference between stored zeros and missing data.
-- Complete LatLong/Cube sources with `envmap` metadata support **View > Show >
+- Explicit EXR `envmap` metadata takes precedence. Without it, complete color
+  `.exr` and `.hdr` images with square pixels and a 2:1 base resolution are
+  recognized as LatLong. Cropped/padded images, scalar layers, Deep images and
+  stereo composites are not inferred. New previews still show the original image.
+  Complete LatLong/Cube sources support **View > Show >
   Projection**: **LatLong**, **Cube**, **Pers-view**, and **Sphere**. New previews
   show the source layout; the source projection is identified separately in the
   information bar. Color layers and individual channels share projection controls.
