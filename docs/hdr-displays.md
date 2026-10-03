@@ -9,8 +9,10 @@ patches below the monitor's peak when comparing luminance ratios.
 
 - [ ] RGB=1 at 0 EV matches the current Windows SDR white level; RGB=4 is four
   times as bright when the display can reproduce both levels.
-- [ ] +1 EV doubles luminance; reset returns to 0 EV. Switching back to Exposure
-  restores the existing SDR rendering.
+- [ ] +1 EV doubles luminance; reset returns to 0 EV.
+- [ ] Repeatedly switch HDR to Exposure, Tone mapping, and False color, including
+  rapid switches in complete and minimal views. Each mode updates visibly;
+  wheel/button zoom, dragging, fit, pixel readout, and context menus keep working.
 - [ ] Changing Windows SDR content brightness changes the HDR white baseline
   within one second. The tooltip reports the detected white level, or the
   explicit 80-nit fallback if the query fails.
@@ -29,9 +31,12 @@ patches below the monitor's peak when comparing luminance ratios.
 - [ ] Clipboard and PNG/JPEG preview outputs match Exposure at the same EV;
   they exclude Windows HDR brightness. Source EXR/HDR exports remain unchanged.
 - [ ] Oversized images, GPU allocation/presentation failures, and device loss
-  fall back to SDR with a reason. Re-selecting HDR retries; unchanged failures
-  do not cause repeated device creation.
+  fall back to SDR with a reason and working zoom/pan controls. Re-selecting HDR
+  retries; unchanged failures do not cause repeated device creation.
+- [ ] Loading and error overlays remain visible above the HDR surface.
 
-The native back end uses Direct3D 11 and 16-bit floating-point scRGB output.
+The HDR swap chain uses a dedicated native child window; the Qt viewport keeps
+its own painting path for SDR and fallback. The native back end uses Direct3D 11
+and 16-bit floating-point scRGB output.
 Windows handles the display's color and luminance limits. The application does
 not change the Windows HDR setting.

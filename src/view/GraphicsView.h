@@ -39,6 +39,7 @@
 class QGraphicsRectItem;
 class QLayout;
 class HdrRenderer;
+class HdrSurface;
 class QShowEvent;
 
 class GraphicsView: public QGraphicsView
@@ -107,6 +108,7 @@ class GraphicsView: public QGraphicsView
 
   private:
     void updateCheckerboard();
+    void updateViewport();
     bool imageContains(const QPoint& position) const;
     void queryPixelAt(const QPoint& position);
     void zoomWheel(double steps, const QPoint& anchor);
@@ -117,6 +119,10 @@ class GraphicsView: public QGraphicsView
     QString _hdrStatus, _hdrDetail;
     bool _hdrPainting = false, _hdrRequested = false, _hdrProbePending = false;
 #ifdef Q_OS_WIN
+    void setHdrPainting(bool enabled);
+    void paintHdrSurface();
+    HdrSurface* _hdrSurface = nullptr;
+    ViewportUpdateMode _sdrUpdateMode = MinimalViewportUpdate;
     std::unique_ptr<HdrRenderer> _hdrRenderer;
     QTimer _hdrTimer;
     QPointer<QWidget> _hdrWindow;

@@ -5,18 +5,21 @@
 #include <QRectF>
 #include <QTransform>
 #include <QWidget>
+#include <functional>
 #include <memory>
 #include <model/framebuffer/HdrPreviewFrame.h>
 
-// Keep the viewport object (and its overlays) alive when changing display modes.
-class HdrViewport : public QWidget
+// This HWND belongs exclusively to DXGI; the parent viewport always uses Qt painting.
+class HdrSurface : public QWidget
 {
   public:
-    explicit HdrViewport(QWidget* parent) : QWidget(parent) {}
-    void setHdrPainting(bool enabled);
+    HdrSurface(QWidget* parent, std::function<void()> render);
+    void clearRenderCallback() { m_render = nullptr; }
     QPaintEngine* paintEngine() const override;
+  protected:
+    void paintEvent(QPaintEvent* event) override;
   private:
-    bool m_hdrPainting = false;
+    std::function<void()> m_render;
 };
 
 // Windows-only implementation; no DirectX declarations leak into Qt/model headers.

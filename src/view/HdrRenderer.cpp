@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <utility>
 #include <cwchar>
 #include <limits>
 #include <vector>
@@ -183,11 +184,13 @@ struct HdrRenderer::Impl {
 
     void releaseDevice()
     {
-        if (context) { context->ClearState(); context->Flush(); }
+        if (context) context->ClearState();
         for (auto& texture : textures) texture = Texture();
         checker.Reset(); markers.Reset(); checkerKey = 0;
         target.Reset(); swapChain.Reset(); rasterizer.Reset();
         constants.Reset(); pixel.Reset(); vertex.Reset();
+        // Flush after releasing the swap chain to complete deferred destruction.
+        if (context) context->Flush();
         context.Reset(); device.Reset(); size = QSize();
     }
 
@@ -330,17 +333,25 @@ struct HdrRenderer::Impl {
     }
 };
 
-void HdrViewport::setHdrPainting(bool enabled)
+HdrSurface::HdrSurface(QWidget* parent, std::function<void()> render)
+  : QWidget(parent), m_render(std::move(render))
 {
-    if (m_hdrPainting == enabled) return;
-    m_hdrPainting = enabled;
-    setAttribute(Qt::WA_PaintOnScreen, enabled);
-    setAttribute(Qt::WA_NoSystemBackground, enabled);
-    setAttribute(Qt::WA_OpaquePaintEvent, enabled);
+    setObjectName("hdrSurface");
+    setFocusPolicy(Qt::NoFocus);
+    setAttribute(Qt::WA_TransparentForMouseEvents);
+    setAttribute(Qt::WA_DontCreateNativeAncestors);
+    setAttribute(Qt::WA_NativeWindow);
+    setAttribute(Qt::WA_PaintOnScreen);
+    setAttribute(Qt::WA_NoSystemBackground);
+    setAttribute(Qt::WA_OpaquePaintEvent);
+    hide();
 }
 
-QPaintEngine* HdrViewport::paintEngine() const
-{ return m_hdrPainting ? nullptr : QWidget::paintEngine(); }
+QPaintEngine* HdrSurface::paintEngine() const
+{ return nullptr; }
+
+void HdrSurface::paintEvent(QPaintEvent*)
+{ if (m_render) m_render(); }
 
 HdrRenderer::HdrRenderer() : m_impl(new Impl) {}
 HdrRenderer::~HdrRenderer() { m_impl->releaseDevice(); }
