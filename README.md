@@ -272,14 +272,23 @@ Viewing controls
 - RGB false-color and scalar ranges accept scientific notation, including tiny
   values and the full finite FLOAT range. Auto range is unavailable without finite
   samples. A constant range maps finite values to the bottom of the color scale.
-- Each preview has a small, checkable locator button (**Mark NaN/Inf** on hover).
+- Click the **NaN/Inf indicator** in the bottom information bar to toggle position
+  markers. The same control is available in RGB, single-channel and minimal views,
+  with a 24×24 hit area. A hollow gray dot means statistics are unavailable; solid
+  gray means no anomalies; a red exclamation means NaN/Inf is present. The selected
+  button background indicates markers are enabled, independently of the dot color.
+  Hover for source counts, marker state, instructions and the color legend.
+  Source loading disables the control; ordinary preview rendering keeps it usable.
+  A loaded image without anomalies still allows the toggle.
   Isolated anomalies have 12-pixel screen circles; connected areas have outlines.
   Overlapping markers merge when zoomed out. The legend is NaN magenta, +Inf cyan,
   and -Inf yellow, in that priority order. Outlines can enclose normal pixels;
   use the pixel readout for exact values.
 - Markers have opaque strokes, independent of exposure, tone mapping, and alpha.
   The button supports keyboard focus and Space; its selected state survives
-  refresh and minimal view, and right-click reset preserves it.
+  refresh, resolution changes and minimal view, and right-click reset preserves it.
+  Ordinary and minimal views update the same model immediately; other layer
+  previews retain their own setting. Markers are off by default.
 - Preview copies and preview exports draw enabled markers after resizing so they
   remain visible. Raw exports do not include markers. Source statistics count
   channel samples, excluding synthesized components.

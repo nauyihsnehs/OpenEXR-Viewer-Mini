@@ -519,9 +519,6 @@
       </spacer>
      </item>
      <item>
-      <widget class="AnomalyMarkerButton" name="anomalyMarkerButton"/>
-     </item>
-     <item>
       <widget class="QPushButton" name="zoomButton">
        <property name="sizePolicy">
         <sizepolicy hsizetype="Maximum" vsizetype="Fixed">
@@ -634,11 +631,6 @@
    <class>PixelReadoutLabel</class>
    <extends>QLabel</extends>
    <header>view/PixelReadoutLabel.h</header>
-  </customwidget>
-  <customwidget>
-   <class>AnomalyMarkerButton</class>
-   <extends>QToolButton</extends>
-   <header>view/AnomalyMarkerButton.h</header>
   </customwidget>
   <customwidget>
    <class>GraphicsView</class>

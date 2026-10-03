@@ -107,9 +107,6 @@ RGBFramebufferWidget::RGBFramebufferWidget(QWidget* parent)
     ui->horizontalLayout_2->insertWidget(3, m_nonFiniteIndicator, 0, Qt::AlignVCenter);
     connect(ui->graphicsView, &GraphicsView::hdrStatusChanged,
             this, &RGBFramebufferWidget::updateFramebufferSummary);
-    connect(ui->anomalyMarkerButton, &QToolButton::toggled, this, [this](bool enabled) {
-        if (m_model) m_model->setHighlightNonFinite(enabled);
-    });
     ui->horizontalLayout->addWidget(new ProjectionControls(this));
     ui->horizontalLayout->insertWidget(0, new ResolutionLevelWidget(this));
     wrapPreviewControls(ui->verticalLayout);
@@ -230,6 +227,7 @@ void RGBFramebufferWidget::adoptPreparedModel(RGBFramebufferModel* model, const 
     Q_ASSERT(model && model->isPreviewReady());
     if (m_model) disconnect(m_model, nullptr, this, nullptr);
     // Apply the prepared controls without writing parameters back into either model.
+    m_nonFiniteIndicator->setModel(nullptr);
     m_model = nullptr;
     restorePreviewState(state);
     bindModel(model, false);
@@ -238,12 +236,14 @@ void RGBFramebufferWidget::adoptPreparedModel(RGBFramebufferModel* model, const 
 void RGBFramebufferWidget::bindModel(RGBFramebufferModel* model, bool initialize)
 {
     if (m_model) disconnect(m_model, nullptr, this, nullptr);
+    const bool markers = m_nonFiniteIndicator->isChecked();
+    m_nonFiniteIndicator->setModel(nullptr);
     m_model = model;
+    if (initialize) m_model->setHighlightNonFinite(markers);
     m_nonFiniteIndicator->setModel(model);
     ui->pixelValueLabel->setModel(model);
     findChild<DepthRangeWidget*>()->setModel(model);
     findChild<ProjectionControls*>()->setModel(model);
-    if (initialize) m_model->setHighlightNonFinite(ui->anomalyMarkerButton->isChecked());
     if (m_model && m_model->parent() != this) m_model->setParent(this);
     if (initialize) {
         m_model->setExposure(ui->sbExposure->value());
@@ -979,7 +979,6 @@ void RGBFramebufferWidget::updateFramebufferSummary()
     ui->framebufferSummaryLabel->setText(summary);
     ui->framebufferSummaryLabel->setToolTip(detail);
     const bool loaded = m_model && m_model->isImageLoaded();
-    ui->anomalyMarkerButton->setEnabled(loaded);
     ui->falseColorAutoButton->setEnabled(loaded && m_model->hasFiniteLuminanceSamples());
 }
 
@@ -1010,7 +1009,8 @@ PreviewState RGBFramebufferWidget::previewState() const
     state.savedMaximum = m_savedFalseColorMax;
     state.automatic    = m_falseColorAutoRange;
     state.scaleVisible = ui->cbFalseColorScale->isChecked();
-    state.highlightNonFinite = ui->anomalyMarkerButton->isChecked();
+    state.highlightNonFinite = m_model ? m_model->highlightNonFinite()
+                                      : m_nonFiniteIndicator->isChecked();
     return state;
 }
 
@@ -1020,7 +1020,8 @@ void RGBFramebufferWidget::restorePreviewState(const PreviewState& state)
         m_model->setDepthRange(state.depth);
         m_model->setProjectionState(state.projection);
     }
-    ui->anomalyMarkerButton->setChecked(state.highlightNonFinite);
+    if (m_model) m_model->setHighlightNonFinite(state.highlightNonFinite);
+    else m_nonFiniteIndicator->setChecked(state.highlightNonFinite);
     setPreviewMode(static_cast<RGBFramebufferModel::PreviewMode>(state.mode));
     ui->sbExposure->setValue(state.exposure);
     ui->cbToneMappingMethod->setCurrentIndex(state.toneMethod);

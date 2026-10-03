@@ -147,8 +147,6 @@ set(PROJECT_SOURCES
     src/view/DepthRangeWidget.cpp
     src/view/DepthRangeWidget.h
     src/view/ScientificDoubleSpinBox.h
-    src/view/AnomalyMarkerButton.h
-    src/view/AnomalyMarkerButton.cpp
 
     # ------------------------------------------------------------------------
     # Model

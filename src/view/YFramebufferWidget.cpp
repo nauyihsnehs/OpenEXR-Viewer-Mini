@@ -71,9 +71,6 @@ YFramebufferWidget::YFramebufferWidget(QWidget* parent)
     m_nonFiniteIndicator = new NonFiniteIndicator(this);
     ui->horizontalLayout_3->insertWidget(3, m_nonFiniteIndicator, 0, Qt::AlignVCenter);
     setRange(0., 1.);
-    connect(ui->anomalyMarkerButton, &QToolButton::toggled, this, [this](bool enabled) {
-        if (m_model) m_model->setHighlightNonFinite(enabled);
-    });
     ui->horizontalLayout->addWidget(new ProjectionControls(this));
     ui->horizontalLayout->insertWidget(0, new ResolutionLevelWidget(this));
     wrapPreviewControls(ui->verticalLayout);
@@ -129,6 +126,7 @@ void YFramebufferWidget::adoptPreparedModel(YFramebufferModel* model, const Prev
     Q_ASSERT(model && model->isPreviewReady());
     if (m_model) disconnect(m_model, nullptr, this, nullptr);
     // Apply the prepared controls without writing parameters back into either model.
+    m_nonFiniteIndicator->setModel(nullptr);
     m_model = nullptr;
     restorePreviewState(state);
     bindModel(model, false);
@@ -137,12 +135,14 @@ void YFramebufferWidget::adoptPreparedModel(YFramebufferModel* model, const Prev
 void YFramebufferWidget::bindModel(YFramebufferModel* model, bool initialize)
 {
     if (m_model) disconnect(m_model, nullptr, this, nullptr);
+    const bool markers = m_nonFiniteIndicator->isChecked();
+    m_nonFiniteIndicator->setModel(nullptr);
     m_model = model;
+    if (initialize) m_model->setHighlightNonFinite(markers);
     m_nonFiniteIndicator->setModel(model);
     ui->selectInfoLabel->setModel(model);
     findChild<DepthRangeWidget*>()->setModel(model);
     findChild<ProjectionControls*>()->setModel(model);
-    if (initialize) m_model->setHighlightNonFinite(ui->anomalyMarkerButton->isChecked());
     if (m_model && m_model->parent() != this) m_model->setParent(this);
     ui->graphicsView->setModel(model);
     connect(model, &FramebufferModel::imageChanged, this, [this] {
@@ -259,7 +259,6 @@ void YFramebufferWidget::updateFramebufferSummary()
     ui->framebufferSummaryLabel->setText(framebufferSummaryText(m_model));
     ui->framebufferSummaryLabel->setToolTip(framebufferSummaryToolTip(m_model));
     const bool loaded = m_model && m_model->isImageLoaded();
-    ui->anomalyMarkerButton->setEnabled(loaded);
     ui->buttonAuto->setEnabled(loaded && m_model->hasFiniteDisplay());
 }
 
@@ -295,7 +294,8 @@ PreviewState YFramebufferWidget::previewState() const
     state.maximum      = ui->sbMaxValue->value();
     state.automatic    = m_autoRange;
     state.scaleVisible = ui->cbScale->isChecked();
-    state.highlightNonFinite = ui->anomalyMarkerButton->isChecked();
+    state.highlightNonFinite = m_model ? m_model->highlightNonFinite()
+                                      : m_nonFiniteIndicator->isChecked();
     return state;
 }
 void YFramebufferWidget::restorePreviewState(const PreviewState& state)
@@ -304,7 +304,8 @@ void YFramebufferWidget::restorePreviewState(const PreviewState& state)
         m_model->setDepthRange(state.depth);
         m_model->setProjectionState(state.projection);
     }
-    ui->anomalyMarkerButton->setChecked(state.highlightNonFinite);
+    if (m_model) m_model->setHighlightNonFinite(state.highlightNonFinite);
+    else m_nonFiniteIndicator->setChecked(state.highlightNonFinite);
     ui->cbColormap->setCurrentIndex(state.colormap);
     ui->cbScale->setChecked(state.scaleVisible);
     m_autoRange = state.automatic && (!m_model || m_model->hasDeepSamples() || m_model->hasFiniteDisplay());

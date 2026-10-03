@@ -25,7 +25,7 @@ MinimalImageWidget::MinimalImageWidget(QWidget* parent) : QWidget(parent)
     items->addWidget(m_view, 1);
     m_footer = new QWidget(this);
     m_footer->setObjectName("minimalImageFooter");
-    m_footer->setFixedHeight(fontMetrics().height() + 12);
+    m_footer->setFixedHeight(qMax(24, fontMetrics().height() + 12));
     m_footer->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     m_cropIndicator = new CropIndicator(m_footer);
     m_nonFiniteIndicator = new NonFiniteIndicator(m_footer);
@@ -66,10 +66,11 @@ void MinimalImageWidget::setSummary(const QString& text, const FramebufferModel*
                                    const QString& detail)
 {
     m_cropIndicator->setModel(model);
-    m_nonFiniteIndicator->setModel(model);
+    // The preview owns a mutable model; both views edit its markers and depth range.
+    auto* mutableModel = const_cast<FramebufferModel*>(model);
+    m_nonFiniteIndicator->setModel(mutableModel);
     m_pixelLabel->setModel(model);
-    // The preview owns a mutable model; the minimal window edits the same range.
-    m_depthRange->setModel(const_cast<FramebufferModel*>(model));
+    m_depthRange->setModel(mutableModel);
     m_projection->setModel(model);
     m_summary = text;
     m_summaryDetail = detail.isEmpty() ? text : detail;
@@ -90,7 +91,7 @@ void MinimalImageWidget::updateSummary()
     const QString detail = status.isEmpty() ? m_summaryDetail
       : m_summaryDetail + "\n" + status + "\n" + m_view->hdrStatusDetail();
     m_summaryLabel->setToolTip(detail);
-    const int rowHeight = fontMetrics().height() + 12;
+    const int rowHeight = qMax(24, fontMetrics().height() + 12);
     int top = rowHeight;
     const int depthHeight = m_depthRange->isHidden() ? 0 : m_depthRange->sizeHint().height();
     m_depthRange->setGeometry(0, top, width(), depthHeight); top += depthHeight;

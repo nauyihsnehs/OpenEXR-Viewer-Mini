@@ -1,16 +1,16 @@
 #pragma once
 
 #include <QPointer>
-#include <QWidget>
+#include <QToolButton>
 #include <model/framebuffer/FramebufferModel.h>
 
-class NonFiniteIndicator : public QWidget
+class NonFiniteIndicator : public QToolButton
 {
     Q_OBJECT
 
   public:
     explicit NonFiniteIndicator(QWidget* parent = nullptr);
-    void setModel(const FramebufferModel* model);
+    void setModel(FramebufferModel* model);
 
   protected:
     void paintEvent(QPaintEvent* event) override;
@@ -19,5 +19,5 @@ class NonFiniteIndicator : public QWidget
     void refresh();
     enum State { Unknown, Finite, NonFinite };
     State m_state = Unknown;
-    QPointer<const FramebufferModel> m_model;
+    QPointer<FramebufferModel> m_model;
 };
