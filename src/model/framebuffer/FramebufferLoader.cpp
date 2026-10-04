@@ -334,9 +334,11 @@ DecodeResult FramebufferLoader::decode(
             pixel[1] = layout == Luminance ? pixel[0] : sample(1);
             pixel[2] = layout == Luminance ? pixel[0] : sample(2);
             pixel[3] = names[3].empty() ? 1.f : sample(3);
-            if (packLuminance)
+            if (packLuminance) {
+                for (int c = 0; c < 3; ++c) data->includeLinearRgb(pixel[c]);
                 collect(ToneMapping::luminance(pixel[0], pixel[1], pixel[2]),
                         data->luminanceMin, data->luminanceMax, data->hasFiniteLuminance);
+            }
         }
         if (progress) progress->advance();
     }
@@ -452,6 +454,7 @@ DecodeResult FramebufferLoader::decode(
             return DecodeResult();
         if (progress && i && i % size_t(data->width) == 0) progress->advance();
         const float* pixel = &data->pixels[components * i];
+        for (int c = 0; c < 3; ++c) data->includeLinearRgb(pixel[c]);
         if (layout != Scalar)
             collect(
               ToneMapping::luminance(pixel[0], pixel[1], pixel[2]),

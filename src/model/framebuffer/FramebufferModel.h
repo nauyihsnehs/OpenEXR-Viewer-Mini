@@ -42,6 +42,7 @@
 #include <QRegion>
 #include <QTimer>
 #include <QElapsedTimer>
+#include <QPointF>
 #include <functional>
 #include <utility>
 #include <string>
@@ -109,6 +110,11 @@ class FramebufferModel: public QObject
     uint64_t getDatasetPositiveInfCount() const { return m_data->positiveInfCount; }
     uint64_t getDatasetNegativeInfCount() const { return m_data->negativeInfCount; }
     bool     hasFiniteSamples() const { return m_data->hasFiniteSamples; }
+    double toneClampUpperBound() const
+    {
+        return m_data->hasFiniteLinearRgb && m_data->linearRgbMaximum > 0.
+          ? m_data->linearRgbMaximum : 0.;
+    }
     bool highlightNonFinite() const { return m_highlightNonFinite; }
     const std::vector<FramebufferData::AnomalyRegion>& anomalyRegions() const
     {
@@ -128,6 +134,24 @@ class FramebufferModel: public QObject
     ResolutionLevel resolutionLevel() const { return m_data->resolutionLevel; }
     size_t resolutionLevelCount() const { return m_data->resolutionLevels.size(); }
     virtual std::string getColorInfo(int x, int y, bool compact = false) const = 0;
+    struct PixelValue {
+        enum Role { Named, Red, Green, Blue, Alpha, Luminance };
+        QString name;
+        double value = 0.;
+        Role role = Named;
+        bool available = false;
+    };
+    struct PixelReadout {
+        struct Group {
+            QString label;
+            std::vector<PixelValue> values;
+        };
+        bool valid = false;
+        bool interpolated = false;
+        QPointF position;
+        std::vector<Group> groups;
+    };
+    PixelReadout pixelReadout(int x, int y) const;
     virtual std::vector<std::string> rawChannelNames() const          = 0;
     virtual std::vector<int> rawChannelComponents() const
     {

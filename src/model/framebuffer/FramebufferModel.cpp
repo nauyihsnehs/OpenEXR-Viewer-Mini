@@ -39,8 +39,10 @@
 #include <exception>
 #include <algorithm>
 #include <sstream>
+#include <limits>
 #include "DeepPreview.h"
 #include "PixelDiagnostics.h"
+#include "ToneMapping.h"
 
 EnvironmentProjection::State FramebufferModel::projectionState() const
 { return EnvironmentProjection::resolve(m_committedProjection, *m_data); }
@@ -190,10 +192,107 @@ std::string FramebufferModel::projectedColorInfo(int x, int y, bool compact) con
         return text.str();
     }
     text << "Level " << resolutionLevel().toString() << " | Source sample ("
-         << std::setprecision(9) << position.x() << ", " << position.y() << ") | Interpolated linear";
+         << std::setprecision(std::numeric_limits<double>::max_digits10) << position.x() << ", " << position.y() << ") | Interpolated linear";
     for (size_t c = 0; c < names.size(); ++c)
         text << " " << names[c] << ": " << PixelDiagnostics::sampleText(m_projected->pixels[p * rawPixelStride() + c]);
+    if (rawPixelStride() == 4) {
+        const float* pixel = &m_projected->pixels[4 * p];
+        text << " | Luminance: " << std::setprecision(std::numeric_limits<double>::max_digits10)
+             << ToneMapping::luminance(pixel[0], pixel[1], pixel[2]);
+    }
     return text.str();
+}
+
+namespace {
+    FramebufferModel::PixelReadout::Group readoutGroup(
+      const std::vector<std::string>& names, const std::vector<int>& components,
+      const float* raw, const float* display, bool color)
+    {
+        using Value = FramebufferModel::PixelValue;
+        FramebufferModel::PixelReadout::Group group;
+        bool red = false, green = false, blue = false, ry = false, by = false;
+        for (const auto& name : names) {
+            const auto label = PixelDiagnostics::compactChannelName(name);
+            red = red || label == "R"; green = green || label == "G"; blue = blue || label == "B";
+            ry = ry || label == "RY"; by = by || label == "BY";
+        }
+        const bool rgb = color && red && green && blue;
+        for (size_t c = 0; c < names.size(); ++c) {
+            Value value;
+            const auto label = PixelDiagnostics::compactChannelName(names[c]);
+            value.name = QString::fromStdString(label);
+            if (rgb && label == "R") value.role = Value::Red;
+            else if (rgb && label == "G") value.role = Value::Green;
+            else if (rgb && label == "B") value.role = Value::Blue;
+            else if (label == "A") value.role = Value::Alpha;
+            value.available = raw != nullptr;
+            if (raw) value.value = raw[components[c]];
+            group.values.push_back(value);
+        }
+        if (color && (rgb || (ry && by))) {
+            Value value;
+            value.name = QStringLiteral("Lum");
+            value.role = Value::Luminance;
+            value.available = display != nullptr;
+            if (display) value.value = ToneMapping::luminance(display[0], display[1], display[2]);
+            group.values.push_back(value);
+        }
+        return group;
+    }
+}
+
+FramebufferModel::PixelReadout FramebufferModel::pixelReadout(int x, int y) const
+{
+    PixelReadout result;
+    if (!isImageLoaded() || !isPreviewReady() || x < 0 || y < 0) return result;
+    const int stride = rawPixelStride();
+    if (m_projected) {
+        if (x >= m_projected->width || y >= m_projected->height) return result;
+        const size_t p = size_t(y) * m_projected->width + x;
+        if (!m_projected->covers(p) || !EnvironmentProjection::sourcePosition(*m_data, projectionState(),
+            QSize(m_projected->width, m_projected->height), x, y, result.position)) return result;
+        const auto names = stride == 1 ? rawChannelNames() : std::vector<std::string>{"R", "G", "B", "A"};
+        const auto components = stride == 1 ? std::vector<int>{0} : std::vector<int>{0, 1, 2, 3};
+        const float* pixel = &m_projected->pixels[p * stride];
+        result.groups.push_back(readoutGroup(names, components, pixel, pixel, stride == 4));
+        result.interpolated = result.valid = true;
+        return result;
+    }
+    if (x >= width() || y >= height()) return result;
+    const QPoint position = getDataWindow().topLeft() + QPoint(x, y);
+    result.position = position;
+    if (isDerivedPreview()) {
+        if (!pixelCoverage().contains(QPoint(x, y))) return result;
+        for (size_t i = 0; i < 2; ++i) {
+            const auto& eye = *m_data->stereo[i];
+            std::vector<std::string> names;
+            std::vector<int> components;
+            for (int c = 0; c < 4; ++c) {
+                if (m_data->stereoChannels[i][c].empty()) continue;
+                names.push_back(m_data->stereoChannels[i][c]);
+                components.push_back(c);
+            }
+            const QPoint local = position - eye.dataWindow.topLeft();
+            const size_t p = eye.dataWindow.contains(position) ? size_t(local.y()) * eye.width + local.x() : 0;
+            const bool covered = eye.dataWindow.contains(position) && eye.covers(p);
+            const auto& raw = eye.deep || eye.sourcePixels.empty() ? eye.pixels : eye.sourcePixels;
+            auto group = readoutGroup(names, components, covered ? &raw[4 * p] : nullptr,
+                                      covered ? &eye.pixels[4 * p] : nullptr, true);
+            group.label = i == 0 ? tr("L") : tr("R");
+            if (eye.deep) group.label += tr(" Comp");
+            result.groups.push_back(std::move(group));
+        }
+    } else {
+        const size_t p = size_t(y) * width() + x;
+        const bool covered = m_data->covers(p);
+        const auto& raw = m_data->deep ? getDisplayPixels() : getRawPixels();
+        auto group = readoutGroup(rawChannelNames(), rawChannelComponents(), covered ? &raw[stride * p] : nullptr,
+                                  covered ? &m_data->pixels[stride * p] : nullptr, stride == 4);
+        if (m_data->deep) group.label = stride == 1 && m_data->deepChannels[0] == "Z" ? tr("Nearest") : tr("Comp");
+        result.groups.push_back(std::move(group));
+    }
+    result.valid = true;
+    return result;
 }
 
 DepthBounds FramebufferModel::depthBounds() const { return DeepPreview::bounds(*m_data); }

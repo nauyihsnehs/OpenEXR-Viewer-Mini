@@ -7,9 +7,11 @@
 #include "ProjectionControls.h"
 #include "ResolutionLevelWidget.h"
 #include "PixelReadoutLabel.h"
+#include "FramebufferInfo.h"
 
 #include <QLabel>
 #include <QFontMetrics>
+#include <QTimer>
 #include <QVBoxLayout>
 
 MinimalImageWidget::MinimalImageWidget(QWidget* parent) : QWidget(parent)
@@ -29,9 +31,10 @@ MinimalImageWidget::MinimalImageWidget(QWidget* parent) : QWidget(parent)
     m_footer->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     m_cropIndicator = new CropIndicator(m_footer);
     m_nonFiniteIndicator = new NonFiniteIndicator(m_footer);
-    m_summaryLabel = new QLabel(m_footer);
+    m_summaryLabel = new FramebufferSummaryLabel(m_footer);
     m_summaryLabel->setObjectName("minimalImageInfo");
     m_summaryLabel->setTextFormat(Qt::PlainText);
+    m_summaryLabel->installEventFilter(this);
     m_pixelLabel = new PixelReadoutLabel(m_footer);
     m_pixelLabel->setObjectName("minimalPixelInfo");
     m_pixelLabel->setTextFormat(Qt::PlainText);
@@ -72,7 +75,7 @@ void MinimalImageWidget::setSummary(const QString& text, const FramebufferModel*
     m_pixelLabel->setModel(model);
     m_depthRange->setModel(mutableModel);
     m_projection->setModel(model);
-    m_summary = text;
+    m_summaryModel = model;
     m_summaryDetail = detail.isEmpty() ? text : detail;
     m_summaryLabel->setToolTip(m_summaryDetail);
     updateSummary();
@@ -84,10 +87,24 @@ void MinimalImageWidget::resizeEvent(QResizeEvent* event)
     updateSummary();
 }
 
+bool MinimalImageWidget::eventFilter(QObject* watched, QEvent* event)
+{
+    if (watched == m_summaryLabel && framebufferSummaryMetricsChanged(event->type())
+        && !m_summaryUpdatePending) {
+        // Run after the label has applied the new font/style/DPI metrics.
+        m_summaryUpdatePending = true;
+        QTimer::singleShot(0, this, [this] {
+            m_summaryUpdatePending = false;
+            updateSummary();
+        });
+    }
+    return QWidget::eventFilter(watched, event);
+}
+
 void MinimalImageWidget::updateSummary()
 {
     const QString status = m_view->hdrStatusText();
-    const QString summaryText = status.isEmpty() ? m_summary : m_summary + " | " + status;
+    m_summaryLabel->setSummary(m_summaryModel, status);
     const QString detail = status.isEmpty() ? m_summaryDetail
       : m_summaryDetail + "\n" + status + "\n" + m_view->hdrStatusDetail();
     m_summaryLabel->setToolTip(detail);
@@ -100,23 +117,21 @@ void MinimalImageWidget::updateSummary()
     const int resolutionHeight = m_resolution->isHidden() ? 0 : qMax(28, m_resolution->sizeHint().height());
     m_resolution->setGeometry(8, top, qMax(0, width() - 16), resolutionHeight);
     m_footer->setFixedHeight(top + resolutionHeight);
-    const int left = m_cropIndicator->isHidden() ? 8 : 32;
+    const int left = m_cropIndicator->isHidden() ? 8 : 8 + m_cropIndicator->width() + 12;
     m_cropIndicator->move(8, (rowHeight - m_cropIndicator->height()) / 2);
     const int available = qMax(0, width() - left - 8);
-    const int indicatorSpace = available >= m_nonFiniteIndicator->width() + 6
-      ? m_nonFiniteIndicator->width() + 6 : 0;
+    const int indicatorSpace = available >= m_nonFiniteIndicator->width() + 12
+      ? m_nonFiniteIndicator->width() + 12 : 0;
     const int summary = qMin(available - indicatorSpace,
-      m_summaryLabel->fontMetrics().boundingRect(summaryText).width() + 2);
-    const int gap = qMin(8, available - summary - indicatorSpace);
+      m_summaryLabel->sizeHint().width());
+    const int gap = qMin(12, available - summary - indicatorSpace);
     const int pixels = available - summary - indicatorSpace - gap;
     m_summaryLabel->setGeometry(left, 0, summary, rowHeight);
-    m_nonFiniteIndicator->move(left + summary + 6,
+    m_nonFiniteIndicator->move(left + summary + 12,
                               (rowHeight - m_nonFiniteIndicator->height()) / 2);
     m_nonFiniteIndicator->setVisible(indicatorSpace > 0);
     m_pixelLabel->setGeometry(left + summary + indicatorSpace + gap, 0, pixels, rowHeight);
     m_summaryLabel->setVisible(summary > 0);
     m_pixelLabel->setVisible(pixels > 0);
-    m_summaryLabel->setText(m_summaryLabel->fontMetrics().elidedText(
-      summaryText, Qt::ElideRight, summary));
     m_footer->setToolTip(detail);
 }

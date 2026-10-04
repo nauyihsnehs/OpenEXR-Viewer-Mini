@@ -152,6 +152,15 @@ void GraphicsView::queueHdrProbe()
 void GraphicsView::retryHdrOutput()
 { updateHdrOutput(true); }
 
+WId GraphicsView::hdrOutputWindow()
+{
+#ifdef Q_OS_WIN
+    return _hdrSurface->winId();
+#else
+    return winId();
+#endif
+}
+
 void GraphicsView::updateHdrOutput(bool retry)
 {
     const bool requested = _model && bool(_model->hdrPreview());

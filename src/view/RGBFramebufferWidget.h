@@ -138,7 +138,7 @@ class RGBFramebufferWidget: public QWidget
     void                hideToneParams(int firstHiddenIndex);
     void                setToneParamValue(int index, double value);
     void                setToneClampRange(double min, double max);
-    void                syncToneClampRangeFromSpinBoxes();
+    void                updateToneClampBounds();
     void                resetToneParam(int index);
     void                syncToneParamsToModel();
     void                setFalseColorRange(double min, double max, bool manual);

@@ -197,7 +197,7 @@
                </widget>
               </item>
               <item>
-               <widget class="QDoubleSpinBox" name="sbToneParam0">
+               <widget class="ScientificDoubleSpinBox" name="sbToneParam0">
                 <property name="sizePolicy">
                  <sizepolicy hsizetype="Maximum" vsizetype="Fixed">
                   <horstretch>0</horstretch>
@@ -254,7 +254,7 @@
                </widget>
               </item>
               <item>
-               <widget class="QDoubleSpinBox" name="sbToneParam1">
+               <widget class="ScientificDoubleSpinBox" name="sbToneParam1">
                 <property name="sizePolicy">
                  <sizepolicy hsizetype="Maximum" vsizetype="Fixed">
                   <horstretch>0</horstretch>
@@ -548,6 +548,7 @@
    </item>
    <item>
     <layout class="QHBoxLayout" name="horizontalLayout_2" stretch="0,0,0,0,1">
+     <property name="spacing"><number>12</number></property>
      <property name="leftMargin">
       <number>9</number>
      </property>
@@ -577,7 +578,7 @@
       </widget>
      </item>
      <item>
-      <widget class="QLabel" name="framebufferSummaryLabel">
+      <widget class="FramebufferSummaryLabel" name="framebufferSummaryLabel">
        <property name="sizePolicy">
         <sizepolicy hsizetype="Maximum" vsizetype="Preferred">
          <horstretch>0</horstretch>
@@ -627,6 +628,11 @@
   </layout>
  </widget>
  <customwidgets>
+  <customwidget>
+   <class>FramebufferSummaryLabel</class>
+   <extends>QLabel</extends>
+   <header>view/FramebufferInfo.h</header>
+  </customwidget>
   <customwidget>
    <class>PixelReadoutLabel</class>
    <extends>QLabel</extends>

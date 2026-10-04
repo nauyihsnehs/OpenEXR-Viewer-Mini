@@ -26,14 +26,22 @@ class ScientificDoubleSpinBox: public QDoubleSpinBox
 
     static double sampleLimit() { return std::numeric_limits<float>::max(); }
 
+    void setScientificMode(bool enabled)
+    {
+        setProperty("scientificRange", enabled);
+        setDecimals(enabled ? 100 : 2);
+    }
+
   protected:
     QString textFromValue(double value) const override
     {
+        if (!property("scientificRange").toBool()) return QDoubleSpinBox::textFromValue(value);
         return locale().toString(value, 'g', std::numeric_limits<double>::max_digits10);
     }
 
     double valueFromText(const QString& text) const override
     {
+        if (!property("scientificRange").toBool()) return QDoubleSpinBox::valueFromText(text);
         bool valid = false;
         const double parsed = locale().toDouble(text.trimmed(), &valid);
         return valid && std::isfinite(parsed) ? parsed : value();
@@ -41,6 +49,7 @@ class ScientificDoubleSpinBox: public QDoubleSpinBox
 
     QValidator::State validate(QString& text, int& position) const override
     {
+        if (!property("scientificRange").toBool()) return QDoubleSpinBox::validate(text, position);
         QDoubleValidator validator(minimum(), maximum(), decimals());
         validator.setLocale(locale());
         validator.setNotation(QDoubleValidator::ScientificNotation);

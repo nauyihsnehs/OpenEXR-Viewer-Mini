@@ -319,7 +319,7 @@ void RGBFramebufferWidget::setSpinBoxCompact(
     const int scientificWidth = spinBox->fontMetrics()
       .boundingRect(QStringLiteral("-1.2345678901234567e-38")).width();
     spinBox->setFixedWidth(spinBox->property("scientificRange").toBool()
-      ? scientificWidth + (compact ? 16 : 36) : (compact ? 66 : 84));
+      ? scientificWidth + 36 : qMax(84, spinBox->fontMetrics().boundingRect(QStringLiteral("-20.00")).width() + 36));
     spinBox->setButtonSymbols(
       compact ? QAbstractSpinBox::NoButtons : QAbstractSpinBox::UpDownArrows);
     if (spinBox->property("compactValue") != QVariant(compact)) {
@@ -456,6 +456,12 @@ void RGBFramebufferWidget::setToneParamValue(int index, double value)
 
     if (!spinBox) return;
 
+    if (currentToneMappingMethod() == RGBFramebufferModel::Tone_Clamp && index < 2) {
+        setToneClampRange(index == 0 ? value : std::min(ui->sbToneParam0->value(), value),
+                          index == 1 ? value : ui->sbToneParam1->value());
+        return;
+    }
+
     QSlider* slider = m_toneParamControls[index].slider;
     slider->blockSignals(true);
     spinBox->blockSignals(true);
@@ -466,44 +472,60 @@ void RGBFramebufferWidget::setToneParamValue(int index, double value)
     slider->blockSignals(false);
     spinBox->blockSignals(false);
 
-    if (
-      currentToneMappingMethod() == RGBFramebufferModel::Tone_Clamp
-      && index < 2) {
-        syncToneClampRangeFromSpinBoxes();
-        return;
-    }
-
     syncToneParamsToModel();
 }
 
 
 void RGBFramebufferWidget::setToneClampRange(double min, double max)
 {
+    if (!std::isfinite(min) || !std::isfinite(max)) return;
     if (min > max) std::swap(min, max);
+    const bool loaded = m_model && m_model->isImageLoaded();
+    // Preserve prepared/manual parameters until a model has published its
+    // statistics. In particular, refresh restores controls before rebinding.
+    const double upper = loaded ? m_model->toneClampUpperBound() : ScientificDoubleSpinBox::sampleLimit();
+    max = std::max(0., std::min(max, upper));
+    min = std::max(0., std::min(min, max));
 
     const QSignalBlocker blocker_sbToneParam0(ui->sbToneParam0);
     const QSignalBlocker blocker_sbToneParam1(ui->sbToneParam1);
-    const QSignalBlocker blocker_slToneParam0(ui->slToneParam0);
-    const QSignalBlocker blocker_slToneParam1(ui->slToneParam1);
     const QSignalBlocker blocker_toneClampRangeSlider(ui->toneClampRangeSlider);
 
-    ui->sbToneParam0->setMinimum(0.);
-    ui->sbToneParam0->setMaximum(max);
-    ui->sbToneParam1->setMinimum(min);
-    ui->sbToneParam1->setMaximum(64.);
+    ui->sbToneParam0->setRange(0., max);
+    ui->sbToneParam1->setRange(min, upper);
     ui->sbToneParam0->setValue(min);
     ui->sbToneParam1->setValue(max);
-    ui->slToneParam0->setValue(toneSliderFromValue(min));
-    ui->slToneParam1->setValue(toneSliderFromValue(max));
+    ui->toneClampRangeSlider->setBounds(0., upper);
     ui->toneClampRangeSlider->setRange(min, max);
-
-
+    ui->toneClampRangeSlider->setEnabled(loaded && upper > 0.);
+    ui->sbToneParam0->setEnabled(loaded && upper > 0.);
+    ui->sbToneParam1->setEnabled(loaded && upper > 0.);
     syncToneParamsToModel();
 }
 
-
-void RGBFramebufferWidget::syncToneClampRangeFromSpinBoxes()
+void RGBFramebufferWidget::updateToneClampBounds()
 {
+    if (currentToneMappingMethod() != RGBFramebufferModel::Tone_Clamp) return;
+    if (!m_model || !m_model->isImageLoaded()) {
+        m_toneParamDefaults[0] = 0.;
+        m_toneParamDefaults[1] = 1.;
+        ui->toneClampRangeSlider->setEnabled(false);
+        ui->sbToneParam0->setEnabled(false);
+        ui->sbToneParam1->setEnabled(false);
+        return;
+    }
+    const double upper = m_model->toneClampUpperBound();
+    m_toneParamDefaults[0] = 0.;
+    m_toneParamDefaults[1] = std::min(1., upper);
+    const double step = upper > 0. ? std::min(0.01, upper / 100.) : 0.01;
+    ui->sbToneParam0->setSingleStep(step);
+    ui->sbToneParam1->setSingleStep(step);
+    const QString explanation = tr("Clamp white point: limited to the maximum finite display-linear RGB value (%1).\n"
+                                   "Excludes alpha, NaN and Inf. Source Max can differ after color conversion or Deep composition.")
+      .arg(QString::number(upper, 'g', 17));
+    ui->sbToneParam0->setToolTip(explanation);
+    ui->sbToneParam1->setToolTip(explanation);
+    ui->toneParamButton1->setToolTip(tr("Max\nClick to reset to %1.").arg(QString::number(m_toneParamDefaults[1], 'g', 17)));
     setToneClampRange(ui->sbToneParam0->value(), ui->sbToneParam1->value());
 }
 
@@ -602,6 +624,16 @@ void RGBFramebufferWidget::syncFalseColorRangeToModel()
 
 void RGBFramebufferWidget::updateToneMappingControls()
 {
+    const bool clamp = currentToneMappingMethod() == RGBFramebufferModel::Tone_Clamp;
+    {
+        const QSignalBlocker blocker0(ui->sbToneParam0);
+        const QSignalBlocker blocker1(ui->sbToneParam1);
+        ui->sbToneParam0->setScientificMode(clamp);
+        ui->sbToneParam1->setScientificMode(clamp);
+    }
+    for (int i = 0; i < s_toneParamCount; ++i) m_toneParamControls[i].spinBox->setEnabled(true);
+    setSpinBoxCompact(ui->sbToneParam0, ui->sbToneParam0->property("compactValue").toBool());
+    setSpinBoxCompact(ui->sbToneParam1, ui->sbToneParam1->property("compactValue").toBool());
     const QString detail = ui->cbToneMappingMethod->currentData(Qt::ToolTipRole).toString();
     ui->cbToneMappingMethod->setToolTip(detail.isEmpty()
       ? ui->cbToneMappingMethod->currentText() : detail);
@@ -642,14 +674,23 @@ void RGBFramebufferWidget::updateToneMappingControls()
             break;
 
         case RGBFramebufferModel::Tone_Clamp:
-            configureToneParam(0, tr("Min"), 0.00, 64.00, 0.01, 0.00);
-            configureToneParam(1, tr("Max"), 0.00, 64.00, 0.01, 1.00);
+            for (int i = 0; i < 2; ++i) {
+                auto& controls = m_toneParamControls[i];
+                const QString name = i == 0 ? tr("Min") : tr("Max");
+                controls.container->setVisible(true);
+                controls.button->setText(name);
+                controls.button->setAccessibleName(tr("Reset %1").arg(name));
+                controls.button->setToolTip(tr("%1\nClick to reset.").arg(name));
+                controls.spinBox->setAccessibleName(name);
+                const double upper = m_model && m_model->isImageLoaded() ? m_model->toneClampUpperBound() : 0.;
+                controls.spinBox->setSingleStep(upper > 0. ? std::min(0.01, upper / 100.) : 0.01);
+            }
             hideToneParams(2);
             ui->slToneParam0->setVisible(false);
             ui->slToneParam1->setVisible(false);
             ui->toneClampRangeWidget->setVisible(true);
-            ui->toneClampRangeSlider->setBounds(0., 64.);
             setToneClampRange(0., 1.);
+            updateToneClampBounds();
             break;
 
         case RGBFramebufferModel::Tone_Reinhard:
@@ -686,6 +727,9 @@ bool RGBFramebufferWidget::eventFilter(QObject* watched, QEvent* event)
     if (!spinBox) {
         return QWidget::eventFilter(watched, event);
     }
+
+    if (watched == spinBox && event->type() == QEvent::FontChange)
+        setSpinBoxCompact(spinBox, spinBox->property("compactValue").toBool());
 
     if (
       event->type() == QEvent::MouseButtonPress
@@ -968,15 +1012,16 @@ void RGBFramebufferWidget::updateZoomLevelText(double zoom)
 
 void RGBFramebufferWidget::updateFramebufferSummary()
 {
+    updateToneClampBounds();
     m_cropIndicator->setModel(m_model);
-    QString summary = framebufferSummaryText(m_model);
+    QString status;
     QString detail = framebufferSummaryToolTip(m_model);
     if (m_previewMode == RGBFramebufferModel::Preview_HDR) {
-        const QString status = ui->graphicsView->hdrStatusText();
-        summary += " | " + (status.isEmpty() ? tr("HDR — preparing preview") : status);
+        status = ui->graphicsView->hdrStatusText();
+        if (status.isEmpty()) status = tr("HDR — preparing preview");
         detail += "\n" + ui->graphicsView->hdrStatusDetail();
     }
-    ui->framebufferSummaryLabel->setText(summary);
+    ui->framebufferSummaryLabel->setSummary(m_model, status);
     ui->framebufferSummaryLabel->setToolTip(detail);
     const bool loaded = m_model && m_model->isImageLoaded();
     ui->falseColorAutoButton->setEnabled(loaded && m_model->hasFiniteLuminanceSamples());

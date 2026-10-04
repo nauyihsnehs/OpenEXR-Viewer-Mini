@@ -69,6 +69,19 @@ identify the actual source sample coordinates with `@ (x, y)`.
   Auto needs finite samples. Constant ranges map finite values to the lower end.
   Scalar ranges use source values directly; color false-color ranges use luminance.
 
+Clamp Min/Max accept scientific notation and stay between zero and the maximum
+finite display-linear RGB component, excluding alpha, NaN and Inf. Its default
+white point is the smaller of 1 and that maximum. Deep uses the current composite;
+stereo uses a common bound for both eyes. With no positive finite RGB values the
+range is zero and its controls are disabled. Source Max in the footer uses stored
+channel samples, so color conversion and Deep composition can give a different
+maximum from Clamp.
+
+Preview number fields keep their width when editing. Footer readouts use fixed
+columns: RGB values are red, green and blue, and finite values above 1 are bold.
+Hover for full precision and source-channel details; narrow windows clip the
+readout without wrapping it.
+
 Combined color data is shown opaque over black. Premultiplied RGB is not multiplied
 or divided by alpha again, preserving zero-alpha emission. Missing pixels remain
 transparent. Original alpha remains inspectable in the A channel and raw export.
@@ -225,9 +238,13 @@ remains available. At 0 EV, linear RGB=1 follows Windows' SDR content white leve
 if querying it fails, the baseline is 80 nits. Finite highlights above one and
 negative components remain in the float pipeline. Scalar layers keep colormaps.
 
-The status/tooltip reports HDR or SDR Exposure fallback and its reason. Moving
-between displays and changing system HDR/SDR brightness refreshes presentation.
-GPU failures fall back to SDR; select HDR again to retry. Copy and PNG/JPEG use
+The HDR menu item and toolbar icon are disabled while Windows HDR is off or the
+current display does not support HDR; their tooltip explains why. Turning HDR
+off or moving to an SDR display switches the viewer to Exposure at the same EV.
+The entry becomes available again when HDR is enabled; select it to resume HDR.
+Display availability is checked even outside HDR mode. Moving between displays
+and changing system HDR/SDR brightness refreshes presentation. GPU failures
+fall back to SDR; select HDR again to retry. Copy and PNG/JPEG use
 SDR Exposure at the same EV, independent of the Windows white level. HDR works
 in complete and minimal views; actual hardware, device-loss and mixed-DPI checks
 remain pending. The viewer does not change the system HDR setting.

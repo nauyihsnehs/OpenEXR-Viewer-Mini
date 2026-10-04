@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QWidget>
+#include <QPointer>
 
 class LoadProgressWidget;
 class DepthRangeWidget;
@@ -13,6 +14,7 @@ class PixelReadoutLabel;
 class CropIndicator;
 class NonFiniteIndicator;
 class FramebufferModel;
+class FramebufferSummaryLabel;
 
 class MinimalImageWidget : public QWidget
 {
@@ -27,6 +29,7 @@ class MinimalImageWidget : public QWidget
 
   protected:
     void resizeEvent(QResizeEvent* event) override;
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
   private:
     void updateSummary();
@@ -38,8 +41,9 @@ class MinimalImageWidget : public QWidget
     ResolutionLevelWidget* m_resolution;
     CropIndicator* m_cropIndicator;
     NonFiniteIndicator* m_nonFiniteIndicator;
-    QLabel* m_summaryLabel;
+    FramebufferSummaryLabel* m_summaryLabel;
+    QPointer<const FramebufferModel> m_summaryModel;
     PixelReadoutLabel* m_pixelLabel;
-    QString m_summary;
     QString m_summaryDetail;
+    bool m_summaryUpdatePending = false;
 };

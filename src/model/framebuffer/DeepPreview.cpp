@@ -104,6 +104,7 @@ std::shared_ptr<const FramebufferData> DeepPreview::compose(
             data->stereo[i] = compose(source->stereo[i], range, cancel, progress);
             if (!data->stereo[i] || cancel->load()) return {};
             const auto& eye = *data->stereo[i];
+            if (eye.hasFiniteLinearRgb) data->includeLinearRgb(eye.linearRgbMaximum);
             if (eye.hasFiniteLuminance) {
                 collect(eye.luminanceMin, data->luminanceMin, data->luminanceMax, data->hasFiniteLuminance);
                 collect(eye.luminanceMax, data->luminanceMin, data->luminanceMax, data->hasFiniteLuminance);
@@ -175,9 +176,11 @@ std::shared_ptr<const FramebufferData> DeepPreview::compose(
             data->pixels[p * components + c] = asFloat(sum[scalarColor ? scalarComponent : c]);
         if (data->deepScalar)
             collect(data->pixels[p], data->displayMinimum, data->displayMaximum, data->hasFiniteDisplay);
-        else
+        else {
+            for (int c = 0; c < 3; ++c) data->includeLinearRgb(data->pixels[4 * p + c]);
             collect(ToneMapping::luminance(data->pixels[4 * p], data->pixels[4 * p + 1], data->pixels[4 * p + 2]),
               data->luminanceMin, data->luminanceMax, data->hasFiniteLuminance);
+        }
     }
     if (progress) progress->advance();
     if (progress) progress->begin(LoadProgress::Processing, 0, QObject::tr("Anomaly regions"));

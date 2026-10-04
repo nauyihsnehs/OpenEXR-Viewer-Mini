@@ -1,6 +1,12 @@
 #pragma once
 
 #include <QString>
+#include <QLabel>
+#include <QEvent>
+#include <QFontMetricsF>
+#include <QPalette>
+#include <QPainter>
+#include <QtMath>
 
 #include <model/framebuffer/FramebufferModel.h>
 #include <model/framebuffer/PixelDiagnostics.h>
@@ -68,6 +74,7 @@ inline QString framebufferSummaryToolTip(const FramebufferModel* model)
     QString detail = framebufferSummaryText(model, false);
     if (model && model->isImageLoaded()) {
         detail += "\nMax: maximum finite source channel sample, before display color transforms.";
+        detail += "\nClamp uses display-linear RGB instead, excluding alpha; color conversion and Deep composition can change its maximum.";
         if (model->hasDeepSamples())
             detail += "\nDeep statistics include all stored samples, before Depth Range filtering.";
         if (model->isDerivedPreview())
@@ -75,3 +82,103 @@ inline QString framebufferSummaryToolTip(const FramebufferModel* model)
     }
     return detail;
 }
+
+inline bool framebufferSummaryMetricsChanged(QEvent::Type type)
+{
+#if QT_VERSION >= QT_VERSION_CHECK(6, 6, 0)
+    if (type == QEvent::DevicePixelRatioChange) return true;
+#endif
+    return type == QEvent::FontChange || type == QEvent::ApplicationFontChange
+           || type == QEvent::StyleChange || type == QEvent::ContentsRectChange
+           || type == QEvent::ScreenChangeInternal;
+}
+
+// Separate painted regions keep resolution, source Max and HDR status readable
+// without requiring a minimum footer width. Full information stays in the tooltip.
+class FramebufferSummaryLabel : public QLabel
+{
+  public:
+    explicit FramebufferSummaryLabel(QWidget* parent = nullptr) : QLabel(parent)
+    {
+        setMinimumWidth(0);
+        setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Preferred);
+    }
+    void setSummary(const FramebufferModel* model, const QString& status = QString())
+    {
+        QString dimensions = framebufferSummaryText(model);
+        QString maximum;
+        if (model && model->isImageLoaded() && model->isPreviewReady() && model->errorString().isEmpty()) {
+            const QSize canvas = model->isProjected() ? model->projectionCanvasSize() : model->previewDisplayWindow().size();
+            dimensions = QString("%1×%2").arg(canvas.width()).arg(canvas.height());
+            maximum = tr("Max %1").arg(model->hasFiniteSamples()
+              ? QString::fromStdString(PixelDiagnostics::compactSampleText(model->getDatasetMax())) : QString::fromUtf8("—"));
+        }
+        const bool changed = m_dimensions != dimensions || m_maximum != maximum || m_status != status;
+        m_dimensions = dimensions; m_maximum = maximum; m_status = status;
+        setToolTip(framebufferSummaryToolTip(model));
+        setAccessibleDescription(m_dimensions + " " + m_maximum + " " + m_status);
+        if (changed) { updateGeometry(); update(); }
+    }
+    QSize sizeHint() const override
+    {
+        const QFontMetricsF metrics(font(), this);
+        int width = 0;
+        for (const auto& text : {m_dimensions, m_maximum, m_status}) {
+            if (text.isEmpty()) continue;
+            if (width) width += s_regionSpacing;
+            width += regionWidth(text, metrics);
+        }
+        const QMargins margins = contentsMargins();
+        return QSize(width + margins.left() + margins.right(),
+                     qCeil(metrics.height()) + margins.top() + margins.bottom());
+    }
+    QSize minimumSizeHint() const override
+    {
+        return QSize(0, sizeHint().height());
+    }
+  protected:
+    bool event(QEvent* event) override
+    {
+        const bool handled = QLabel::event(event);
+        if (framebufferSummaryMetricsChanged(event->type())) {
+            updateGeometry();
+            update();
+        }
+        return handled;
+    }
+    void paintEvent(QPaintEvent* event) override
+    {
+        QLabel::paintEvent(event);
+        QPainter painter(this);
+        painter.setClipRect(contentsRect());
+        painter.setPen(palette().color(QPalette::WindowText));
+        painter.setFont(font());
+        const QFontMetricsF metrics(font(), this);
+        int left = contentsRect().left();
+        for (const auto& text : {m_dimensions, m_maximum, m_status}) {
+            if (text.isEmpty()) continue;
+            if (left != contentsRect().left()) left += s_regionSpacing;
+            const int available = qMax(0, contentsRect().right() + 1 - left);
+            const int naturalWidth = regionWidth(text, metrics);
+            const int width = qMin(available, naturalWidth);
+            const int textWidth = qMax(0, width - 2 * s_textPadding);
+            if (textWidth == 0) break;
+            // Integer metrics can round down below the elision engine's width.
+            // Only elide when the layout actually gave this region less space.
+            const QString displayed = width >= naturalWidth ? text
+              : metrics.elidedText(text, Qt::ElideRight, textWidth);
+            painter.drawText(QRectF(left + s_textPadding, contentsRect().top(),
+                                    textWidth, contentsRect().height()),
+              Qt::AlignLeft | Qt::AlignVCenter | Qt::TextSingleLine, displayed);
+            left += width;
+        }
+    }
+  private:
+    static constexpr int s_regionSpacing = 12;
+    static constexpr int s_textPadding = 1;
+    static int regionWidth(const QString& text, const QFontMetricsF& metrics)
+    {
+        return qCeil(metrics.horizontalAdvance(text)) + 2 * s_textPadding;
+    }
+    QString m_dimensions, m_maximum, m_status;
+};

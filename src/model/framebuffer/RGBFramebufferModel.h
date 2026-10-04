@@ -117,6 +117,7 @@ class RGBFramebufferModel: public FramebufferModel
     void updateImage();
 
   private:
+    void normalizeToneClampParameters();
     float                           component(int x, int y, int channel) const;
     std::string                     m_parentLayer;
     LayerType                       m_layerType;

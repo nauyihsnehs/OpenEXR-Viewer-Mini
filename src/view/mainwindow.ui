@@ -142,7 +142,7 @@
   <action name="action_ModeHDR">
    <property name="checkable"><bool>true</bool></property>
    <property name="text"><string>HDR</string></property>
-   <property name="toolTip"><string>Display linear floating-point color on a Windows HDR monitor. Falls back to an SDR exposure preview when HDR is unavailable.</string></property>
+   <property name="toolTip"><string>Display linear floating-point color on a Windows HDR monitor. Enable HDR in Windows Display Settings to make this mode available.</string></property>
   </action>
   <action name="action_ModeFalseColor">
    <property name="checkable">

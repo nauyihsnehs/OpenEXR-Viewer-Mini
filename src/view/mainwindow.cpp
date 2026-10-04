@@ -86,6 +86,7 @@
 #include <QScreen>
 #include <QWindow>
 #include <QMoveEvent>
+#include <QShowEvent>
 #include <QScopedValueRollback>
 #include <QUrl>
 #include <QVariant>
@@ -93,6 +94,8 @@
 #include <cmath>
 
 #ifdef _WIN32
+#    include "HdrRenderer.h"
+#    include <QAbstractNativeEventFilter>
 #    include <windows.h>
 #    include <windowsx.h>
 #endif
@@ -196,10 +199,11 @@ static QIcon titleButtonIcon(TitleButtonIcon icon, const QColor& color)
 
 
 #ifdef _WIN32
-static bool containsGlobalPoint(QWidget* widget, const QPoint& point)
+static bool containsWindowPoint(
+  QWidget* widget, const QWidget* window, const QPoint& point)
 {
     return widget && widget->isVisible()
-           && widget->rect().contains(widget->mapFromGlobal(point));
+           && widget->rect().contains(widget->mapFrom(window, point));
 }
 
 
@@ -224,6 +228,35 @@ static int scaledWindowsMetric(HWND hwnd, int value)
     const int scaledValue = MulDiv(value, dpi, 96);
 
     return scaledValue > 0 ? scaledValue : value;
+}
+
+
+static bool setWindowsResizeCursor(int hit)
+{
+    LPCTSTR cursorId = nullptr;
+    switch (hit) {
+        case HTLEFT:
+        case HTRIGHT:
+            cursorId = IDC_SIZEWE;
+            break;
+        case HTTOP:
+        case HTBOTTOM:
+            cursorId = IDC_SIZENS;
+            break;
+        case HTTOPLEFT:
+        case HTBOTTOMRIGHT:
+            cursorId = IDC_SIZENWSE;
+            break;
+        case HTTOPRIGHT:
+        case HTBOTTOMLEFT:
+            cursorId = IDC_SIZENESW;
+            break;
+        default: return false;
+    }
+    HCURSOR cursor = LoadCursor(nullptr, cursorId);
+    if (!cursor) return false;
+    SetCursor(cursor);
+    return true;
 }
 
 
@@ -258,6 +291,56 @@ static void setWindowsCornerPreference(HWND hwnd, bool rounded)
       &preference,
       sizeof(preference));
 }
+
+
+// Native child surfaces can cover the resize band. Let hit testing pass through
+// those surfaces to the main window without adding visible layout gutters.
+class WindowsWindowFrameFilter : public QAbstractNativeEventFilter
+{
+  public:
+    explicit WindowsWindowFrameFilter(MainWindow* window) : m_window(window) {}
+
+#    if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    bool nativeEventFilter(
+      const QByteArray& eventType, void* message, qintptr* result) override
+#    else
+    bool nativeEventFilter(
+      const QByteArray& eventType, void* message, long* result) override
+#    endif
+    {
+        if (eventType != "windows_generic_MSG") return false;
+        MSG* msg = static_cast<MSG*>(message);
+        const HWND hwnd = reinterpret_cast<HWND>(m_window->internalWinId());
+        if (!hwnd || GetAncestor(msg->hwnd, GA_ROOT) != hwnd) return false;
+
+        if (msg->hwnd == hwnd && msg->message == WM_STYLECHANGED
+            && msg->wParam == static_cast<WPARAM>(GWL_STYLE))
+            m_window->queueWindowsWindowStyle();
+
+        if (msg->message == WM_NCHITTEST && msg->hwnd != hwnd) {
+            const QPoint point(GET_X_LPARAM(msg->lParam), GET_Y_LPARAM(msg->lParam));
+            if (m_window->windowsResizeHitTest(point) != HTCLIENT) {
+                *result = HTTRANSPARENT;
+                return true;
+            }
+        }
+
+        if (msg->message == WM_SETCURSOR && !GetCapture()
+            && GetAncestor(reinterpret_cast<HWND>(msg->wParam), GA_ROOT) == hwnd) {
+            POINT point;
+            if (!GetCursorPos(&point)) return false;
+            const int hit = m_window->windowsResizeHitTest(QPoint(point.x, point.y));
+            if (setWindowsResizeCursor(hit)) {
+                *result = TRUE;
+                return true;
+            }
+        }
+        return false;
+    }
+
+  private:
+    MainWindow* m_window;
+};
 #endif
 
 
@@ -293,6 +376,14 @@ MainWindow::MainWindow(QWidget* parent)
     setAttribute(Qt::WA_StyledBackground, true);
     setupTitleBar();
     setupPreviewModeActions();
+    ui->action_ModeHDR->setEnabled(false);
+    ui->menu_Mode->setToolTipsVisible(true);
+#ifdef Q_OS_WIN
+    m_hdrAvailabilityProbe.reset(new HdrRenderer);
+    m_hdrAvailabilityTimer.setInterval(1000);
+    connect(&m_hdrAvailabilityTimer, &QTimer::timeout, this, &MainWindow::updateHdrAvailability);
+    m_hdrAvailabilityTimer.start();
+#endif
     setupStereoActions();
     m_projectionMenu = ui->menu_Show->addMenu(tr("Projection"));
     m_projectionMenu->setObjectName("menu_Projection");
@@ -364,6 +455,8 @@ MainWindow::MainWindow(QWidget* parent)
 
     readSettings();
 #ifdef _WIN32
+    m_windowsWindowFrameFilter.reset(new WindowsWindowFrameFilter(this));
+    qApp->installNativeEventFilter(m_windowsWindowFrameFilter.get());
     applyWindowsWindowStyle();
 #endif
     updateWindowFrame();
@@ -372,6 +465,10 @@ MainWindow::MainWindow(QWidget* parent)
 
 MainWindow::~MainWindow()
 {
+#ifdef _WIN32
+    qApp->removeNativeEventFilter(m_windowsWindowFrameFilter.get());
+    m_windowsWindowFrameFilter.reset();
+#endif
     m_minimalView = false;
     m_rebindingMinimalModel = false;
     for (const auto& connection : m_minimalConnections) disconnect(connection);
@@ -407,7 +504,7 @@ void MainWindow::setupWorkspace()
     decorate(ui->action_ModeToneMapping, ViewerIcons::ToneMapping, tr("Tone Mapping"));
     decorate(ui->action_ModeFalseColor, ViewerIcons::FalseColor, tr("False Color"));
     decorate(ui->action_ModeHDR, ViewerIcons::Hdr, tr("HDR Display"));
-    ui->action_ModeHDR->setToolTip(tr("Display linear color on a Windows HDR monitor.\nHDR must be enabled in Windows; otherwise an SDR exposure preview is shown."));
+    ui->action_ModeHDR->setToolTip(tr("Display linear color on a Windows HDR monitor.\nEnable HDR in Windows Display Settings to make this mode available."));
 #ifndef Q_OS_WIN
     ui->action_ModeHDR->setVisible(false);
 #endif
@@ -578,6 +675,41 @@ void MainWindow::applyRgbPreviewMode(RGBFramebufferModel::PreviewMode mode)
     }
 }
 
+void MainWindow::queueHdrAvailabilityProbe()
+{
+#ifdef Q_OS_WIN
+    if (!m_hdrAvailabilityProbe || m_hdrAvailabilityProbePending) return;
+    m_hdrAvailabilityProbePending = true;
+    QTimer::singleShot(0, this, [this] {
+        m_hdrAvailabilityProbePending = false;
+        updateHdrAvailability();
+    });
+#endif
+}
+
+void MainWindow::updateHdrAvailability()
+{
+#ifdef Q_OS_WIN
+    if (!m_hdrAvailabilityProbe || !isVisible() || isMinimized()) return;
+    GraphicsView* view = m_minimalView ? m_minimalPage->view()
+      : currentFileWidget() ? currentFileWidget()->activeGraphicsView() : nullptr;
+    const WId target = view && view->isVisible() ? view->hdrOutputWindow() : winId();
+    // This probe only enumerates the display. It never creates a GPU device or
+    // requires an HDR frame, so a disabled action can become available again.
+    m_hdrAvailabilityProbe->refresh(target);
+    const bool available = m_hdrAvailabilityProbe->available();
+    ui->action_ModeHDR->setEnabled(available);
+    ui->action_ModeHDR->setToolTip(available
+      ? tr("Display linear color on the current Windows HDR monitor.")
+      : tr("HDR unavailable\n%1\nEnable HDR in Windows Display Settings or move to an HDR display.")
+          .arg(m_hdrAvailabilityProbe->statusDetail()));
+    if (!available && m_rgbPreviewMode == RGBFramebufferModel::Preview_HDR)
+        applyRgbPreviewMode(RGBFramebufferModel::Preview_Exposure);
+#else
+    ui->action_ModeHDR->setEnabled(false);
+#endif
+}
+
 void MainWindow::setupStereoActions()
 {
     auto* menu = ui->menu_Show->addMenu(tr("Stereo"));
@@ -707,6 +839,8 @@ void MainWindow::updateWindowFrame()
 #ifdef _WIN32
 void MainWindow::applyWindowsWindowStyle()
 {
+    if (m_minimalView || isMaximized() || isFullScreen() || isMinimized()
+        || m_applyingWindowsWindowStyle) return;
     HWND hwnd = reinterpret_cast<HWND>(winId());
     if (!hwnd) return;
 
@@ -714,7 +848,11 @@ void MainWindow::applyWindowsWindowStyle()
     const LONG_PTR style
       = oldStyle | WS_THICKFRAME | WS_MAXIMIZEBOX | WS_MINIMIZEBOX | WS_SYSMENU;
 
-    if (style != oldStyle) SetWindowLongPtr(hwnd, GWL_STYLE, style);
+    if (style == oldStyle) return;
+    const QScopedValueRollback<bool> applying(m_applyingWindowsWindowStyle, true);
+    SetLastError(ERROR_SUCCESS);
+    if (!SetWindowLongPtr(hwnd, GWL_STYLE, style)
+        && GetLastError() != ERROR_SUCCESS) return;
 
     SetWindowPos(
       hwnd,
@@ -725,6 +863,49 @@ void MainWindow::applyWindowsWindowStyle()
       0,
       SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER
         | SWP_NOOWNERZORDER | SWP_NOACTIVATE);
+}
+
+
+void MainWindow::queueWindowsWindowStyle()
+{
+    if (!m_windowsWindowFrameFilter || m_windowsWindowStylePending
+        || m_applyingWindowsWindowStyle) return;
+    m_windowsWindowStylePending = true;
+    QTimer::singleShot(0, this, [this] {
+        m_windowsWindowStylePending = false;
+        applyWindowsWindowStyle();
+        updateWindowFrame();
+    });
+}
+
+
+int MainWindow::windowsResizeHitTest(const QPoint& nativeGlobalPos) const
+{
+    if (m_minimalView || !isVisible() || isMaximized() || isFullScreen()
+        || isMinimized())
+        return HTCLIENT;
+    const HWND hwnd = reinterpret_cast<HWND>(internalWinId());
+    RECT windowRect;
+    if (!hwnd || !GetWindowRect(hwnd, &windowRect)) return HTCLIENT;
+    const LONG x = nativeGlobalPos.x();
+    const LONG y = nativeGlobalPos.y();
+    if (x < windowRect.left || x >= windowRect.right
+        || y < windowRect.top || y >= windowRect.bottom) return HTCLIENT;
+
+    const int border = scaledWindowsMetric(hwnd, s_windowResizeBorder);
+    const bool left = x < windowRect.left + border;
+    const bool right = x >= windowRect.right - border;
+    const bool top = y < windowRect.top + border;
+    const bool bottom = y >= windowRect.bottom - border;
+    if (top && left) return HTTOPLEFT;
+    if (top && right) return HTTOPRIGHT;
+    if (bottom && left) return HTBOTTOMLEFT;
+    if (bottom && right) return HTBOTTOMRIGHT;
+    if (left) return HTLEFT;
+    if (right) return HTRIGHT;
+    if (top) return HTTOP;
+    if (bottom) return HTBOTTOM;
+    return HTCLIENT;
 }
 #endif
 
@@ -1125,6 +1306,10 @@ void MainWindow::leaveMinimalView()
         m_completeView->setFocus(Qt::OtherFocusReason);
     }
     m_completeView.clear();
+#ifdef _WIN32
+    queueWindowsWindowStyle();
+#endif
+    queueHdrAvailabilityProbe();
 }
 
 void MainWindow::resizeMinimalView(double zoom)
@@ -1370,11 +1555,25 @@ void MainWindow::closeEvent(QCloseEvent* event)
 }
 
 
+bool MainWindow::event(QEvent* event)
+{
+    const bool handled = QMainWindow::event(event);
+#ifdef _WIN32
+    if (event->type() == QEvent::WinIdChange) queueWindowsWindowStyle();
+#endif
+    return handled;
+}
+
 void MainWindow::changeEvent(QEvent* event)
 {
     QMainWindow::changeEvent(event);
+    if (event->type() == QEvent::ScreenChangeInternal || event->type() == QEvent::WindowStateChange)
+        queueHdrAvailabilityProbe();
 
     if (event->type() == QEvent::WindowStateChange) {
+#ifdef _WIN32
+        queueWindowsWindowStyle();
+#endif
         if (m_minimalView && !m_switchingMinimalView && !isMinimized()) {
             if (isMaximized() || isFullScreen()) showNormal();
             resizeMinimalView(m_minimalPage->view()->viewState().zoom);
@@ -1394,8 +1593,18 @@ void MainWindow::resizeEvent(QResizeEvent* event)
 void MainWindow::moveEvent(QMoveEvent* event)
 {
     QMainWindow::moveEvent(event);
+    queueHdrAvailabilityProbe();
     if (m_minimalView && !m_switchingMinimalView && !m_resizingMinimalView)
         resizeMinimalView(m_minimalPage->view()->viewState().zoom);
+}
+
+void MainWindow::showEvent(QShowEvent* event)
+{
+    QMainWindow::showEvent(event);
+#ifdef _WIN32
+    queueWindowsWindowStyle();
+#endif
+    queueHdrAvailabilityProbe();
 }
 
 
@@ -1461,6 +1670,8 @@ bool MainWindow::nativeEvent(
 #    endif
 {
     MSG* msg = static_cast<MSG*>(message);
+    if (msg->message == WM_DISPLAYCHANGE || msg->message == WM_SETTINGCHANGE)
+        queueHdrAvailabilityProbe();
 
     if (m_minimalView && msg->message == WM_NCHITTEST) {
         *result = HTCLIENT;
@@ -1491,72 +1702,38 @@ bool MainWindow::nativeEvent(
         return QMainWindow::nativeEvent(eventType, message, result);
     }
 
-    const QPoint globalPos(x, y);
-    const bool   onTitleButton
-      = containsGlobalPoint(m_minimizeButton, globalPos)
-        || containsGlobalPoint(m_maximizeButton, globalPos)
-        || containsGlobalPoint(m_closeButton, globalPos);
+    const int resizeHit = windowsResizeHitTest(QPoint(x, y));
+    if (resizeHit != HTCLIENT) {
+        *result = resizeHit;
+        return true;
+    }
 
+    // Native messages use physical screen coordinates. Convert to client space
+    // before applying Qt's scale, so mixed-DPI and negative screen origins work.
+    POINT clientPoint = {x, y};
+    if (!ScreenToClient(msg->hwnd, &clientPoint))
+        return QMainWindow::nativeEvent(eventType, message, result);
+    const qreal dpr = devicePixelRatioF();
+    const QPoint pos(static_cast<int>(std::floor(clientPoint.x / dpr)),
+                     static_cast<int>(std::floor(clientPoint.y / dpr)));
+    const bool onTitleButton
+      = containsWindowPoint(m_minimizeButton, this, pos)
+        || containsWindowPoint(m_maximizeButton, this, pos)
+        || containsWindowPoint(m_closeButton, this, pos);
     if (onTitleButton) {
         *result = HTCLIENT;
         return true;
     }
-
-    const int resizeBorder
-      = scaledWindowsMetric(msg->hwnd, s_windowResizeBorder);
-    const bool onLeft   = x < windowRect.left + resizeBorder;
-    const bool onRight  = x >= windowRect.right - resizeBorder;
-    const bool onTop    = y < windowRect.top + resizeBorder;
-    const bool onBottom = y >= windowRect.bottom - resizeBorder;
-
-    if (!isMaximized() && onTop && onLeft) {
-        *result = HTTOPLEFT;
-        return true;
-    }
-
-    if (!isMaximized() && onTop && onRight) {
-        *result = HTTOPRIGHT;
-        return true;
-    }
-
-    if (!isMaximized() && onBottom && onLeft) {
-        *result = HTBOTTOMLEFT;
-        return true;
-    }
-
-    if (!isMaximized() && onBottom && onRight) {
-        *result = HTBOTTOMRIGHT;
-        return true;
-    }
-
-    if (!isMaximized() && onLeft) {
-        *result = HTLEFT;
-        return true;
-    }
-
-    if (!isMaximized() && onRight) {
-        *result = HTRIGHT;
-        return true;
-    }
-
-    if (!isMaximized() && onTop) {
-        *result = HTTOP;
-        return true;
-    }
-
-    if (!isMaximized() && onBottom) {
-        *result = HTBOTTOM;
-        return true;
-    }
-
-    const QPoint pos = mapFromGlobal(globalPos);
 
     if (isTitleBarDragArea(pos)) {
         *result = HTCAPTION;
         return true;
     }
 
-    return QMainWindow::nativeEvent(eventType, message, result);
+    // The whole custom frame is client space, including maximized/fullscreen
+    // edges. Do not let DefWindowProc infer resize borders from WS_THICKFRAME.
+    *result = HTCLIENT;
+    return true;
 }
 #endif
 
@@ -1682,6 +1859,13 @@ void MainWindow::on_action_ModeToneMapping_triggered()
 
 void MainWindow::on_action_ModeHDR_triggered()
 {
+    updateHdrAvailability();
+    if (!ui->action_ModeHDR->isEnabled()) {
+        // Checkable actions toggle before triggered(), so restore the previous
+        // selection if the display changed between the last probe and the click.
+        applyRgbPreviewMode(m_rgbPreviewMode);
+        return;
+    }
     applyRgbPreviewMode(RGBFramebufferModel::Preview_HDR);
     for (auto* view : findChildren<GraphicsView*>()) view->retryHdrOutput();
 }
@@ -1713,6 +1897,7 @@ void MainWindow::on_action_Refresh_triggered()
 
 void MainWindow::onCurrentChanged(int index)
 {
+    queueHdrAvailabilityProbe();
     if (!m_switchingMinimalView) leaveMinimalView();
     if (index == -1) {
         // deactivate close and refresh functions

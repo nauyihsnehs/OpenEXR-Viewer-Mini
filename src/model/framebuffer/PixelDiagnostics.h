@@ -31,8 +31,8 @@ namespace PixelDiagnostics
         if (std::isinf(value)) return value > 0. ? "+Inf" : "-Inf";
         std::ostringstream text;
         text.imbue(std::locale::classic());
-        const bool small = value != 0. && std::abs(value) < 1.;
-        text << (small ? std::scientific : std::fixed) << std::setprecision(2) << value;
+        const bool scientific = (value != 0. && std::abs(value) < 1.) || std::abs(value) >= 1.e6;
+        text << (scientific ? std::scientific : std::fixed) << std::setprecision(2) << value;
         return text.str();
     }
 

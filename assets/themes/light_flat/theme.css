@@ -227,7 +227,7 @@ QSpinBox::up-button:disabled, QSpinBox::down-button:disabled,
 QSpinBox::up-button:off, QSpinBox::down-button:off,
 QDoubleSpinBox::up-button:disabled, QDoubleSpinBox::down-button:disabled,
 QDoubleSpinBox::up-button:off, QDoubleSpinBox::down-button:off { background: transparent; }
-QDoubleSpinBox[compactValue="true"] { padding-right: 8px; }
+QDoubleSpinBox[compactValue="true"] { padding-right: 24px; }
 QWidget#previewControlsViewport { background: #ffffff; }
 QWidget#minimalImageFooter, QLabel#minimalImageInfo, QLabel#minimalPixelInfo {
     color: #687281;

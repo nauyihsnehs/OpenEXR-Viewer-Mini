@@ -53,7 +53,12 @@ RGBFramebufferModel::RGBFramebufferModel(
   , m_falseColorMin(0.)
   , m_falseColorMax(1.)
   , m_falseColorMap(ColormapModule::create(ColormapModule::TURBO))
-{}
+{
+    // A committed Deep composite may change the permitted white point. The
+    // render job already used the same bound, so normalization needs no rerender.
+    connect(this, &FramebufferModel::imageLoaded, this, &RGBFramebufferModel::normalizeToneClampParameters);
+    connect(this, &FramebufferModel::imageChanged, this, &RGBFramebufferModel::normalizeToneClampParameters);
+}
 
 RGBFramebufferModel::~RGBFramebufferModel() = default;
 
@@ -107,6 +112,7 @@ void RGBFramebufferModel::loadStereo(const std::shared_ptr<ExrInput>& file,
         data->displayWindow = left.displayWindow;
         data->pixelAspect = left.pixelAspect;
         for (const auto& eye : data->stereo) {
+            if (eye->hasFiniteLinearRgb) data->includeLinearRgb(eye->linearRgbMaximum);
             data->nanCount += eye->nanCount;
             data->infCount += eye->infCount;
             data->positiveInfCount += eye->positiveInfCount;
@@ -194,6 +200,9 @@ std::string RGBFramebufferModel::getColorInfo(int x, int y, bool compact) const
                     text << " " << name << ": " << PixelDiagnostics::sampleText(pixel[c])
                          << sampleLocationInfo(eye, c, local.x(), local.y());
             }
+            const float* display = &eye.pixels[4 * index];
+            text << " Luminance: " << std::setprecision(std::numeric_limits<double>::max_digits10)
+                 << ToneMapping::luminance(display[0], display[1], display[2]);
         }
         return text.str();
     }
@@ -229,7 +238,7 @@ std::string RGBFramebufferModel::getColorInfo(int x, int y, bool compact) const
              << sampleLocationInfo(c, x, y);
     if (m_layerType == Layer_RGB || m_layerType == Layer_YC) {
         const float* display = &getDisplayPixels()[4 * (size_t(y) * width() + x)];
-        text << " | Luminance: " << std::setprecision(9)
+        text << " | Luminance: " << std::setprecision(std::numeric_limits<double>::max_digits10)
              << ToneMapping::luminance(display[0], display[1], display[2]);
     }
     return text.str();
@@ -291,6 +300,7 @@ void RGBFramebufferModel::setToneMappingMethod(ToneMappingMethod method)
 {
     if (m_toneMappingMethod == method) return;
     m_toneMappingMethod = method;
+    normalizeToneClampParameters();
     updateImage();
 }
 void RGBFramebufferModel::setFalseColorColormap(ColormapModule::Map map)
@@ -315,15 +325,27 @@ void RGBFramebufferModel::setFalseColorAutomatic(bool enabled)
 void RGBFramebufferModel::setToneParameters(
   double p0, double p1, double p2, double p3)
 {
-    const double values[] = {p0, p1, p2, p3};
-    for (double value : values)
+    for (double value : {p0, p1, p2, p3})
         if (!std::isfinite(value)) return;
+    if (m_toneMappingMethod == Tone_Clamp && isImageLoaded()) {
+        const double upper = toneClampUpperBound();
+        p1 = std::max(0., std::min(p1, upper));
+        p0 = std::max(0., std::min(p0, p1));
+    }
+    const double values[] = {p0, p1, p2, p3};
     if (
       m_toneParams[0] == p0 && m_toneParams[1] == p1 && m_toneParams[2] == p2
       && m_toneParams[3] == p3)
         return;
     std::copy(values, values + 4, m_toneParams);
     updateImage();
+}
+
+void RGBFramebufferModel::normalizeToneClampParameters()
+{
+    if (m_toneMappingMethod != Tone_Clamp || !isImageLoaded()) return;
+    m_toneParams[1] = std::max(0., std::min(m_toneParams[1], toneClampUpperBound()));
+    m_toneParams[0] = std::max(0., std::min(m_toneParams[0], m_toneParams[1]));
 }
 
 void RGBFramebufferModel::updateImage()
@@ -347,9 +369,15 @@ void RGBFramebufferModel::updateImage()
         const Cancellation& cancel, const Progress& progress) -> RenderResult {
           const auto data = DeepPreview::compose(source, range, cancel, progress);
           if (!data || cancel->load()) return {};
+          auto boundedParams = params;
+          if (method == Tone_Clamp) {
+              const double upper = data->hasFiniteLinearRgb ? std::max(0., data->linearRgbMaximum) : 0.;
+              boundedParams[1] = std::max(0., std::min(boundedParams[1], upper));
+              boundedParams[0] = std::max(0., std::min(boundedParams[0], boundedParams[1]));
+          }
           const double low = automatic && data->hasFiniteLuminance ? data->luminanceMin : minimum;
           const double high = automatic && data->hasFiniteLuminance ? data->luminanceMax : maximum;
-          const auto mapper = [mode, method, exposure, params, colormap, low, high, progress](
+          const auto mapper = [mode, method, exposure, boundedParams, colormap, low, high, progress](
             const FramebufferData& frame, const Cancellation& cancel) -> QImage {
               const auto* data = &frame;
               if (progress) progress->begin(LoadProgress::Rendering, data->height);
@@ -368,7 +396,7 @@ void RGBFramebufferModel::updateImage()
                   } else {
                       for (int c = 0; c < 3; ++c) {
                           const double value = mode == Preview_ToneMapping
-                            ? ToneMapping::toSrgb(pixel[c], method, params[0], params[1], params[2], params[3])
+                            ? ToneMapping::toSrgb(pixel[c], method, boundedParams[0], boundedParams[1], boundedParams[2], boundedParams[3])
                             : ColorTransform::to_sRGB(exposure * pixel[c]);
                           output[c] = ToneMapping::toByte(value);
                       }

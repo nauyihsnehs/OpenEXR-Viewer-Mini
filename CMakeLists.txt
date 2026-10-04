@@ -212,7 +212,9 @@ set(PROJECT_SOURCES
 )
 
 if(WIN32)
-    list(APPEND PROJECT_SOURCES src/view/HdrRenderer.cpp src/view/HdrRenderer.h openexr-viewer.rc)
+    list(APPEND PROJECT_SOURCES src/view/HdrRenderer.cpp src/view/HdrRenderer.h deploy/windows/openexr-viewer.rc)
+    set_source_files_properties(deploy/windows/openexr-viewer.rc PROPERTIES
+        INCLUDE_DIRECTORIES "${PROJECT_SOURCE_DIR}/deploy/icon")
 endif()
 
 set(VIEWER_APP_FLAGS)

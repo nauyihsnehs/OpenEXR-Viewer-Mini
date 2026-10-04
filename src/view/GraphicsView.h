@@ -55,6 +55,7 @@ class GraphicsView: public QGraphicsView
     ~GraphicsView() override;
     QString hdrStatusText() const { return _hdrStatus; }
     QString hdrStatusDetail() const { return _hdrDetail; }
+    WId hdrOutputWindow();
     ViewState viewState() const;
     void      restoreViewState(const ViewState& state);
     void setImageWindowMode();

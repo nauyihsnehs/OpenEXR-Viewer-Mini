@@ -16,12 +16,12 @@ class PixelReadoutLabel : public QLabel
     void clearSample();
 
   protected:
+    void paintEvent(QPaintEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
     void hideEvent(QHideEvent* event) override;
     void changeEvent(QEvent* event) override;
 
   private:
-    void updateText();
     QPointer<const FramebufferModel> m_model;
-    QString m_readout;
+    FramebufferModel::PixelReadout m_sample;
 };

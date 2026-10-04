@@ -44,6 +44,8 @@
 #include <QPoint>
 #include <QString>
 #include <QtGlobal>
+#include <QTimer>
+#include <memory>
 
 #include <model/attribute/HeaderItem.h>
 #include <model/framebuffer/RGBFramebufferModel.h>
@@ -64,9 +66,14 @@ class QToolButton;
 class QStackedWidget;
 class QToolBar;
 class QMoveEvent;
+class QShowEvent;
+class HdrRenderer;
 class MinimalImageWidget;
 class QActionGroup;
 class QMenu;
+#ifdef _WIN32
+class WindowsWindowFrameFilter;
+#endif
 
 class MainWindow: public QMainWindow
 {
@@ -88,10 +95,12 @@ class MainWindow: public QMainWindow
     void on_action_CopyImageFullResolution_triggered();
 
   protected:
+    bool event(QEvent* event) override;
     void closeEvent(QCloseEvent* event) override;
     void changeEvent(QEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
     void moveEvent(QMoveEvent* event) override;
+    void showEvent(QShowEvent* event) override;
     bool eventFilter(QObject* watched, QEvent* event) override;
 
 #ifdef _WIN32
@@ -103,7 +112,6 @@ class MainWindow: public QMainWindow
       const QByteArray& eventType, void* message, long* result) override;
 #    endif
 #endif
-    //    void showEvent(QShowEvent* event) override;
 
 
 
@@ -152,6 +160,8 @@ class MainWindow: public QMainWindow
     void             setupStereoActions();
     void             setupThemeActions();
     void             applyRgbPreviewMode(RGBFramebufferModel::PreviewMode mode);
+    void             updateHdrAvailability();
+    void             queueHdrAvailabilityProbe();
     void             applyTheme(const QString& themeName);
     QString          normalizedThemeName(const QString& themeName) const;
     QString          themeStyleSheetPath(const QString& themeName) const;
@@ -168,11 +178,22 @@ class MainWindow: public QMainWindow
     void adjustMinimalParameter(double steps);
     QRect minimalScreenGeometry(const QPoint& center) const;
 #ifdef _WIN32
+    friend class WindowsWindowFrameFilter;
     void applyWindowsWindowStyle();
+    void queueWindowsWindowStyle();
+    int windowsResizeHitTest(const QPoint& nativeGlobalPos) const;
+    std::unique_ptr<WindowsWindowFrameFilter> m_windowsWindowFrameFilter;
+    bool m_windowsWindowStylePending = false;
+    bool m_applyingWindowsWindowStyle = false;
 #endif
     bool isTitleBarDragArea(const QPoint& pos) const;
 
     Ui::MainWindow* ui;
+#ifdef Q_OS_WIN
+    std::unique_ptr<HdrRenderer> m_hdrAvailabilityProbe;
+    QTimer m_hdrAvailabilityTimer;
+    bool m_hdrAvailabilityProbePending = false;
+#endif
     QMenu* m_projectionMenu = nullptr;
     QActionGroup* m_projectionActions = nullptr;
     QAction* m_resetProjection = nullptr;

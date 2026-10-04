@@ -256,7 +256,7 @@ void YFramebufferWidget::updateZoomLevelText(double zoom)
 void YFramebufferWidget::updateFramebufferSummary()
 {
     m_cropIndicator->setModel(m_model);
-    ui->framebufferSummaryLabel->setText(framebufferSummaryText(m_model));
+    ui->framebufferSummaryLabel->setSummary(m_model);
     ui->framebufferSummaryLabel->setToolTip(framebufferSummaryToolTip(m_model));
     const bool loaded = m_model && m_model->isImageLoaded();
     ui->buttonAuto->setEnabled(loaded && m_model->hasFiniteDisplay());

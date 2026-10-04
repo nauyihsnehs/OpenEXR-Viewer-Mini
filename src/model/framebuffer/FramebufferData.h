@@ -8,6 +8,7 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <cmath>
 #include <memory>
 #include <vector>
 
@@ -63,6 +64,15 @@ struct FramebufferData {
     double             luminanceMin       = 0.;
     double             luminanceMax       = 0.;
     bool               hasFiniteLuminance = false;
+    // Display-linear RGB, before exposure/tone mapping; excludes alpha and holes.
+    double             linearRgbMaximum = 0.;
+    bool               hasFiniteLinearRgb = false;
+    void includeLinearRgb(double value)
+    {
+        if (!std::isfinite(value)) return;
+        if (!hasFiniteLinearRgb || value > linearRgbMaximum) linearRgbMaximum = value;
+        hasFiniteLinearRgb = true;
+    }
 };
 
 using Cancellation = std::shared_ptr<std::atomic_bool>;
