@@ -84,6 +84,8 @@ class LayerItem
       const Imf::Channel* pChannel,
       int                 part = -1);
 
+    LayerItem* addPart(const std::string& name, int part);
+
 
     // Perfoms the grouping of known layer groups: RGB, RGBA, YC, YCA...
     void groupLayers();

@@ -541,15 +541,16 @@ void HeaderModel::addFile(
         for (int i = 0; i < nParts; i++) {
             const Imf::Header& exrHeader = file.header(i);
 
-            std::string partName = "Untitled part";
+            std::string partName = tr("Part %1").arg(i).toStdString();
 
-            if (exrHeader.hasName()) {
+            if (exrHeader.hasName() && !exrHeader.name().empty()) {
                 partName = exrHeader.name();
             }
 
             QString     partValue = "[" + QString::number(i) + "]";
             HeaderItem* partRoot
-              = new HeaderItem(fileRoot, {partName.c_str(), partValue, "part"});
+              = new HeaderItem(fileRoot, {partName.c_str(), partValue, "part"},
+                               QString::fromStdString(partName), i);
 
             addHeader(exrHeader, partRoot, QString::fromStdString(partName), i);
         }
@@ -568,6 +569,13 @@ void HeaderModel::addFile(
     }
 }
 
+
+QModelIndex HeaderModel::partIndex(int part) const
+{
+    if (part < 0 || part >= m_fileHandle.parts()) return {};
+    const auto file = index(0, 0);
+    return m_fileHandle.parts() == 1 ? file : index(part, 0, file);
+}
 
 QVariant HeaderModel::data(const QModelIndex& index, int role) const
 {

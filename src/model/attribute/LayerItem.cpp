@@ -65,6 +65,14 @@ LayerItem::LayerItem(
 
 LayerItem::~LayerItem() = default;
 
+LayerItem* LayerItem::addPart(const std::string& name, int part)
+{
+    // A part name is a label, not a dot-separated channel path.
+    LayerItem* item = addChild(name, "", nullptr, part);
+    item->m_type = PART;
+    return item;
+}
+
 
 LayerItem* LayerItem::addChild(
   const std::string&  leafName,

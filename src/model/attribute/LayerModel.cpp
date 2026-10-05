@@ -130,13 +130,13 @@ LayerModel::LayerModel(const ExrInput& file, QObject* parent)
         for (int part = 0; part < nParts; part++) {
             const Imf::Header& exrHeader = file.header(part);
 
-            std::string partName = "Untitled part";
+            std::string partName = tr("Part %1").arg(part).toStdString();
 
-            if (exrHeader.hasName()) {
+            if (exrHeader.hasName() && !exrHeader.name().empty()) {
                 partName = exrHeader.name();
             }
 
-            LayerItem* leaf = m_rootItem->addLeaf(partName, nullptr, part);
+            LayerItem* leaf = m_rootItem->addPart(partName, part);
 
             // Now list layers and add those to the part group
             const Imf::ChannelList& exrChannels = exrHeader.channels();
@@ -165,6 +165,12 @@ LayerModel::LayerModel(const ExrInput& file, QObject* parent)
 
 
 LayerModel::~LayerModel() = default;
+
+QString LayerModel::previewKey(const LayerItem* item)
+{
+    return QString("%1:%2:%3").arg(item->getPart()).arg(int(item->getType()))
+      .arg(QString::fromStdString(item->getOriginalFullName()));
+}
 
 
 const LayerItem* LayerModel::defaultDisplayLayer() const
@@ -461,8 +467,11 @@ QModelIndex LayerModel::parent(const QModelIndex& index) const
         return QModelIndex();
     }
 
-    int row = 0;   //parentItem->row();
-    return createIndex(row, 0, parentItem);
+    LayerItem* grandparent = parentItem->parentItem();
+    for (int row = 0; grandparent && row < grandparent->childCount(); ++row) {
+        if (grandparent->child(row) == parentItem) return createIndex(row, 0, parentItem);
+    }
+    return QModelIndex();
 }
 
 

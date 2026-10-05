@@ -47,7 +47,6 @@
 #include <QTimer>
 #include <memory>
 
-#include <model/attribute/HeaderItem.h>
 #include <model/framebuffer/RGBFramebufferModel.h>
 
 #include "ImageFileWidget.h"
@@ -131,8 +130,7 @@ class MainWindow: public QMainWindow
 
     void on_action_Refresh_triggered();
 
-    void on_action_ShowAttributes_toggled(bool checked);
-    void on_action_ShowLayers_toggled(bool checked);
+    void on_action_ShowInspector_toggled(bool checked);
     void on_action_ModeExposure_triggered();
     void on_action_ModeToneMapping_triggered();
     void on_action_ModeFalseColor_triggered();
@@ -235,7 +233,7 @@ class MainWindow: public QMainWindow
     RGBFramebufferModel::PreviewMode m_rgbPreviewMode;
 
     QByteArray m_splitterImageState;
-    QByteArray m_splitterPropertiesState;
+    QByteArray m_inspectorSplitterState;
 
     QPoint m_titleDragPosition;
     bool   m_titleBarDragging;

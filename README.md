@@ -60,7 +60,8 @@ version. Automated test and benchmark sources have been removed; the release
 checklist describes pending manual validation. The [development guide](docs/development.md)
 covers prerequisites and paths.
 
-Choose **File > Open**, then double-click a layer to inspect it. Hover over the
+Choose **File > Open**, then use **View > Show > Inspector**: single-click a layer
+to inspect its details, and double-click to open its preview. Hover over the
 image for source coordinates and values. Use the wheel to zoom, **Ctrl+wheel** to
 adjust color parameters, and double-click the image to enter or leave minimal view.
 

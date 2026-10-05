@@ -62,6 +62,7 @@ class LayerModel: public QAbstractItemModel
     ~LayerModel();
 
     LayerItem*       getRoot() const { return m_rootItem.get(); }
+    static QString previewKey(const LayerItem* item);
     const LayerItem* defaultDisplayLayer() const;
     bool hasViews() const { return m_hasViews; }
     QString viewLabel(const LayerItem* item) const;

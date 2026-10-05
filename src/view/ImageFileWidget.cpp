@@ -35,14 +35,13 @@
 #include <QtConcurrent/QtConcurrentRun>
 #include <util/ResolutionLevels.h>
 #include "ResolutionLevelWidget.h"
+#include "InspectorWidget.h"
 #include <util/PreviewImage.h>
 
 #include <QAbstractItemModel>
 #include <QEvent>
 #include <QFileInfo>
-#include <QItemSelectionModel>
 #include <QList>
-#include <QLabel>
 #include <QVBoxLayout>
 #include <QDir>
 #include <QDataStream>
@@ -73,7 +72,6 @@
 #include "GraphicsView.h"
 #include "FramebufferInfo.h"
 #include "PixelReadoutLabel.h"
-#include <QKeyEvent>
 #include <QPointer>
 #include <QSignalBlocker>
 #include <QScopedValueRollback>
@@ -310,14 +308,6 @@ ImageFileWidget::ImageFileWidget(const QString& filename, QWidget* parent, bool 
 {
     setupLayout();
 
-    // clang-format off
-    connect(m_attributesTreeView, SIGNAL(doubleClicked(QModelIndex)),
-            this                , SLOT(onAttributeDoubleClicked(QModelIndex)));
-
-    connect(m_layersTreeView    , SIGNAL(doubleClicked(QModelIndex)),
-            this                , SLOT(onLayerDoubleClicked(QModelIndex)));
-    // clang-format on
-
     // Open the file
     if (asynchronous) {
         m_openedFilename = filename;
@@ -335,14 +325,6 @@ ImageFileWidget::ImageFileWidget(std::istream& stream, QWidget* parent)
   , m_isStream(true)
 {
     setupLayout();
-
-    // clang-format off
-    connect(m_attributesTreeView, SIGNAL(doubleClicked(QModelIndex)),
-            this                , SLOT(onAttributeDoubleClicked(QModelIndex)));
-
-    connect(m_layersTreeView    , SIGNAL(doubleClicked(QModelIndex)),
-            this                , SLOT(onLayerDoubleClicked(QModelIndex)));
-    // clang-format on
 
 
     // Open the file
@@ -470,8 +452,7 @@ void ImageFileWidget::clearImage(bool keepSource)
         delete window;
     }
 
-    m_attributesTreeView->setModel(nullptr);
-    m_layersTreeView->setModel(nullptr);
+    m_inspector->setDocument(nullptr);
 
     if (!keepSource) {
         delete m_img;
@@ -484,10 +465,7 @@ void ImageFileWidget::clearImage(bool keepSource)
 
 QString ImageFileWidget::layerKey(const LayerItem* item)
 {
-    return QString("%1:%2:%3")
-      .arg(item->getPart())
-      .arg(int(item->getType()))
-      .arg(QString::fromStdString(item->getOriginalFullName()));
+    return LayerModel::previewKey(item);
 }
 
 
@@ -684,6 +662,8 @@ void ImageFileWidget::commitRefresh()
 {
     if (!m_refresh) return;
     if (!m_refresh->image) { commitResolutionLevel(); return; }
+    const auto inspection = m_inspector->navigationState();
+    const QScopedValueRollback<bool> preserveInspection(m_followInspectorSelection, false);
     emit previewsAboutToBeReplaced();
     auto transaction = std::move(m_refresh);
     clearImage(!transaction->image);
@@ -705,7 +685,8 @@ void ImageFileWidget::commitRefresh()
         if (view) view->restoreViewState(transaction->saved.previews[i].view);
     }
     m_stereoMode = transaction->saved.stereoMode;
-    syncActiveLayerSelection();
+    syncInspector();
+    m_inspector->restoreNavigationState(inspection);
     emit activeFramebufferChanged();
     emit refreshInProgressChanged(false);
     emit previewsReplaced();
@@ -793,42 +774,11 @@ void ImageFileWidget::setupLayout()
     layout->setSpacing(0);
 
     m_splitterImageView  = new QSplitter(this);
-    m_splitterProperties = new QSplitter(Qt::Vertical, m_splitterImageView);
-    m_splitterProperties->setObjectName("informationSidebar");
-    m_splitterProperties->setMinimumWidth(200);
-    m_splitterProperties->setChildrenCollapsible(false);
     m_splitterImageView->setChildrenCollapsible(false);
     m_splitterImageView->setHandleWidth(5);
-    m_splitterProperties->setHandleWidth(5);
-
-    auto makePanel = [this](const QString& title) {
-        auto* panel = new QWidget(m_splitterProperties);
-        panel->setObjectName("informationPanel");
-        auto* items = new QVBoxLayout(panel);
-        items->setContentsMargins(8, 8, 8, 8);
-        items->setSpacing(8);
-        auto* heading = new QLabel(title, panel);
-        heading->setObjectName("panelHeading");
-        items->addWidget(heading);
-        return panel;
-    };
-    m_layersPanel = makePanel(tr("Layers"));
-    m_attributesPanel = makePanel(tr("Attributes"));
-
-    m_attributesTreeView = new QTreeView(m_attributesPanel);
-    m_attributesPanel->layout()->addWidget(m_attributesTreeView);
-    m_attributesTreeView->setAlternatingRowColors(true);
-    m_attributesTreeView->setExpandsOnDoubleClick(false);
-    m_attributesTreeView->setIndentation(16);
-
-    m_layersTreeView = new QTreeView(m_layersPanel);
-    m_layersTreeView->setEnabled(false);
-    m_layersPanel->layout()->addWidget(m_layersTreeView);
-    m_layersTreeView->setUniformRowHeights(true);
-    m_layersTreeView->installEventFilter(this);
-    m_layersTreeView->setAlternatingRowColors(true);
-    m_layersTreeView->setExpandsOnDoubleClick(false);
-    m_layersTreeView->setIndentation(16);
+    m_inspector = new InspectorWidget(m_splitterImageView);
+    connect(m_inspector, &InspectorWidget::layerActivated, this, &ImageFileWidget::onLayerDoubleClicked);
+    connect(m_inspector, &InspectorWidget::closeRequested, this, &ImageFileWidget::inspectorCloseRequested);
 
     m_mdiArea = new QMdiArea(m_splitterImageView);
     m_mdiArea->setViewMode(QMdiArea::TabbedView);
@@ -846,18 +796,15 @@ void ImageFileWidget::setupLayout()
       this,
       SLOT(onActiveSubWindowChanged(QMdiSubWindow*)));
 
-    m_splitterProperties->addWidget(m_layersPanel);
-    m_splitterProperties->addWidget(m_attributesPanel);
-
     m_splitterImageView->addWidget(m_mdiArea);
-    m_splitterImageView->addWidget(m_splitterProperties);
+    m_splitterImageView->addWidget(m_inspector);
     m_splitterImageView->setStretchFactor(0, 1);
     m_splitterImageView->setStretchFactor(1, 0);
     m_splitterImageView->setSizes({700, m_propertiesWidth});
     m_splitterImageView->installEventFilter(this);
     connect(m_splitterImageView, &QSplitter::splitterMoved, this, [this] {
-        if (m_splitterProperties->isVisible())
-            m_propertiesWidth = m_splitterProperties->width();
+        if (m_inspector->isVisible())
+            m_propertiesWidth = m_inspector->width();
     });
 
     layout->addWidget(m_splitterImageView);
@@ -869,18 +816,11 @@ void ImageFileWidget::setupLayout()
 bool ImageFileWidget::eventFilter(QObject* watched, QEvent* event)
 {
     if (watched == m_splitterImageView && event->type() == QEvent::Show
-        && !m_splitterProperties->isHidden()) {
+        && !m_inspector->isHidden()) {
         const int available = m_splitterImageView->width()
                               - m_splitterImageView->handleWidth();
         m_splitterImageView->setSizes(
           {qMax(1, available - m_propertiesWidth), m_propertiesWidth});
-    }
-    if (watched == m_layersTreeView && event->type() == QEvent::KeyPress) {
-        auto* key = static_cast<QKeyEvent*>(event);
-        if (key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter) {
-            onLayerDoubleClicked(m_layersTreeView->currentIndex());
-            return true;
-        }
     }
     QTabBar*   tabBar = qobject_cast<QTabBar*>(watched);
     const bool previewTabRelease
@@ -1035,14 +975,6 @@ QString ImageFileWidget::getTitle(const LayerItem* item)
 }
 
 
-void ImageFileWidget::openAttribute(const HeaderItem* item)
-{
-    if (item->getLayerItem() != nullptr) {
-        openLayer(item->getLayerItem());
-    }
-}
-
-
 static RGBFramebufferModel::Input colorInput(const LayerItem* item)
 {
     RGBFramebufferModel::Input input;
@@ -1145,9 +1077,11 @@ ImageFileWidget::PreparedPreview ImageFileWidget::createPreview(
 }
 
 
-QMdiSubWindow* ImageFileWidget::installPreview(PreparedPreview& preview)
+QMdiSubWindow* ImageFileWidget::installPreview(PreparedPreview& preview, bool followSelection)
 {
     if (!preview.widget || !preview.model) return nullptr;
+    const QScopedValueRollback<bool> follow(m_followInspectorSelection,
+      followSelection && m_followInspectorSelection);
     QWidget*       widget    = preview.widget;
     widget->findChild<ResolutionLevelWidget*>()->setDocument(this);
     QMdiSubWindow* subWindow = m_mdiArea->addSubWindow(widget);
@@ -1177,7 +1111,7 @@ QMdiSubWindow* ImageFileWidget::installPreview(PreparedPreview& preview)
     subWindow->showMaximized();
     m_mdiArea->setActiveSubWindow(subWindow);
     syncTabbedPreviewPresentation();
-    syncActiveLayerSelection();
+    syncInspector();
     if (!preview.stereoKeys.isEmpty()) m_stereoMode = StereoAnaglyph;
     emit activeFramebufferChanged();
     return subWindow;
@@ -1212,7 +1146,7 @@ FramebufferModel* ImageFileWidget::openLayer(const LayerItem* item)
             m_mdiArea->setActiveSubWindow(w);
             w->setFocus();
             syncTabbedPreviewPresentation();
-            syncActiveLayerSelection();
+            syncInspector(true);
             emit activeFramebufferChanged();
             return const_cast<FramebufferModel*>(existing);
         }
@@ -1329,7 +1263,7 @@ void ImageFileWidget::setStereoMode(StereoMode mode)
         if (!m_pendingStereo || m_pendingStereo->model != model || !model->isPreviewReady()) return;
         auto prepared = std::move(m_pendingStereo);
         m_stereoMode = StereoAnaglyph;
-        installPreview(*prepared);
+        installPreview(*prepared, false);
     });
     connect(model, &FramebufferModel::loadFailed, this, [this, model] {
         // Defer destruction until all failure observers have finished.
@@ -1457,8 +1391,8 @@ QByteArray ImageFileWidget::getSplitterImageState() const
     QByteArray state;
     QDataStream stream(&state, QIODevice::WriteOnly);
     stream.setVersion(QDataStream::Qt_5_0);
-    const int width = m_splitterProperties->isVisible()
-                        ? m_splitterProperties->width() : m_propertiesWidth;
+    const int width = m_inspector->isVisible()
+                        ? m_inspector->width() : m_propertiesWidth;
     // QSplitter's hidden pane size is not its last expanded width.
     stream << m_splitterImageView->saveState() << qint32(width);
     return state;
@@ -1472,38 +1406,31 @@ void ImageFileWidget::setSplitterImageState(const QByteArray& state)
     QByteArray splitterState;
     qint32 width = 0;
     stream >> splitterState >> width;
-    if (stream.status() != QDataStream::Ok || width < 200 || width > QWIDGETSIZE_MAX)
+    if (stream.status() != QDataStream::Ok || width < 280 || width > QWIDGETSIZE_MAX)
         return;
     if (m_splitterImageView->restoreState(splitterState)) m_propertiesWidth = width;
 }
 
-void ImageFileWidget::setAttributesVisible(bool visible)
+QByteArray ImageFileWidget::getInspectorSplitterState() const
 {
-    m_attributesPanel->setVisible(visible);
-    updatePropertiesVisibility();
+    return m_inspector->splitterState();
 }
 
-
-void ImageFileWidget::setLayersVisible(bool visible)
+void ImageFileWidget::setInspectorSplitterState(const QByteArray& state)
 {
-    m_layersPanel->setVisible(visible);
-    updatePropertiesVisibility();
+    m_inspector->restoreSplitterState(state);
 }
 
-
-void ImageFileWidget::updatePropertiesVisibility()
+void ImageFileWidget::setInspectorVisible(bool visible)
 {
-    const bool showProperties
-      = !m_attributesPanel->isHidden() || !m_layersPanel->isHidden();
-
-    if (showProperties == !m_splitterProperties->isHidden()) return;
-    if (!showProperties && m_splitterProperties->isVisible()) {
+    if (visible == !m_inspector->isHidden()) return;
+    if (!visible && m_inspector->isVisible()) {
         const QList<int> sizes = m_splitterImageView->sizes();
         if (sizes.size() == 2 && sizes[1] > 0) m_propertiesWidth = sizes[1];
     }
 
-    m_splitterProperties->setVisible(showProperties);
-    if (showProperties) {
+    m_inspector->setVisible(visible);
+    if (visible) {
         const int available = m_splitterImageView->width()
                               - m_splitterImageView->handleWidth();
         m_splitterImageView->setSizes(
@@ -1519,7 +1446,7 @@ QModelIndex ImageFileWidget::activeLayerIndex() const
     if (!subWindow) return QModelIndex();
 
     return findLayerIndexByKey(
-      m_layersTreeView->model(),
+      m_img ? m_img->getLayerModel() : nullptr,
       QModelIndex(),
       subWindow->property("layerKey").toString());
 }
@@ -1568,24 +1495,15 @@ QString ImageFileWidget::layerTitleText(const QModelIndex& index) const
 }
 
 
-void ImageFileWidget::syncActiveLayerSelection()
+void ImageFileWidget::syncInspector(bool followSelection)
 {
-    QItemSelectionModel* selection = m_layersTreeView->selectionModel();
-
-    if (!selection) return;
-
-    QModelIndex index = activeLayerIndex();
-
-    if (!index.isValid()) {
-        selection->clear();
-        return;
+    const auto* window = m_mdiArea->activeSubWindow();
+    QStringList keys;
+    if (window) {
+        keys = window->property("stereoKeys").toStringList();
+        if (keys.isEmpty()) keys << window->property("layerKey").toString();
     }
-
-    selection->select(
-      index,
-      QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
-    selection->setCurrentIndex(index, QItemSelectionModel::NoUpdate);
-    m_layersTreeView->scrollTo(index);
+    m_inspector->setActivePreviews(keys, followSelection);
 }
 
 
@@ -1649,13 +1567,7 @@ void ImageFileWidget::afterOpen(bool defaultLayer)
 {
     try { m_resolutionLevels = ResolutionLevels::commonLevels(m_img->sharedEXR()); }
     catch (const std::exception&) { m_resolutionLevels = {{0, 0}}; }
-    m_attributesTreeView->setModel(m_img->getHeaderModel());
-    m_attributesTreeView->expandAll();
-    m_attributesTreeView->resizeColumnToContents(0);
-
-    m_layersTreeView->setModel(m_img->getLayerModel());
-    m_layersTreeView->expandAll();
-    m_layersTreeView->resizeColumnToContents(0);
+    m_inspector->setDocument(m_img);
 
     if (!defaultLayer) return;
     const LayerItem* layer = m_img->getLayerModel()->defaultDisplayLayer();
@@ -1663,6 +1575,7 @@ void ImageFileWidget::afterOpen(bool defaultLayer)
         onLoadFailed(tr("The file has no displayable layers."));
         return;
     }
+    m_inspector->inspectLayer(findLayerIndexByKey(m_img->getLayerModel(), {}, layerKey(layer)));
     try {
         m_initialPrepared.reset(new PreparedPreview(createPreview(layer, m_img, m_resolutionLevel)));
         trackInitialPreview(m_initialPrepared->model);
@@ -1684,22 +1597,13 @@ void ImageFileWidget::trackInitialPreview(FramebufferModel* model)
             m_documentState != DocumentPending || m_initialPreview != model
             || !model->isPreviewReady())
               return;
-          installPreview(*m_initialPrepared);
+          installPreview(*m_initialPrepared, false);
           m_initialPrepared.reset();
           m_initialPreview.clear();
           m_documentState = DocumentReady;
-          m_layersTreeView->setEnabled(true);
           emit documentReady();
           emit activeFramebufferChanged();
       });
-}
-
-
-void ImageFileWidget::onAttributeDoubleClicked(const QModelIndex& index)
-{
-    if (!isDocumentReady() || !index.isValid()) return;
-    HeaderItem* item = static_cast<HeaderItem*>(index.internalPointer());
-    openAttribute(item);
 }
 
 
@@ -1787,7 +1691,7 @@ void ImageFileWidget::onActiveSubWindowChanged(QMdiSubWindow* window)
         m_stereoMode = window && !window->property("stereoKeys").toStringList().isEmpty()
                          ? StereoAnaglyph : StereoDefault;
     }
-    syncActiveLayerSelection();
+    syncInspector(m_followInspectorSelection);
     emit activeFramebufferChanged();
 }
 
@@ -1801,6 +1705,6 @@ void ImageFileWidget::onSubWindowDestroyed()
 void ImageFileWidget::syncAfterSubWindowDestroyed()
 {
     syncTabbedPreviewPresentation();
-    syncActiveLayerSelection();
+    syncInspector();
     emit activeFramebufferChanged();
 }

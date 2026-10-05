@@ -15,8 +15,9 @@ namespace {
 class IconEngine : public QIconEngine
 {
   public:
-    explicit IconEngine(ViewerIcons::Kind kind) : m_kind(kind) {}
-    QIconEngine* clone() const override { return new IconEngine(m_kind); }
+    explicit IconEngine(ViewerIcons::Kind kind, const QColor& ink)
+      : m_kind(kind), m_ink(ink) {}
+    QIconEngine* clone() const override { return new IconEngine(m_kind, m_ink); }
 
     QPixmap pixmap(const QSize& size, QIcon::Mode mode, QIcon::State state) override
     {
@@ -32,7 +33,7 @@ class IconEngine : public QIconEngine
     {
         // Read the current palette on every draw, including after a theme change.
         const QPalette palette = QApplication::palette();
-        const QColor color = palette.color(mode == QIcon::Disabled
+        const QColor color = m_ink.isValid() ? m_ink : palette.color(mode == QIcon::Disabled
           ? QPalette::Disabled : QPalette::Active, QPalette::ButtonText);
         painter->save();
         painter->setRenderHint(QPainter::Antialiasing);
@@ -96,19 +97,72 @@ class IconEngine : public QIconEngine
                 }
                 break;
             }
-            case Layers:
-                painter->drawPolygon(QPolygonF() << QPointF(2, 6) << QPointF(10, 2)
-                  << QPointF(18, 6) << QPointF(10, 10));
-                for (int y : {10, 14})
-                    painter->drawPolyline(QPolygonF() << QPointF(2, y)
-                      << QPointF(10, y + 4) << QPointF(18, y));
-                break;
-            case Attributes:
+            case Inspector:
                 painter->drawRoundedRect(QRectF(2, 2, 16, 16), 2, 2);
                 for (int y : {6, 10, 14}) {
                     painter->drawPoint(QPointF(5, y));
                     painter->drawLine(QPointF(8, y), QPointF(15, y));
                 }
+                break;
+            case File:
+                path.moveTo(4, 2); path.lineTo(12, 2); path.lineTo(16, 6);
+                path.lineTo(16, 18); path.lineTo(4, 18); path.closeSubpath();
+                path.moveTo(12, 2); path.lineTo(12, 6); path.lineTo(16, 6);
+                painter->drawPath(path);
+                break;
+            case Part:
+                painter->drawRoundedRect(QRectF(2, 3, 16, 14), 1.5, 1.5);
+                path.moveTo(4, 14); path.lineTo(8, 9); path.lineTo(11, 12);
+                path.lineTo(14, 8); path.lineTo(16, 14);
+                painter->drawPath(path);
+                painter->drawEllipse(QRectF(5, 6, 2, 2));
+                break;
+            case Layer:
+                painter->drawPolygon(QPolygonF() << QPointF(10, 2) << QPointF(18, 7)
+                  << QPointF(10, 12) << QPointF(2, 7));
+                path.moveTo(2, 11); path.lineTo(10, 16); path.lineTo(18, 11);
+                path.moveTo(2, 14); path.lineTo(10, 19); path.lineTo(18, 14);
+                painter->drawPath(path);
+                break;
+            case Group:
+                path.moveTo(2, 16); path.lineTo(2, 4); path.lineTo(8, 4);
+                path.lineTo(10, 6); path.lineTo(18, 6); path.lineTo(18, 16);
+                path.closeSubpath();
+                painter->drawPath(path);
+                break;
+            case Channel:
+                path.moveTo(2, 10); path.lineTo(5, 10); path.lineTo(8, 4);
+                path.lineTo(12, 16); path.lineTo(15, 10); path.lineTo(18, 10);
+                painter->drawPath(path);
+                break;
+            case Preview:
+                path.moveTo(2, 10); path.cubicTo(6, 3, 14, 3, 18, 10);
+                path.cubicTo(14, 17, 6, 17, 2, 10);
+                painter->drawPath(path);
+                painter->drawEllipse(QRectF(8, 8, 4, 4));
+                break;
+            case Stereo:
+                for (qreal center : {5., 15.}) {
+                    path = QPainterPath(QPointF(center - 4, 10));
+                    path.cubicTo(center - 2, 5, center + 2, 5, center + 4, 10);
+                    path.cubicTo(center + 2, 15, center - 2, 15, center - 4, 10);
+                    painter->drawPath(path);
+                    painter->drawEllipse(QRectF(center - 1, 9, 2, 2));
+                }
+                break;
+            case Search:
+                painter->drawEllipse(QRectF(3, 3, 10, 10));
+                painter->drawLine(QPointF(12, 12), QPointF(17, 17));
+                break;
+            case Copy:
+                path.moveTo(12, 4); path.lineTo(12, 2); path.lineTo(3, 2);
+                path.lineTo(3, 13); path.lineTo(5, 13);
+                painter->drawPath(path);
+                painter->drawRoundedRect(QRectF(7, 6, 10, 12), 1, 1);
+                break;
+            case Close:
+                painter->drawLine(QPointF(5, 5), QPointF(15, 15));
+                painter->drawLine(QPointF(15, 5), QPointF(5, 15));
                 break;
             case AutoRange:
                 path.moveTo(5, 3); path.lineTo(2, 3); path.lineTo(2, 17); path.lineTo(5, 17);
@@ -134,12 +188,13 @@ class IconEngine : public QIconEngine
 
   private:
     ViewerIcons::Kind m_kind;
+    QColor m_ink;
 };
 }
 
-QIcon ViewerIcons::icon(Kind kind)
+QIcon ViewerIcons::icon(Kind kind, const QColor& ink)
 {
-    return QIcon(new IconEngine(kind));
+    return QIcon(new IconEngine(kind, ink));
 }
 
 void ViewerIcons::setupButton(QAbstractButton* button, Kind kind, const QString& name,

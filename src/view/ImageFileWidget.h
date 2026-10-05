@@ -40,7 +40,6 @@
 #include <QModelIndex>
 #include <QPoint>
 #include <QSplitter>
-#include <QTreeView>
 
 #include <model/OpenEXRImage.h>
 #include <model/framebuffer/RGBFramebufferModel.h>
@@ -51,6 +50,7 @@ class QEvent;
 class QAbstractItemModel;
 class FramebufferModel;
 class GraphicsView;
+class InspectorWidget;
 
 class ImageFileWidget: public QWidget
 {
@@ -71,15 +71,8 @@ class ImageFileWidget: public QWidget
     QByteArray getSplitterImageState() const;
     void setSplitterImageState(const QByteArray& state);
 
-    QByteArray getSplitterPropertiesState() const
-    {
-        return m_splitterProperties->saveState();
-    }
-
-    void setSplitterPropertiesState(const QByteArray& state)
-    {
-        m_splitterProperties->restoreState(state);
-    }
+    QByteArray getInspectorSplitterState() const;
+    void setInspectorSplitterState(const QByteArray& state);
 
     bool isStream() const { return m_isStream; }
 
@@ -116,13 +109,13 @@ class ImageFileWidget: public QWidget
     void refreshInProgressChanged(bool refreshing);
     void previewsAboutToBeReplaced();
     void previewsReplaced();
+    void inspectorCloseRequested();
 
 
   public slots:
     void refresh();
 
-    void setAttributesVisible(bool visible);
-    void setLayersVisible(bool visible);
+    void setInspectorVisible(bool visible);
 
 
   protected:
@@ -132,7 +125,6 @@ class ImageFileWidget: public QWidget
 
     static QString getTitle(const LayerItem* item);
     QString        getTitle(int partId, const std::string& layer) const;
-    void           openAttribute(const HeaderItem* item);
 
     FramebufferModel* openLayer(const LayerItem* item);
 
@@ -142,7 +134,6 @@ class ImageFileWidget: public QWidget
     void afterOpen(bool defaultLayer = true);
 
   private slots:
-    void onAttributeDoubleClicked(const QModelIndex& index);
     void onLayerDoubleClicked(const QModelIndex& index);
 
     void onLoadFailed(const QString& msg);
@@ -172,7 +163,7 @@ class ImageFileWidget: public QWidget
       const LayerItem* item, OpenEXRImage* source, ResolutionLevel level);
     PreparedPreview createStereoPreview(OpenEXRImage* source, ResolutionLevel level);
     void cancelStereoPreview();
-    QMdiSubWindow* installPreview(PreparedPreview& preview);
+    QMdiSubWindow* installPreview(PreparedPreview& preview, bool followSelection = true);
     SavedDocument captureDocumentState() const;
     void          restorePreview(
                QWidget* widget, const SavedPreview& state) const;
@@ -186,8 +177,7 @@ class ImageFileWidget: public QWidget
     void showLoadError(const QString& message) const;
     void           clearImage(bool keepSource = false);
     void           configurePreviewTabBar();
-    void           syncActiveLayerSelection();
-    void           updatePropertiesVisibility();
+    void           syncInspector(bool followSelection = false);
 
     const FramebufferModel* framebufferModel(QMdiSubWindow* subWindow) const;
     QString     framebufferStatusText(QMdiSubWindow* subWindow) const;
@@ -200,12 +190,9 @@ class ImageFileWidget: public QWidget
     QString layerTitleText(const QModelIndex& index) const;
 
     QSplitter* m_splitterImageView;
-    QSplitter* m_splitterProperties;
-    QWidget* m_attributesPanel;
-    QWidget* m_layersPanel;
-    int m_propertiesWidth = 280;
-    QTreeView* m_attributesTreeView;
-    QTreeView* m_layersTreeView;
+    InspectorWidget* m_inspector;
+    int m_propertiesWidth = 340;
+    bool m_followInspectorSelection = true;
     QMdiArea*  m_mdiArea;
 
     OpenEXRImage* m_img;

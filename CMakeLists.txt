@@ -100,6 +100,8 @@ set(PROJECT_SOURCES
 
     src/view/ImageFileWidget.cpp
     src/view/ImageFileWidget.h
+    src/view/InspectorWidget.cpp
+    src/view/InspectorWidget.h
 
     src/view/GraphicsView.cpp
     src/view/GraphicsView.h

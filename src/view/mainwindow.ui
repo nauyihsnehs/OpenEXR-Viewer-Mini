@@ -54,8 +54,7 @@
      <property name="title">
       <string>&amp;Show</string>
      </property>
-     <addaction name="action_ShowAttributes"/>
-     <addaction name="action_ShowLayers"/>
+     <addaction name="action_ShowInspector"/>
     </widget>
     <widget class="QMenu" name="menu_Theme">
      <property name="title">
@@ -179,7 +178,7 @@
     <string>Ctrl+W</string>
    </property>
   </action>
-  <action name="action_ShowAttributes">
+  <action name="action_ShowInspector">
    <property name="checkable">
     <bool>true</bool>
    </property>
@@ -187,18 +186,7 @@
     <bool>false</bool>
    </property>
    <property name="text">
-    <string>Attributes</string>
-   </property>
-  </action>
-  <action name="action_ShowLayers">
-   <property name="checkable">
-    <bool>true</bool>
-   </property>
-   <property name="checked">
-    <bool>false</bool>
-   </property>
-   <property name="text">
-    <string>Layers</string>
+    <string>Inspector</string>
    </property>
   </action>
   <action name="action_ThemeLight">

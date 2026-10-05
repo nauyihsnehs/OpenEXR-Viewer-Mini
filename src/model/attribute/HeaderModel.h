@@ -73,6 +73,7 @@ class HeaderModel: public QAbstractItemModel
     ~HeaderModel();
 
     void addFile(const ExrInput& file, const QString& filename);
+    QModelIndex partIndex(int part) const;
 
     const std::vector<LayerItem*>& getLayers() const { return m_partRootLayer; }
 

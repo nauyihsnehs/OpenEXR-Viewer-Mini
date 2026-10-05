@@ -118,8 +118,21 @@ QTabBar::close-button, QMdiSubWindow::close-button {
     height: 16px;
 }
 QTabBar::close-button:hover { background: #363d47; border-radius: 4px; }
-QWidget#informationPanel, QWidget#informationPanel QLabel { background: #26282d; }
-QLabel#panelHeading { color: #a1a8b3; font-weight: 600; padding: 4px; }
+QWidget#inspector, QWidget#inspector QWidget { background: #26282d; }
+QWidget#inspector QLabel#inspectorHeading { font-weight: 600; }
+QWidget#inspector QLabel#inspectorMuted { color: #a1a8b3; }
+QWidget#inspector QLineEdit, QWidget#inspector QPlainTextEdit { background: #2a2d32; }
+QWidget#inspector QToolButton { border: 1px solid transparent; border-radius: 4px; padding: 4px; }
+QWidget#inspector QToolButton:hover { background: #363d47; }
+QWidget#inspector QToolButton:focus { border-color: #8baed6; }
+QWidget#inspector QToolButton#inspectorFile:checked { background: #35465c; }
+QWidget#inspector QToolButton#inspectorFold { font-weight: 600; }
+QWidget#inspector QTreeView::item { padding: 3px 2px; border: 1px solid transparent; }
+QWidget#inspector QTreeView::item:selected { background: #35465c; color: #e2e5ea; }
+QWidget#inspector QTreeView::item:hover { background: #363d47; }
+QWidget#inspector QTreeView::item:focus { border-color: #8baed6; }
+QWidget#inspector QSplitter::handle { background: #3a3f47; }
+QWidget#inspector QSplitter::handle:hover { background: #8baed6; }
 QSplitter::handle { background: #202226; }
 QSplitter::handle:hover { background: #3a3f47; }
 QTreeView {

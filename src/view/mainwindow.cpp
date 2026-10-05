@@ -100,7 +100,6 @@
 #    include <windowsx.h>
 #endif
 
-#include <model/attribute/HeaderModel.h>
 #include <model/attribute/LayerItem.h>
 
 static QPoint mouseGlobalPosition(QMouseEvent* event)
@@ -357,7 +356,7 @@ MainWindow::MainWindow(QWidget* parent)
   , m_currentOpenedFolder()
   , m_rgbPreviewMode(RGBFramebufferModel::Preview_Exposure)
   , m_splitterImageState()
-  , m_splitterPropertiesState()
+  , m_inspectorSplitterState()
   , m_titleDragPosition()
   , m_titleBarDragging(false)
 {
@@ -508,8 +507,7 @@ void MainWindow::setupWorkspace()
 #ifndef Q_OS_WIN
     ui->action_ModeHDR->setVisible(false);
 #endif
-    decorate(ui->action_ShowLayers, ViewerIcons::Layers, tr("Layers"));
-    decorate(ui->action_ShowAttributes, ViewerIcons::Attributes, tr("Attributes"));
+    decorate(ui->action_ShowInspector, ViewerIcons::Inspector, tr("Inspector"));
     toolbar->addAction(ui->action_Open);
     toolbar->addAction(ui->action_Save);
     toolbar->addSeparator();
@@ -518,8 +516,7 @@ void MainWindow::setupWorkspace()
     toolbar->addAction(ui->action_ModeFalseColor);
     toolbar->addAction(ui->action_ModeHDR);
     toolbar->addSeparator();
-    toolbar->addAction(ui->action_ShowLayers);
-    toolbar->addAction(ui->action_ShowAttributes);
+    toolbar->addAction(ui->action_ShowInspector);
     for (QAction* action : toolbar->actions()) {
         auto* button = qobject_cast<QToolButton*>(toolbar->widgetForAction(action));
         if (!button) continue;
@@ -950,8 +947,7 @@ void MainWindow::applyPanelVisibility(ImageFileWidget* widget) const
 {
     if (!widget) return;
 
-    widget->setAttributesVisible(ui->action_ShowAttributes->isChecked());
-    widget->setLayersVisible(ui->action_ShowLayers->isChecked());
+    widget->setInspectorVisible(ui->action_ShowInspector->isChecked());
 }
 
 
@@ -1155,6 +1151,9 @@ void MainWindow::addFileTab(ImageFileWidget* fileWidget, const QString& title)
         updateShowActions();
     });
     connect(fileWidget, &ImageFileWidget::documentReady, this, &MainWindow::updateShowActions);
+    connect(fileWidget, &ImageFileWidget::inspectorCloseRequested, this, [this] {
+        ui->action_ShowInspector->setChecked(false);
+    });
     connect(fileWidget, &ImageFileWidget::documentLoadFailed, this, &MainWindow::updateShowActions);
     const int index = m_openFileTabs->addTab(fileWidget, title);
     m_openFileTabs->setTabToolTip(
@@ -1169,7 +1168,7 @@ void MainWindow::queueFileTab(
   ImageFileWidget* fileWidget, const QString& title)
 {
     fileWidget->setSplitterImageState(m_splitterImageState);
-    fileWidget->setSplitterPropertiesState(m_splitterPropertiesState);
+    fileWidget->setInspectorSplitterState(m_inspectorSplitterState);
     addFileTab(fileWidget, title);
 }
 
@@ -1774,14 +1773,15 @@ void MainWindow::writeSettings()
 
         m_currentOpenedFolder     = widget->getOpenedFolder();
         m_splitterImageState      = widget->getSplitterImageState();
-        m_splitterPropertiesState = widget->getSplitterPropertiesState();
+        m_inspectorSplitterState = widget->getInspectorSplitterState();
     }
 
     settings.beginGroup("MainWindow");
     settings.setValue("geometry", saveGeometry());
     settings.setValue("state", saveState());
-    settings.setValue("workspaceV2/splitterImage", m_splitterImageState);
-    settings.setValue("workspaceV2/splitterProperties", m_splitterPropertiesState);
+    settings.setValue("inspectorV1/splitterImage", m_splitterImageState);
+    settings.setValue("inspectorV1/splitterDetails", m_inspectorSplitterState);
+    settings.setValue("inspectorV1/visible", ui->action_ShowInspector->isChecked());
     settings.setValue("openedFolder", m_currentOpenedFolder);
     settings.setValue("theme", m_currentTheme);
     settings.endGroup();
@@ -1800,9 +1800,10 @@ void MainWindow::readSettings()
     restoreGeometry(settings.value("geometry").toByteArray());
     restoreState(settings.value("state").toByteArray());
 
-    m_splitterImageState = settings.value("workspaceV2/splitterImage").toByteArray();
-    m_splitterPropertiesState
-      = settings.value("workspaceV2/splitterProperties").toByteArray();
+    m_splitterImageState = settings.value("inspectorV1/splitterImage").toByteArray();
+    m_inspectorSplitterState
+      = settings.value("inspectorV1/splitterDetails").toByteArray();
+    ui->action_ShowInspector->setChecked(settings.value("inspectorV1/visible", false).toBool());
 
     if (settings.contains("openedFolder")) {
         m_currentOpenedFolder = settings.value("openedFolder").toString();
@@ -1825,7 +1826,7 @@ void MainWindow::onTabCloseRequested(int idx)
 
     m_currentOpenedFolder     = widget->getOpenedFolder();
     m_splitterImageState      = widget->getSplitterImageState();
-    m_splitterPropertiesState = widget->getSplitterPropertiesState();
+    m_inspectorSplitterState = widget->getInspectorSplitterState();
 
     m_openFileTabs->removeTab(idx);
     delete widget;
@@ -1834,13 +1835,7 @@ void MainWindow::onTabCloseRequested(int idx)
 }
 
 
-void MainWindow::on_action_ShowAttributes_toggled(bool)
-{
-    applyPanelVisibilityToAllTabs();
-}
-
-
-void MainWindow::on_action_ShowLayers_toggled(bool)
+void MainWindow::on_action_ShowInspector_toggled(bool)
 {
     applyPanelVisibilityToAllTabs();
 }
@@ -1917,7 +1912,7 @@ void MainWindow::onCurrentChanged(int index)
 
     m_currentOpenedFolder     = widget->getOpenedFolder();
     m_splitterImageState      = widget->getSplitterImageState();
-    m_splitterPropertiesState = widget->getSplitterPropertiesState();
+    m_inspectorSplitterState = widget->getInspectorSplitterState();
 
     updateShowActions();
     updateFileTabPresentation();

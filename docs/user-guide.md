@@ -17,11 +17,44 @@ appears after one second of continuous work; errors appear immediately in a tab
 with copyable details. Percentages refer to the current stage. Closing a tab
 cancels its work. Failed refreshes retain the last committed source and image.
 
-Double-click layers or displayable attributes to open preview tabs. A single
-preview hides its tab bar. **View > Show** controls Attributes and Layers;
-**View > Theme** selects Light or Dark. Window geometry, workspace splitters,
-theme and last folder are saved. Per-preview display settings and export choices
-are preserved within the applicable document/session, not as a saved project.
+Open **View > Show > Inspector** to browse parts, layers, channels and metadata.
+Single-click an object (or use the arrow keys) to inspect its details without
+changing the image. Double-click a layer/channel or press Enter to open or activate
+its preview tab; double-click a part/group to expand or collapse it. A single
+preview hides its tab bar. **View > Theme** selects Light or Dark. Window geometry,
+Inspector visibility and splitters, theme and last folder are saved. Per-preview
+display settings and export choices are preserved within the applicable
+document/session, not as a saved project.
+
+The Inspector selection identifies the object being inspected. An eye icon at
+the right marks the current preview independently; a paired-eye icon marks both
+sources of an anaglyph. Monochrome object icons distinguish files, Parts, layers,
+groups and channels; hover for the object type, preview status and available action.
+Switching preview tabs follows that preview, while background pixel loading does
+not replace your inspection selection. Click the filename to inspect the file;
+use the copy icon beside **Path** in the file details, or right-click the filename,
+to copy the full path. Path copying is disabled for streams.
+
+A Part is an independent image inside an EXR, with its own dimensions, channels,
+compression and attributes. For example, left and right eyes can occupy separate
+Parts, with layers and channels inside each. Single-part files omit the redundant
+Part level, count and ID. Multipart files retain Part names, or **Part N** when
+unnamed; Part tooltips explain the term.
+
+The navigation starts fully expanded, including all Parts, groups, layers and
+channels. Fold branches as needed. Search by full layer/channel name; matching
+ancestors remain visible. Clearing the search and refreshing the file restore
+your previous expansion state. Details
+include source dimensions/windows, pixel format, channel sampling and view when
+applicable. **Image info** / **Part N info** and **Attributes** / **All attributes** /
+**Part N attributes** expand on demand. Attributes belong to the source image or
+Part and are shared by its layers and channels.
+Search attributes by name or value; selecting one reveals its type and complete
+value, including multiline text and matrices. Use the copy icon beside the
+selected attribute's title to copy the full value. Right-click to copy the name
+or full value, or press Ctrl+C in the attribute list. The raw `channels` attribute is
+read-only; open channel previews from the navigation instead. Source header
+dimensions remain unchanged by preview resolution levels or projections.
 
 | Input | Action |
 | --- | --- |
