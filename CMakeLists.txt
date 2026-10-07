@@ -130,6 +130,8 @@ set(PROJECT_SOURCES
     src/view/YFramebufferWidget.h
     src/view/YFramebufferWidget.ui
 
+    src/view/ScalarMappingControls.cpp
+    src/view/ScalarMappingControls.h
     src/view/ScaleWidget.cpp
     src/view/ScaleWidget.h
     src/view/RangeSliderWidget.cpp

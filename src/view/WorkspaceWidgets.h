@@ -9,3 +9,4 @@ class QWidget;
 QWidget* createWelcomePage(QAction* openAction, QWidget* parent);
 void animateToolbarButtons(QToolBar* toolbar);
 void wrapPreviewControls(QBoxLayout* layout);
+QWidget* createToolbarSeparator(QWidget* parent);

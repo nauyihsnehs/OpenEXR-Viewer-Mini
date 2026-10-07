@@ -7,7 +7,7 @@
 class QAbstractButton;
 
 namespace ViewerIcons {
-enum Kind { Open, Export, Exposure, ToneMapping, FalseColor, Inspector,
+enum Kind { Open, Export, Exposure, ToneMapping, ScalarMapping, Inspector,
             AutoRange, ColorScale, Hdr, File, Part, Layer, Group, Channel,
             Preview, Stereo, Search, Copy, Close };
 

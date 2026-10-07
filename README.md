@@ -8,7 +8,8 @@ metadata and HDR values. Built with Qt Widgets and OpenEXR; derived from
 
 - Open `.exr` and `.hdr` files from the menu, command line or drag and drop.
 - Browse parts, layers, channels and metadata; inspect source values and NaN/Inf.
-- Adjust exposure, tone mapping, false color and scalar ranges.
+- Adjust exposure, tone mapping and Scalar Mapping ranges for RGB luminance or
+  individual channels.
 - View stored Mipmap/Ripmap levels, stereo pairs, Deep Scanline depth ranges and
   environment projections.
 - Switch between the complete workspace and a compact image window.

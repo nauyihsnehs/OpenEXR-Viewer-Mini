@@ -46,6 +46,7 @@ namespace Ui
 
 class CropIndicator;
 class NonFiniteIndicator;
+class ScalarMappingControls;
 
 class YFramebufferWidget: public QWidget
 {
@@ -64,6 +65,7 @@ class YFramebufferWidget: public QWidget
 
   public slots:
     void resetCurrentMode();
+    void onControlWheel(double steps);
 
   signals:
     void minimalViewRequested();
@@ -76,29 +78,18 @@ class YFramebufferWidget: public QWidget
 
   private slots:
     void onQueryPixelInfo(int x, int y);
-
-    void on_sbMinValue_valueChanged(double arg1);
-
-    void on_sbMaxValue_valueChanged(double arg1);
-
-    void on_buttonAuto_clicked();
-
     void onOpenFileOnDropEvent(const QString& filename);
-
-    void on_cbColormap_currentIndexChanged(int index);
-
-    void on_cbScale_toggled(bool checked);
     void updateZoomLevelText(double zoom);
     void updateFramebufferSummary();
     void on_zoomButton_clicked();
 
   private:
     void bindModel(YFramebufferModel* model, bool initialize);
-    void                    setRange(double min, double max);
-    bool                    m_autoRange = false;
-    Ui::YFramebufferWidget* ui;
-    YFramebufferModel*      m_model;
-    CropIndicator*          m_cropIndicator;
-    NonFiniteIndicator*     m_nonFiniteIndicator;
-    double                  m_zoomLevel;
+    void syncScalarMappingToModel();
+    Ui::YFramebufferWidget*  ui;
+    YFramebufferModel*       m_model;
+    ScalarMappingControls*   m_mappingControls;
+    CropIndicator*           m_cropIndicator;
+    NonFiniteIndicator*      m_nonFiniteIndicator;
+    double                   m_zoomLevel;
 };

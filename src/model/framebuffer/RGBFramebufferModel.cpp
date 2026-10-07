@@ -50,9 +50,9 @@ RGBFramebufferModel::RGBFramebufferModel(
   , m_toneMappingMethod(Tone_Reinhard)
   , m_exposure(0.)
   , m_toneParams {0.18, 4., 0., 0.}
-  , m_falseColorMin(0.)
-  , m_falseColorMax(1.)
-  , m_falseColorMap(ColormapModule::create(ColormapModule::TURBO))
+  , m_scalarMappingMin(0.)
+  , m_scalarMappingMax(1.)
+  , m_scalarMappingMap(ColormapModule::create(ColormapModule::TURBO))
 {
     // A committed Deep composite may change the permitted white point. The
     // render job already used the same bound, so normalization needs no rerender.
@@ -303,23 +303,23 @@ void RGBFramebufferModel::setToneMappingMethod(ToneMappingMethod method)
     normalizeToneClampParameters();
     updateImage();
 }
-void RGBFramebufferModel::setFalseColorColormap(ColormapModule::Map map)
+void RGBFramebufferModel::setScalarMappingColormap(ColormapModule::Map map)
 {
-    m_falseColorMap.reset(ColormapModule::create(map));
+    m_scalarMappingMap.reset(ColormapModule::create(map));
     updateImage();
 }
-void RGBFramebufferModel::setFalseColorRange(double min, double max)
+void RGBFramebufferModel::setScalarMappingRange(double min, double max)
 {
     if (!std::isfinite(min) || !std::isfinite(max) || min > max) return;
-    if (m_falseColorMin == min && m_falseColorMax == max) return;
-    m_falseColorMin = min;
-    m_falseColorMax = max;
-    if (!m_falseColorAutomatic) updateImage();
+    if (m_scalarMappingMin == min && m_scalarMappingMax == max) return;
+    m_scalarMappingMin = min;
+    m_scalarMappingMax = max;
+    if (!m_scalarMappingAutomatic) updateImage();
 }
-void RGBFramebufferModel::setFalseColorAutomatic(bool enabled)
+void RGBFramebufferModel::setScalarMappingAutomatic(bool enabled)
 {
-    if (m_falseColorAutomatic == enabled) return;
-    m_falseColorAutomatic = enabled;
+    if (m_scalarMappingAutomatic == enabled) return;
+    m_scalarMappingAutomatic = enabled;
     updateImage();
 }
 void RGBFramebufferModel::setToneParameters(
@@ -354,16 +354,16 @@ void RGBFramebufferModel::updateImage()
     const auto                 source   = m_data;
     const auto projection = projectionInput();
     const auto range = depthRange();
-    const bool automatic = m_falseColorAutomatic;
+    const bool automatic = m_scalarMappingAutomatic;
     const auto                 mode     = m_previewMode;
     const auto                 method   = m_toneMappingMethod;
     const double exposureEv = m_exposure;
     const double exposure = std::exp2(m_exposure);
     const std::array<double, 4> params = {
       {m_toneParams[0], m_toneParams[1], m_toneParams[2], m_toneParams[3]}};
-    const double minimum  = m_falseColorMin;
-    const double maximum  = m_falseColorMax;
-    const auto   colormap = m_falseColorMap;
+    const double minimum  = m_scalarMappingMin;
+    const double maximum  = m_scalarMappingMax;
+    const auto   colormap = m_scalarMappingMap;
     requestRender(
       [source, projection, range, automatic, mode, method, exposure, exposureEv, params, minimum, maximum, colormap](
         const Cancellation& cancel, const Progress& progress) -> RenderResult {
@@ -388,7 +388,7 @@ void RGBFramebufferModel::updateImage()
               const int  threads = renderThreadCount();
               Q_UNUSED(threads);
               const auto mapColor = [&](const float* pixel, uchar* output) {
-                  if (mode == Preview_FalseColor) {
+                  if (mode == Preview_ScalarMapping) {
                       float rgb[3];
                       colormap->getRGBValue(ToneMapping::luminance(pixel[0], pixel[1], pixel[2]),
                                            low, high, rgb);

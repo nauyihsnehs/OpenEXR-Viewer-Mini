@@ -45,6 +45,7 @@
 #include "WorkspaceWidgets.h"
 #include "ViewerIcons.h"
 #include "ScientificDoubleSpinBox.h"
+#include "ScalarMappingControls.h"
 
 #include <QAbstractSpinBox>
 #include <QToolButton>
@@ -86,20 +87,29 @@ RGBFramebufferWidget::RGBFramebufferWidget(QWidget* parent)
   , m_previewMode(RGBFramebufferModel::Preview_Exposure)
   , m_toneParamDefaults {0., 0., 0., 0.}
   , m_zoomLevel(1.)
-  , m_falseColorAutoRange(false)
-  , m_savedFalseColorMin(0.)
-  , m_savedFalseColorMax(1.)
 {
     ui->setupUi(this);
-    ViewerIcons::setupButton(ui->falseColorAutoButton, ViewerIcons::AutoRange,
-      tr("Automatic Range"), tr("Automatic luminance range\nTurn off to restore the previous manual range."));
-    ViewerIcons::setupButton(ui->cbFalseColorScale, ViewerIcons::ColorScale,
-      tr("Color Scale"), tr("Show or hide the color scale"));
+    m_mappingControls = new ScalarMappingControls(
+      ColormapModule::TURBO, ui->scalarMappingScaleWidget, this);
+    ui->scalarMappingLayout->addWidget(m_mappingControls);
+    ui->horizontalLayout->insertWidget(ui->horizontalLayout->indexOf(ui->zoomButton) + 1,
+      m_mappingControls->colorScaleButton());
+    m_mappingControls->setSourceName(tr("Luminance"));
+    connect(m_mappingControls, &ScalarMappingControls::colormapChanged,
+      this, [this](ColormapModule::Map map) {
+          if (m_model) m_model->setScalarMappingColormap(map);
+      });
+    connect(m_mappingControls, &ScalarMappingControls::rangeChanged,
+      this, [this](double low, double high) {
+          if (m_model) m_model->setScalarMappingRange(low, high);
+      });
+    connect(m_mappingControls, &ScalarMappingControls::automaticChanged,
+      this, [this](bool enabled) {
+          if (m_model) m_model->setScalarMappingAutomatic(enabled);
+      });
     ui->exposureButton->setToolTip(tr("Exposure (EV)\nClick to reset to 0 EV."));
     ui->exposureButton->setAccessibleName(tr("Reset Exposure"));
     ui->sbExposure->setAccessibleName(tr("Exposure (EV)"));
-    ui->cbFalseColorColormap->setAccessibleName(tr("Colormap"));
-    ui->cbFalseColorColormap->setToolTip(tr("Colormap"));
     updateZoomLevelText(m_zoomLevel);
     m_cropIndicator = new CropIndicator(this);
     ui->horizontalLayout_2->insertWidget(1, m_cropIndicator, 0, Qt::AlignVCenter);
@@ -110,6 +120,8 @@ RGBFramebufferWidget::RGBFramebufferWidget(QWidget* parent)
     ui->horizontalLayout->addWidget(new ProjectionControls(this));
     ui->horizontalLayout->insertWidget(0, new ResolutionLevelWidget(this));
     wrapPreviewControls(ui->verticalLayout);
+    ui->toneMappingLayout->setSpacing(12);
+    ui->toneParamsLayout->setHorizontalSpacing(12);
     ui->graphicsView->watchOutsideZoom(this, ui->horizontalLayout_2);
     ui->verticalLayout->insertWidget(1, new DepthRangeWidget(this));
     connect(ui->graphicsView, &GraphicsView::minimalViewRequested,
@@ -184,24 +196,11 @@ RGBFramebufferWidget::RGBFramebufferWidget(QWidget* parent)
     ui->cbToneMappingMethod->setItemData(1, tr("ACES fitted"), Qt::ToolTipRole);
     ui->cbToneMappingMethod->setAccessibleName(tr("Tone Mapping Method"));
 
-    const QSignalBlocker blocker_cbFalseColorColormap(ui->cbFalseColorColormap);
-    for (int i = 0; i < ColormapModule::N_MAPS; i++) {
-        ui->cbFalseColorColormap->addItem(
-          QString::fromStdString(
-            ColormapModule::toString((ColormapModule::Map)i)));
-    }
-    ui->cbFalseColorColormap->setCurrentIndex(ColormapModule::TURBO);
-    ui->falseColorAutoButton->setCheckable(true);
-    ui->falseColorRangeSlider->setBounds(0., 1.);
-    ui->falseColorRangeSlider->setRange(0., 1.);
-    ui->falseColorScaleWidget->setColormap(ColormapModule::TURBO);
-    setFalseColorRange(0., 1., false);
-
     applyComboBoxBehavior(this);
 
     installCompactSpinBox(ui->sbExposure);
-    installCompactSpinBox(ui->sbFalseColorMinValue);
-    installCompactSpinBox(ui->sbFalseColorMaxValue);
+    ui->sbToneParam0->setToolbarCompact(true);
+    ui->sbToneParam1->setToolbarCompact(true);
     installCompactSpinBox(ui->sbToneParam0);
     installCompactSpinBox(ui->sbToneParam1);
     installCompactSpinBox(ui->sbToneParam2);
@@ -249,18 +248,11 @@ void RGBFramebufferWidget::bindModel(RGBFramebufferModel* model, bool initialize
         m_model->setExposure(ui->sbExposure->value());
         m_model->setPreviewMode(m_previewMode);
         m_model->setToneMappingMethod(currentToneMappingMethod());
-        m_model->setFalseColorColormap(currentFalseColorMap());
-        setFalseColorAutoRange(false);
-        updateFalseColorRangeBounds();
-        syncFalseColorRangeToModel();
+        syncScalarMappingToModel();
         syncToneParamsToModel();
-    } else {
-        updateFalseColorRangeBounds();
     }
     ui->graphicsView->setModel(m_model);
     connect(model, &FramebufferModel::imageChanged, this, [this] {
-        if (m_falseColorAutoRange && m_model->hasFiniteLuminanceSamples())
-            setFalseColorRange(m_model->getLuminanceMin(), m_model->getLuminanceMax(), false);
         updateFramebufferSummary();
     });
     connect(
@@ -269,16 +261,16 @@ void RGBFramebufferWidget::bindModel(RGBFramebufferModel* model, bool initialize
       this,
       SLOT(updateFramebufferSummary()));
     connect(
-      m_model,
-      SIGNAL(imageLoaded()),
-      this,
-      SLOT(updateFalseColorRangeBounds()));
-    connect(
       model,
       &FramebufferModel::readinessChanged,
       this,
       &RGBFramebufferWidget::updateFramebufferSummary);
-    updateFramebufferSummary();
+    if (initialize) {
+        updateFramebufferSummary();
+    } else {
+        const QSignalBlocker blocker(m_mappingControls);
+        updateFramebufferSummary();
+    }
 }
 
 
@@ -293,18 +285,15 @@ void RGBFramebufferWidget::setExposure(double value)
 void RGBFramebufferWidget::setPreviewMode(RGBFramebufferModel::PreviewMode mode)
 {
     const bool toneMapping = mode == RGBFramebufferModel::Preview_ToneMapping;
-    const bool falseColor  = mode == RGBFramebufferModel::Preview_FalseColor;
+    const bool scalarMapping = mode == RGBFramebufferModel::Preview_ScalarMapping;
 
     m_previewMode = mode;
 
-    ui->exposureButton->setVisible(!toneMapping && !falseColor);
-    ui->slExposure->setVisible(!toneMapping && !falseColor);
-    ui->sbExposure->setVisible(!toneMapping && !falseColor);
+    ui->exposureButton->setVisible(!toneMapping && !scalarMapping);
+    ui->slExposure->setVisible(!toneMapping && !scalarMapping);
+    ui->sbExposure->setVisible(!toneMapping && !scalarMapping);
     ui->toneMappingControlsWidget->setVisible(toneMapping);
-    ui->falseColorControlsWidget->setVisible(falseColor);
-    ui->cbFalseColorScale->setVisible(falseColor);
-    ui->falseColorScaleWidget->setVisible(
-      falseColor && ui->cbFalseColorScale->isChecked());
+    m_mappingControls->setMappingVisible(scalarMapping);
 
     if (m_model) m_model->setPreviewMode(mode);
     updateFramebufferSummary();
@@ -314,14 +303,10 @@ void RGBFramebufferWidget::setPreviewMode(RGBFramebufferModel::PreviewMode mode)
 void RGBFramebufferWidget::setSpinBoxCompact(
   QDoubleSpinBox* spinBox, bool compact)
 {
-    spinBox->setReadOnly(compact);
-    spinBox->setFrame(!compact);
-    const int scientificWidth = spinBox->fontMetrics()
-      .boundingRect(QStringLiteral("-1.2345678901234567e-38")).width();
-    spinBox->setFixedWidth(spinBox->property("scientificRange").toBool()
-      ? scientificWidth + 36 : qMax(84, spinBox->fontMetrics().boundingRect(QStringLiteral("-20.00")).width() + 36));
-    spinBox->setButtonSymbols(
-      compact ? QAbstractSpinBox::NoButtons : QAbstractSpinBox::UpDownArrows);
+    spinBox->setReadOnly(false);
+    spinBox->setFrame(true);
+    spinBox->setFixedSize(72, 28);
+    spinBox->setButtonSymbols(QAbstractSpinBox::UpDownArrows);
     if (spinBox->property("compactValue") != QVariant(compact)) {
         spinBox->setProperty("compactValue", compact);
         spinBox->style()->unpolish(spinBox);
@@ -347,8 +332,6 @@ QDoubleSpinBox* RGBFramebufferWidget::compactSpinBox(QObject* watched) const
     QWidget*        watchedWidget = qobject_cast<QWidget*>(watched);
     QDoubleSpinBox* spinBoxes[]   = {
       ui->sbExposure,
-      ui->sbFalseColorMinValue,
-      ui->sbFalseColorMaxValue,
       ui->sbToneParam0,
       ui->sbToneParam1,
       ui->sbToneParam2,
@@ -384,16 +367,6 @@ RGBFramebufferWidget::currentToneMappingMethod() const
 
     return static_cast<RGBFramebufferModel::ToneMappingMethod>(
       ui->cbToneMappingMethod->itemData(index).toInt());
-}
-
-
-ColormapModule::Map RGBFramebufferWidget::currentFalseColorMap() const
-{
-    const int index = ui->cbFalseColorColormap->currentIndex();
-
-    if (index < 0) return ColormapModule::TURBO;
-
-    return (ColormapModule::Map)index;
 }
 
 
@@ -547,78 +520,6 @@ void RGBFramebufferWidget::syncToneParamsToModel()
       ui->sbToneParam1->value(),
       ui->sbToneParam2->value(),
       ui->sbToneParam3->value());
-}
-
-
-void RGBFramebufferWidget::setFalseColorAutoRange(bool autoRange)
-{
-    m_falseColorAutoRange = autoRange;
-    if (m_model) m_model->setFalseColorAutomatic(autoRange);
-    const QSignalBlocker blocker_falseColorAutoButton(ui->falseColorAutoButton);
-    ui->falseColorAutoButton->setChecked(autoRange);
-}
-
-
-void RGBFramebufferWidget::updateFalseColorRangeBounds()
-{
-    updateFalseColorRangeBounds(
-      ui->sbFalseColorMinValue->value(),
-      ui->sbFalseColorMaxValue->value());
-}
-
-
-void RGBFramebufferWidget::updateFalseColorRangeBounds(double min, double max)
-{
-    double boundMin = 0.;
-    double boundMax = 1.;
-
-    if (m_model && m_model->hasFiniteLuminanceSamples()) {
-        boundMin = m_model->getLuminanceMin();
-        boundMax = m_model->getLuminanceMax();
-    }
-
-    boundMin = std::min(boundMin, min);
-    boundMax = std::max(boundMax, max);
-
-    ui->falseColorRangeSlider->setBounds(boundMin, boundMax);
-    ui->falseColorRangeSlider->setRange(min, max);
-}
-
-
-void RGBFramebufferWidget::setFalseColorRange(
-  double min, double max, bool manual)
-{
-    if (min > max) std::swap(min, max);
-    if (manual && m_falseColorAutoRange) setFalseColorAutoRange(false);
-
-    updateFalseColorRangeBounds(min, max);
-
-    const QSignalBlocker blocker_sbFalseColorMinValue(ui->sbFalseColorMinValue);
-    const QSignalBlocker blocker_sbFalseColorMaxValue(ui->sbFalseColorMaxValue);
-    const QSignalBlocker blocker_falseColorRangeSlider(
-      ui->falseColorRangeSlider);
-
-    ui->sbFalseColorMinValue->setRange(-ScientificDoubleSpinBox::sampleLimit(), max);
-    ui->sbFalseColorMaxValue->setRange(min, ScientificDoubleSpinBox::sampleLimit());
-    ui->sbFalseColorMinValue->setValue(min);
-    ui->sbFalseColorMaxValue->setValue(max);
-    ui->falseColorRangeSlider->setRange(min, max);
-
-
-    syncFalseColorRangeToModel();
-}
-
-
-void RGBFramebufferWidget::syncFalseColorRangeToModel()
-{
-    ui->falseColorScaleWidget->setMin(ui->sbFalseColorMinValue->value());
-    ui->falseColorScaleWidget->setMax(ui->sbFalseColorMaxValue->value());
-
-    if (m_model) {
-        m_model->setFalseColorRange(
-          ui->sbFalseColorMinValue->value(),
-          ui->sbFalseColorMaxValue->value());
-    }
 }
 
 
@@ -804,13 +705,8 @@ void RGBFramebufferWidget::resetCurrentMode()
             ui->cbToneMappingMethod->setCurrentIndex(0);
             updateToneMappingControls();
             break;
-        case RGBFramebufferModel::Preview_FalseColor:
-            ui->cbFalseColorColormap->setCurrentIndex(ColormapModule::TURBO);
-            m_savedFalseColorMin = 0.;
-            m_savedFalseColorMax = 1.;
-            setFalseColorAutoRange(false);
-            setFalseColorRange(0., 1., false);
-            ui->cbFalseColorScale->setChecked(true);
+        case RGBFramebufferModel::Preview_ScalarMapping:
+            m_mappingControls->reset();
             break;
     }
 }
@@ -821,10 +717,8 @@ QString RGBFramebufferWidget::currentParameterText() const
         return tr("%1 | %2 %3")
           .arg(ui->cbToneMappingMethod->currentText(), ui->toneParamButton0->text())
           .arg(ui->sbToneParam0->value(), 0, 'g', 4);
-    if (m_previewMode == RGBFramebufferModel::Preview_FalseColor)
-        return tr("%1 | %2 - %3").arg(ui->cbFalseColorColormap->currentText())
-          .arg(ui->sbFalseColorMinValue->value(), 0, 'g', 4)
-          .arg(ui->sbFalseColorMaxValue->value(), 0, 'g', 4);
+    if (m_previewMode == RGBFramebufferModel::Preview_ScalarMapping)
+        return m_mappingControls->parameterText();
     return tr("EV %1").arg(ui->sbExposure->value(), 0, 'f', 2);
 }
 
@@ -834,68 +728,6 @@ void RGBFramebufferWidget::on_cbToneMappingMethod_currentIndexChanged(int)
     if (m_model) m_model->setToneMappingMethod(currentToneMappingMethod());
 
     updateToneMappingControls();
-}
-
-
-void RGBFramebufferWidget::on_cbFalseColorColormap_currentIndexChanged(
-  int index)
-{
-    ColormapModule::Map cmap = (ColormapModule::Map)index;
-
-    ui->falseColorScaleWidget->setColormap(cmap);
-
-    if (m_model) m_model->setFalseColorColormap(cmap);
-}
-
-
-void RGBFramebufferWidget::on_sbFalseColorMinValue_valueChanged(double value)
-{
-    setFalseColorRange(value, ui->sbFalseColorMaxValue->value(), true);
-}
-
-
-void RGBFramebufferWidget::on_sbFalseColorMaxValue_valueChanged(double value)
-{
-    setFalseColorRange(ui->sbFalseColorMinValue->value(), value, true);
-}
-
-
-void RGBFramebufferWidget::on_falseColorRangeSlider_rangeChanged(
-  double min, double max)
-{
-    setFalseColorRange(min, max, true);
-}
-
-
-void RGBFramebufferWidget::on_falseColorAutoButton_clicked()
-{
-    if (m_falseColorAutoRange) {
-        setFalseColorAutoRange(false);
-        setFalseColorRange(m_savedFalseColorMin, m_savedFalseColorMax, false);
-        return;
-    }
-
-    if (!m_model || !m_model->hasFiniteLuminanceSamples()) {
-        setFalseColorAutoRange(false);
-        return;
-    }
-
-    m_savedFalseColorMin = ui->sbFalseColorMinValue->value();
-    m_savedFalseColorMax = ui->sbFalseColorMaxValue->value();
-
-    setFalseColorAutoRange(true);
-    setFalseColorRange(
-      m_model->getLuminanceMin(),
-      m_model->getLuminanceMax(),
-      false);
-}
-
-
-void RGBFramebufferWidget::on_cbFalseColorScale_toggled(bool checked)
-{
-    ui->falseColorScaleWidget->setVisible(
-      checked
-      && m_previewMode == RGBFramebufferModel::Preview_FalseColor);
 }
 
 
@@ -987,15 +819,12 @@ void RGBFramebufferWidget::onOpenFileOnDropEvent(const QString& filename)
 void RGBFramebufferWidget::onControlWheel(double steps)
 {
     if (!m_model || !m_model->isImageLoaded() || steps == 0.) return;
-
-
-    QDoubleSpinBox* spinBox
-      = m_previewMode == RGBFramebufferModel::Preview_ToneMapping
-          ? ui->sbToneParam0
-        : m_previewMode == RGBFramebufferModel::Preview_FalseColor
-          ? ui->sbFalseColorMaxValue
-          : ui->sbExposure;
-
+    if (m_previewMode == RGBFramebufferModel::Preview_ScalarMapping) {
+        m_mappingControls->adjustMaximum(steps);
+        return;
+    }
+    QDoubleSpinBox* spinBox = m_previewMode == RGBFramebufferModel::Preview_ToneMapping
+      ? ui->sbToneParam0 : ui->sbExposure;
     spinBox->setValue(spinBox->value() + steps * spinBox->singleStep());
 }
 
@@ -1024,7 +853,10 @@ void RGBFramebufferWidget::updateFramebufferSummary()
     ui->framebufferSummaryLabel->setSummary(m_model, status);
     ui->framebufferSummaryLabel->setToolTip(detail);
     const bool loaded = m_model && m_model->isImageLoaded();
-    ui->falseColorAutoButton->setEnabled(loaded && m_model->hasFiniteLuminanceSamples());
+    const bool finite = loaded && m_model->hasFiniteLuminanceSamples();
+    m_mappingControls->setFiniteRange(finite,
+      finite ? m_model->getLuminanceMin() : 0.,
+      finite ? m_model->getLuminanceMax() : 1.);
 }
 
 
@@ -1047,13 +879,7 @@ PreviewState RGBFramebufferWidget::previewState() const
     state.exposure   = ui->sbExposure->value();
     for (int i = 0; i < 4; ++i)
         state.toneParameters[i] = toneParamSpinBox(i)->value();
-    state.colormap     = ui->cbFalseColorColormap->currentIndex();
-    state.minimum      = ui->sbFalseColorMinValue->value();
-    state.maximum      = ui->sbFalseColorMaxValue->value();
-    state.savedMinimum = m_savedFalseColorMin;
-    state.savedMaximum = m_savedFalseColorMax;
-    state.automatic    = m_falseColorAutoRange;
-    state.scaleVisible = ui->cbFalseColorScale->isChecked();
+    m_mappingControls->saveState(state);
     state.highlightNonFinite = m_model ? m_model->highlightNonFinite()
                                       : m_nonFiniteIndicator->isChecked();
     return state;
@@ -1077,16 +903,14 @@ void RGBFramebufferWidget::restorePreviewState(const PreviewState& state)
             setToneParamValue(i, state.toneParameters[i]);
     for (int i = 2; i < 4; ++i)
         setToneParamValue(i, state.toneParameters[i]);
-    ui->cbFalseColorColormap->setCurrentIndex(state.colormap);
-    ui->cbFalseColorScale->setChecked(state.scaleVisible);
-    m_savedFalseColorMin = state.savedMinimum;
-    m_savedFalseColorMax = state.savedMaximum;
-    setFalseColorAutoRange(state.automatic && (!m_model || m_model->hasDeepSamples() || m_model->hasFiniteLuminanceSamples()));
-    if (m_falseColorAutoRange && m_model)
-        setFalseColorRange(
-          m_model->getLuminanceMin(),
-          m_model->getLuminanceMax(),
-          false);
-    else
-        setFalseColorRange(state.minimum, state.maximum, false);
+    m_mappingControls->restoreState(state);
+    if (m_model) syncScalarMappingToModel();
+}
+
+
+void RGBFramebufferWidget::syncScalarMappingToModel()
+{
+    m_model->setScalarMappingColormap(m_mappingControls->colormap());
+    m_model->setScalarMappingRange(m_mappingControls->minimum(), m_mappingControls->maximum());
+    m_model->setScalarMappingAutomatic(m_mappingControls->automatic());
 }

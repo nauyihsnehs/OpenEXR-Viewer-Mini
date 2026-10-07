@@ -133,7 +133,7 @@ class MainWindow: public QMainWindow
     void on_action_ShowInspector_toggled(bool checked);
     void on_action_ModeExposure_triggered();
     void on_action_ModeToneMapping_triggered();
-    void on_action_ModeFalseColor_triggered();
+    void on_action_ModeScalarMapping_triggered();
     void on_action_ModeHDR_triggered();
     void on_action_ThemeLight_triggered();
     void on_action_ThemeDark_triggered();
@@ -158,6 +158,7 @@ class MainWindow: public QMainWindow
     void             setupStereoActions();
     void             setupThemeActions();
     void             applyRgbPreviewMode(RGBFramebufferModel::PreviewMode mode);
+    void             syncPreviewModeActions();
     void             updateHdrAvailability();
     void             queueHdrAvailabilityProbe();
     void             applyTheme(const QString& themeName);

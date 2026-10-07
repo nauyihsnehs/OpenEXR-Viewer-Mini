@@ -2,9 +2,13 @@
 #include "ViewerIcons.h"
 
 #include <QAction>
+#include <QAbstractButton>
+#include <QAbstractSpinBox>
 #include <QBoxLayout>
+#include <QComboBox>
 #include <QEvent>
 #include <QFocusEvent>
+#include <QFrame>
 #include <QGraphicsOpacityEffect>
 #include <QLabel>
 #include <QKeySequence>
@@ -15,6 +19,7 @@
 #include <QPushButton>
 #include <QScrollArea>
 #include <QScrollBar>
+#include <QSlider>
 #include <QResizeEvent>
 #include <QStyle>
 #include <QToolBar>
@@ -182,6 +187,24 @@ class ButtonHover : public QObject
     qreal m_amount = 0.;
 };
 
+void compactToolbarLayout(QLayout* layout)
+{
+    layout->setSpacing(6);
+    for (int i = 0; i < layout->count(); ++i) {
+        auto* item = layout->itemAt(i);
+        if (item->layout()) {
+            compactToolbarLayout(item->layout());
+            continue;
+        }
+        auto* widget = item->widget();
+        if (!widget) continue;
+        if (qobject_cast<QComboBox*>(widget) || qobject_cast<QAbstractSpinBox*>(widget)
+            || qobject_cast<QAbstractButton*>(widget) || qobject_cast<QSlider*>(widget))
+            widget->setFixedHeight(28);
+        if (widget->layout()) compactToolbarLayout(widget->layout());
+    }
+}
+
 class PreviewControls : public QScrollArea
 {
   public:
@@ -197,9 +220,11 @@ class PreviewControls : public QScrollArea
         auto* content = new QWidget;
         content->setObjectName("previewControls");
         controls->setContentsMargins(8, 4, 8, 4);
-        controls->setSpacing(8);
         controls->setSizeConstraint(QLayout::SetMinAndMaxSize);
         content->setLayout(controls);
+        // Keep all parameter controls aligned without changing footer or dialog
+        // widgets or the private layouts of combo popups.
+        compactToolbarLayout(controls);
         setWidget(content);
         content->installEventFilter(this);
         connect(horizontalScrollBar(), &QScrollBar::rangeChanged, this,
@@ -261,4 +286,12 @@ void wrapPreviewControls(QBoxLayout* layout)
     layout->insertWidget(0, new PreviewControls(controls, layout->parentWidget()));
     layout->setContentsMargins(0, 0, 0, 8);
     layout->setSpacing(0);
+}
+
+QWidget* createToolbarSeparator(QWidget* parent)
+{
+    auto* line = new QFrame(parent);
+    line->setObjectName("toolbarGroupSeparator");
+    line->setFixedSize(1, 16);
+    return line;
 }

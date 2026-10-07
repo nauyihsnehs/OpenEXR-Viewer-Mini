@@ -69,11 +69,11 @@ QMenu::separator { height: 1px; background: #dce1e7; margin: 4px 8px; }
 QToolBar#workspaceToolbar {
     border: none;
     border-bottom: 1px solid #dce1e7;
-    spacing: 4px;
-    padding: 6px 8px;
+    spacing: 6px;
+    padding: 4px 8px;
 }
-QToolBar#workspaceToolbar::separator { background: #dce1e7; width: 1px; margin: 5px 8px; }
-QToolBar#workspaceToolbar QToolButton { padding: 5px; }
+QToolBar#workspaceToolbar::separator { background: #dce1e7; width: 1px; margin: 6px 0; }
+QToolBar#workspaceToolbar QToolButton { padding: 4px; border-radius: 4px; }
 QToolButton#fileInfoButton, QToolButton#anomalyMarkerButton { padding: 2px; border-radius: 4px; }
 QPushButton, QToolButton {
     background: #f3f5f8;
@@ -246,3 +246,29 @@ QWidget#minimalImageFooter, QLabel#minimalImageInfo, QLabel#minimalPixelInfo {
     color: #687281;
     background: #ffffff;
 }
+
+/* Compact parameter rows: scoped to the preview toolbar, not dialogs or Inspector. */
+QWidget#previewControls QComboBox,
+QWidget#previewControls QDoubleSpinBox,
+QWidget#previewControls QPushButton,
+QWidget#previewControls QToolButton {
+    min-height: 20px;
+    max-height: 20px;
+    padding: 3px 6px;
+    border-radius: 4px;
+    background: #f3f5f8;
+}
+QWidget#previewControls QComboBox { padding-right: 28px; }
+QWidget#previewControls QDoubleSpinBox { padding-left: 4px; padding-right: 20px; }
+QWidget#previewControls QDoubleSpinBox::up-button,
+QWidget#previewControls QDoubleSpinBox::down-button { width: 14px; height: 12px; }
+QWidget#previewControls QPushButton:hover,
+QWidget#previewControls QToolButton:hover { background: #e8edf3; }
+QWidget#previewControls QPushButton:checked,
+QWidget#previewControls QToolButton:checked,
+QWidget#previewControls QPushButton:pressed,
+QWidget#previewControls QToolButton:pressed { background: #dce7f4; }
+QWidget#previewControls QPushButton:disabled,
+QWidget#previewControls QToolButton:disabled { background: transparent; }
+QWidget#previewControls QFrame#toolbarGroupSeparator { background: #dce1e7; border: none; }
+QWidget#previewControls RangeSliderWidget#scalarMappingRangeSlider { qproperty-trackColor: #dce1e7; }

@@ -38,55 +38,12 @@
       <number>9</number>
      </property>
      <item>
-      <widget class="QLabel" name="label_3">
-       <property name="text">
-        <string>Map</string>
-       </property>
-      </widget>
-     </item>
-     <item>
-      <widget class="QComboBox" name="cbColormap">
-       <property name="sizePolicy">
-        <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
-         <horstretch>0</horstretch>
-         <verstretch>0</verstretch>
-        </sizepolicy>
-       </property>
-      </widget>
-     </item>
-     <item>
-      <widget class="QLabel" name="label">
-       <property name="text">
-        <string>Range</string>
-       </property>
-      </widget>
-     </item>
-     <item>
-      <widget class="ScientificDoubleSpinBox" name="sbMinValue">
-       <property name="singleStep">
-        <double>0.010000000000000</double>
-       </property>
-       <property name="value">
-        <double>0.000000000000000</double>
-       </property>
-      </widget>
-     </item>
-     <item>
-      <widget class="ScientificDoubleSpinBox" name="sbMaxValue">
-       <property name="singleStep">
-        <double>0.010000000000000</double>
-       </property>
-       <property name="value">
-        <double>1.000000000000000</double>
-       </property>
-      </widget>
-     </item>
-     <item>
-      <widget class="QPushButton" name="buttonAuto">
-       <property name="text">
-        <string/>
-       </property>
-      </widget>
+      <layout class="QHBoxLayout" name="scalarMappingLayout">
+       <property name="leftMargin"><number>0</number></property>
+       <property name="topMargin"><number>0</number></property>
+       <property name="rightMargin"><number>0</number></property>
+       <property name="bottomMargin"><number>0</number></property>
+      </layout>
      </item>
      <item>
       <spacer name="horizontalSpacer_2">
@@ -130,7 +87,7 @@
     </layout>
    </item>
    <item>
-    <layout class="QHBoxLayout" name="horizontalLayout_3" stretch="0,0,0,0,1">
+    <layout class="QHBoxLayout" name="horizontalLayout_3" stretch="0,0,0,1">
      <property name="spacing"><number>12</number></property>
      <property name="leftMargin">
       <number>9</number>
@@ -170,19 +127,6 @@
        </property>
        <property name="text">
         <string/>
-       </property>
-      </widget>
-     </item>
-     <item>
-      <widget class="QToolButton" name="cbScale">
-       <property name="text">
-        <string/>
-       </property>
-       <property name="checkable">
-        <bool>true</bool>
-       </property>
-       <property name="checked">
-        <bool>true</bool>
        </property>
       </widget>
      </item>
@@ -235,11 +179,6 @@
    <extends>QWidget</extends>
    <header>view/ScaleWidget.h</header>
    <container>1</container>
-  </customwidget>
-  <customwidget>
-   <class>ScientificDoubleSpinBox</class>
-   <extends>QDoubleSpinBox</extends>
-   <header>view/ScientificDoubleSpinBox.h</header>
   </customwidget>
  </customwidgets>
  <resources/>

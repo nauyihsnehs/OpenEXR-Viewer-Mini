@@ -47,7 +47,7 @@
      </property>
      <addaction name="action_ModeExposure"/>
      <addaction name="action_ModeToneMapping"/>
-     <addaction name="action_ModeFalseColor"/>
+     <addaction name="action_ModeScalarMapping"/>
      <addaction name="action_ModeHDR"/>
     </widget>
     <widget class="QMenu" name="menu_Show">
@@ -143,12 +143,12 @@
    <property name="text"><string>HDR</string></property>
    <property name="toolTip"><string>Display linear floating-point color on a Windows HDR monitor. Enable HDR in Windows Display Settings to make this mode available.</string></property>
   </action>
-  <action name="action_ModeFalseColor">
+  <action name="action_ModeScalarMapping">
    <property name="checkable">
     <bool>true</bool>
    </property>
    <property name="text">
-    <string>False color</string>
+    <string>Scalar Mapping</string>
    </property>
   </action>
   <action name="action_Refresh">

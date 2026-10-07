@@ -88,7 +88,7 @@ class IconEngine : public QIconEngine
                 path.lineTo(11, 7); path.cubicTo(17, 7, 17, 13, 11, 13);
                 painter->drawPath(path);
                 break;
-            case FalseColor: {
+            case ScalarMapping: {
                 const QColor colors[] = {QColor(79, 117, 211), QColor(58, 178, 159),
                                          QColor(225, 185, 65), QColor(213, 92, 78)};
                 for (int i = 0; i < 4; ++i) {

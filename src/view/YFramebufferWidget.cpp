@@ -36,8 +36,7 @@
 #include "DepthRangeWidget.h"
 #include "ProjectionControls.h"
 #include "ResolutionLevelWidget.h"
-#include "ScientificDoubleSpinBox.h"
-#include <QToolButton>
+#include "ScalarMappingControls.h"
 #include <QSignalBlocker>
 #include "ui_YFramebufferWidget.h"
 
@@ -59,18 +58,28 @@ YFramebufferWidget::YFramebufferWidget(QWidget* parent)
   , m_zoomLevel(1.)
 {
     ui->setupUi(this);
-    ViewerIcons::setupButton(ui->buttonAuto, ViewerIcons::AutoRange,
-      tr("Automatic Range"), tr("Use the full finite value range\nAdjust either bound to return to a manual range."));
-    ViewerIcons::setupButton(ui->cbScale, ViewerIcons::ColorScale,
-      tr("Color Scale"), tr("Show or hide the color scale"));
-    ui->cbColormap->setAccessibleName(tr("Colormap"));
-    ui->cbColormap->setToolTip(tr("Colormap"));
+    m_mappingControls = new ScalarMappingControls(
+      ColormapModule::GRAYSCALE, ui->scaleWidget, this);
+    ui->scalarMappingLayout->addWidget(m_mappingControls);
+    ui->horizontalLayout->insertWidget(ui->horizontalLayout->indexOf(ui->zoomButton) + 1,
+      m_mappingControls->colorScaleButton());
+    connect(m_mappingControls, &ScalarMappingControls::colormapChanged,
+      this, [this](ColormapModule::Map map) {
+          if (m_model) m_model->setColormap(map);
+      });
+    connect(m_mappingControls, &ScalarMappingControls::rangeChanged,
+      this, [this](double low, double high) {
+          if (m_model) m_model->setRange(low, high);
+      });
+    connect(m_mappingControls, &ScalarMappingControls::automaticChanged,
+      this, [this](bool enabled) {
+          if (m_model) m_model->setAutomaticRange(enabled);
+      });
     updateZoomLevelText(m_zoomLevel);
     m_cropIndicator = new CropIndicator(this);
     ui->horizontalLayout_3->insertWidget(1, m_cropIndicator, 0, Qt::AlignVCenter);
     m_nonFiniteIndicator = new NonFiniteIndicator(this);
     ui->horizontalLayout_3->insertWidget(3, m_nonFiniteIndicator, 0, Qt::AlignVCenter);
-    setRange(0., 1.);
     ui->horizontalLayout->addWidget(new ProjectionControls(this));
     ui->horizontalLayout->insertWidget(0, new ResolutionLevelWidget(this));
     wrapPreviewControls(ui->verticalLayout);
@@ -80,6 +89,8 @@ YFramebufferWidget::YFramebufferWidget(QWidget* parent)
             this, &YFramebufferWidget::minimalViewRequested);
     connect(ui->graphicsView, &GraphicsView::resetParametersRequested,
             this, &YFramebufferWidget::resetCurrentMode);
+    connect(ui->graphicsView, &GraphicsView::controlWheel,
+            this, &YFramebufferWidget::onControlWheel);
     ui->fileInfoButton->setIcon(
       style()->standardIcon(QStyle::SP_MessageBoxInformation));
     ui->fileInfoButton->setToolTip(QString());
@@ -101,11 +112,6 @@ YFramebufferWidget::YFramebufferWidget(QWidget* parent)
         this,             SLOT(updateZoomLevelText(double)));
     // clang-format on
 
-    for (int i = 0; i < ColormapModule::N_MAPS; i++) {
-        ui->cbColormap->addItem(
-          QString::fromStdString(
-            ColormapModule::toString((ColormapModule::Map)i)));
-    }
     applyComboBoxBehavior(this);
 }
 
@@ -138,7 +144,11 @@ void YFramebufferWidget::bindModel(YFramebufferModel* model, bool initialize)
     const bool markers = m_nonFiniteIndicator->isChecked();
     m_nonFiniteIndicator->setModel(nullptr);
     m_model = model;
-    if (initialize) m_model->setHighlightNonFinite(markers);
+    m_mappingControls->setSourceName(QString::fromStdString(model->getLayerName()));
+    if (initialize) {
+        m_model->setHighlightNonFinite(markers);
+        syncScalarMappingToModel();
+    }
     m_nonFiniteIndicator->setModel(model);
     ui->selectInfoLabel->setModel(model);
     findChild<DepthRangeWidget*>()->setModel(model);
@@ -146,8 +156,6 @@ void YFramebufferWidget::bindModel(YFramebufferModel* model, bool initialize)
     if (m_model && m_model->parent() != this) m_model->setParent(this);
     ui->graphicsView->setModel(model);
     connect(model, &FramebufferModel::imageChanged, this, [this] {
-        if (m_autoRange && m_model->hasFiniteDisplay())
-            setRange(m_model->displayMinimum(), m_model->displayMaximum());
         updateFramebufferSummary();
     });
     connect(
@@ -160,7 +168,12 @@ void YFramebufferWidget::bindModel(YFramebufferModel* model, bool initialize)
       SIGNAL(imageLoaded()),
       this,
       SLOT(updateFramebufferSummary()));
-    updateFramebufferSummary();
+    if (initialize) {
+        updateFramebufferSummary();
+    } else {
+        const QSignalBlocker blocker(m_mappingControls);
+        updateFramebufferSummary();
+    }
 }
 
 
@@ -191,55 +204,9 @@ void YFramebufferWidget::onQueryPixelInfo(int x, int y)
 }
 
 
-void YFramebufferWidget::on_sbMinValue_valueChanged(double arg1)
-{
-    m_autoRange = false;
-    if (m_model) m_model->setAutomaticRange(false);
-    ui->sbMaxValue->setMinimum(arg1);
-    ui->scaleWidget->setMin(arg1);
-    if (m_model) m_model->setMinValue(arg1);
-}
-
-
-void YFramebufferWidget::on_sbMaxValue_valueChanged(double arg1)
-{
-    m_autoRange = false;
-    if (m_model) m_model->setAutomaticRange(false);
-    ui->sbMinValue->setMaximum(arg1);
-    ui->scaleWidget->setMax(arg1);
-    if (m_model) m_model->setMaxValue(arg1);
-}
-
-
-void YFramebufferWidget::on_buttonAuto_clicked()
-{
-    if (m_model && m_model->hasFiniteDisplay()) {
-        m_autoRange = true;
-        m_model->setAutomaticRange(true);
-        setRange(m_model->displayMinimum(), m_model->displayMaximum());
-    }
-}
-
-
 void YFramebufferWidget::onOpenFileOnDropEvent(const QString& filename)
 {
     emit openFileOnDropEvent(filename);
-}
-
-
-void YFramebufferWidget::on_cbColormap_currentIndexChanged(int index)
-{
-    ColormapModule::Map cmap = (ColormapModule::Map)index;
-
-    ui->scaleWidget->setColormap(cmap);
-
-    if (m_model) m_model->setColormap(cmap);
-}
-
-
-void YFramebufferWidget::on_cbScale_toggled(bool checked)
-{
-    ui->scaleWidget->setVisible(checked);
 }
 
 
@@ -259,7 +226,10 @@ void YFramebufferWidget::updateFramebufferSummary()
     ui->framebufferSummaryLabel->setSummary(m_model);
     ui->framebufferSummaryLabel->setToolTip(framebufferSummaryToolTip(m_model));
     const bool loaded = m_model && m_model->isImageLoaded();
-    ui->buttonAuto->setEnabled(loaded && m_model->hasFiniteDisplay());
+    const bool finite = loaded && m_model->hasFiniteDisplay();
+    m_mappingControls->setFiniteRange(finite,
+      finite ? m_model->displayMinimum() : 0.,
+      finite ? m_model->displayMaximum() : 1.);
 }
 
 
@@ -273,27 +243,11 @@ void YFramebufferWidget::on_zoomButton_clicked()
     ui->graphicsView->setZoomLevel(1.);
 }
 
-void YFramebufferWidget::setRange(double min, double max)
-{
-    const QSignalBlocker low(ui->sbMinValue), high(ui->sbMaxValue);
-    ui->sbMinValue->setRange(-ScientificDoubleSpinBox::sampleLimit(), max);
-    ui->sbMaxValue->setRange(min, ScientificDoubleSpinBox::sampleLimit());
-    ui->sbMinValue->setValue(min);
-    ui->sbMaxValue->setValue(max);
-    ui->scaleWidget->setMin(ui->sbMinValue->value());
-    ui->scaleWidget->setMax(ui->sbMaxValue->value());
-    if (m_model)
-        m_model->setRange(ui->sbMinValue->value(), ui->sbMaxValue->value());
-}
 PreviewState YFramebufferWidget::previewState() const
 {
     PreviewState state;
     if (m_model) { state.depth = m_model->depthRange(); state.projection = m_model->projectionState(); }
-    state.colormap     = ui->cbColormap->currentIndex();
-    state.minimum      = ui->sbMinValue->value();
-    state.maximum      = ui->sbMaxValue->value();
-    state.automatic    = m_autoRange;
-    state.scaleVisible = ui->cbScale->isChecked();
+    m_mappingControls->saveState(state);
     state.highlightNonFinite = m_model ? m_model->highlightNonFinite()
                                       : m_nonFiniteIndicator->isChecked();
     return state;
@@ -306,29 +260,31 @@ void YFramebufferWidget::restorePreviewState(const PreviewState& state)
     }
     if (m_model) m_model->setHighlightNonFinite(state.highlightNonFinite);
     else m_nonFiniteIndicator->setChecked(state.highlightNonFinite);
-    ui->cbColormap->setCurrentIndex(state.colormap);
-    ui->cbScale->setChecked(state.scaleVisible);
-    m_autoRange = state.automatic && (!m_model || m_model->hasDeepSamples() || m_model->hasFiniteDisplay());
-    if (m_model) m_model->setAutomaticRange(m_autoRange);
-    if (m_autoRange && m_model)
-        setRange(m_model->displayMinimum(), m_model->displayMaximum());
-    else
-        setRange(state.minimum, state.maximum);
+    m_mappingControls->restoreState(state);
+    if (m_model) syncScalarMappingToModel();
 }
 
 void YFramebufferWidget::resetCurrentMode()
 {
     if (!m_model || !m_model->isImageLoaded()) return;
-    m_autoRange = false;
-    if (m_model) m_model->setAutomaticRange(false);
-    ui->cbColormap->setCurrentIndex(ColormapModule::GRAYSCALE);
-    setRange(0., 1.);
-    ui->cbScale->setChecked(true);
+    m_mappingControls->reset();
 }
 
 QString YFramebufferWidget::currentParameterText() const
 {
-    return tr("%1 | %2 - %3").arg(ui->cbColormap->currentText())
-      .arg(ui->sbMinValue->value(), 0, 'g', 4)
-      .arg(ui->sbMaxValue->value(), 0, 'g', 4);
+    return m_mappingControls->parameterText();
+}
+
+
+void YFramebufferWidget::syncScalarMappingToModel()
+{
+    m_model->setColormap(m_mappingControls->colormap());
+    m_model->setRange(m_mappingControls->minimum(), m_mappingControls->maximum());
+    m_model->setAutomaticRange(m_mappingControls->automatic());
+}
+
+void YFramebufferWidget::onControlWheel(double steps)
+{
+    if (!m_model || !m_model->isImageLoaded()) return;
+    m_mappingControls->adjustMaximum(steps);
 }

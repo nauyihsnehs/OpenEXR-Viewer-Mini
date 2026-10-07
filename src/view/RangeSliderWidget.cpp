@@ -209,7 +209,7 @@ void RangeSliderWidget::paintEvent(QPaintEvent* event)
       barHeight);
 
     painter.setPen(Qt::NoPen);
-    painter.setBrush(palette().color(QPalette::Button));
+    painter.setBrush(m_trackColor.isValid() ? m_trackColor : palette().color(QPalette::Button));
     painter.drawRoundedRect(trackRect, 2, 2);
 
     painter.setBrush(palette().color(QPalette::Highlight));

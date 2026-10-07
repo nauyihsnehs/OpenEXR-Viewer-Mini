@@ -501,7 +501,7 @@ void MainWindow::setupWorkspace()
     decorate(ui->action_Save, ViewerIcons::Export, tr("Export Image"));
     decorate(ui->action_ModeExposure, ViewerIcons::Exposure, tr("Exposure"));
     decorate(ui->action_ModeToneMapping, ViewerIcons::ToneMapping, tr("Tone Mapping"));
-    decorate(ui->action_ModeFalseColor, ViewerIcons::FalseColor, tr("False Color"));
+    decorate(ui->action_ModeScalarMapping, ViewerIcons::ScalarMapping, tr("Scalar Mapping"));
     decorate(ui->action_ModeHDR, ViewerIcons::Hdr, tr("HDR Display"));
     ui->action_ModeHDR->setToolTip(tr("Display linear color on a Windows HDR monitor.\nEnable HDR in Windows Display Settings to make this mode available."));
 #ifndef Q_OS_WIN
@@ -513,14 +513,14 @@ void MainWindow::setupWorkspace()
     toolbar->addSeparator();
     toolbar->addAction(ui->action_ModeExposure);
     toolbar->addAction(ui->action_ModeToneMapping);
-    toolbar->addAction(ui->action_ModeFalseColor);
+    toolbar->addAction(ui->action_ModeScalarMapping);
     toolbar->addAction(ui->action_ModeHDR);
     toolbar->addSeparator();
     toolbar->addAction(ui->action_ShowInspector);
     for (QAction* action : toolbar->actions()) {
         auto* button = qobject_cast<QToolButton*>(toolbar->widgetForAction(action));
         if (!button) continue;
-        button->setFixedSize(32, 32);
+        button->setFixedSize(28, 28);
         button->setAccessibleName(action->iconText());
     }
     addToolBar(Qt::TopToolBarArea, toolbar);
@@ -631,12 +631,12 @@ void MainWindow::setupPreviewModeActions()
     modeGroup->setExclusive(true);
     modeGroup->addAction(ui->action_ModeExposure);
     modeGroup->addAction(ui->action_ModeToneMapping);
-    modeGroup->addAction(ui->action_ModeFalseColor);
+    modeGroup->addAction(ui->action_ModeScalarMapping);
     modeGroup->addAction(ui->action_ModeHDR);
 
     ui->action_ModeExposure->setCheckable(true);
     ui->action_ModeToneMapping->setCheckable(true);
-    ui->action_ModeFalseColor->setCheckable(true);
+    ui->action_ModeScalarMapping->setCheckable(true);
     ui->action_ModeHDR->setCheckable(true);
     ui->action_ModeExposure->setChecked(true);
 }
@@ -645,31 +645,48 @@ void MainWindow::setupPreviewModeActions()
 void MainWindow::applyRgbPreviewMode(RGBFramebufferModel::PreviewMode mode)
 {
     m_rgbPreviewMode = mode;
-
-    ui->action_ModeExposure->blockSignals(true);
-    ui->action_ModeToneMapping->blockSignals(true);
-    ui->action_ModeFalseColor->blockSignals(true);
-    ui->action_ModeHDR->blockSignals(true);
-
-    ui->action_ModeExposure->setChecked(
-      mode == RGBFramebufferModel::Preview_Exposure);
-    ui->action_ModeToneMapping->setChecked(
-      mode == RGBFramebufferModel::Preview_ToneMapping);
-    ui->action_ModeFalseColor->setChecked(
-      mode == RGBFramebufferModel::Preview_FalseColor);
-    ui->action_ModeHDR->setChecked(mode == RGBFramebufferModel::Preview_HDR);
-
-    ui->action_ModeExposure->blockSignals(false);
-    ui->action_ModeToneMapping->blockSignals(false);
-    ui->action_ModeFalseColor->blockSignals(false);
-    ui->action_ModeHDR->blockSignals(false);
-
     for (int i = 0; i < m_openFileTabs->count(); i++) {
         ImageFileWidget* widget
           = qobject_cast<ImageFileWidget*>(m_openFileTabs->widget(i));
 
         if (widget) widget->setRgbPreviewMode(mode);
     }
+    syncPreviewModeActions();
+}
+
+void MainWindow::syncPreviewModeActions()
+{
+    const auto* document = currentFileWidget();
+    const bool scalar = document
+      && qobject_cast<YFramebufferWidget*>(document->activePreviewWidget());
+    const auto mode = scalar ? RGBFramebufferModel::Preview_ScalarMapping : m_rgbPreviewMode;
+    const QSignalBlocker exposure(ui->action_ModeExposure), tone(ui->action_ModeToneMapping),
+      mapping(ui->action_ModeScalarMapping), hdr(ui->action_ModeHDR);
+    ui->action_ModeExposure->setEnabled(!scalar);
+    ui->action_ModeToneMapping->setEnabled(!scalar);
+    ui->action_ModeScalarMapping->setEnabled(true);
+    ui->action_ModeExposure->setChecked(mode == RGBFramebufferModel::Preview_Exposure);
+    ui->action_ModeToneMapping->setChecked(mode == RGBFramebufferModel::Preview_ToneMapping);
+    ui->action_ModeScalarMapping->setChecked(mode == RGBFramebufferModel::Preview_ScalarMapping);
+    ui->action_ModeHDR->setChecked(mode == RGBFramebufferModel::Preview_HDR);
+    ui->action_ModeScalarMapping->setToolTip(scalar
+      ? tr("Scalar Mapping\nMap the original channel values through a range and colormap.")
+      : tr("Scalar Mapping\nMap linear RGB luminance through a range and colormap."));
+#ifdef Q_OS_WIN
+    const bool hdrAvailable = m_hdrAvailabilityProbe && m_hdrAvailabilityProbe->available();
+    ui->action_ModeHDR->setEnabled(!scalar && hdrAvailable);
+    QString hdrTip;
+    if (scalar)
+        hdrTip = tr("HDR is available for color framebuffers. Single channels use Scalar Mapping.");
+    else if (hdrAvailable)
+        hdrTip = tr("Display linear color on the current Windows HDR monitor.");
+    else
+        hdrTip = tr("HDR unavailable\n%1\nEnable HDR in Windows Display Settings or move to an HDR display.")
+          .arg(m_hdrAvailabilityProbe ? m_hdrAvailabilityProbe->statusDetail() : tr("Display not checked."));
+    ui->action_ModeHDR->setToolTip(hdrTip);
+#else
+    ui->action_ModeHDR->setEnabled(false);
+#endif
 }
 
 void MainWindow::queueHdrAvailabilityProbe()
@@ -695,16 +712,10 @@ void MainWindow::updateHdrAvailability()
     // requires an HDR frame, so a disabled action can become available again.
     m_hdrAvailabilityProbe->refresh(target);
     const bool available = m_hdrAvailabilityProbe->available();
-    ui->action_ModeHDR->setEnabled(available);
-    ui->action_ModeHDR->setToolTip(available
-      ? tr("Display linear color on the current Windows HDR monitor.")
-      : tr("HDR unavailable\n%1\nEnable HDR in Windows Display Settings or move to an HDR display.")
-          .arg(m_hdrAvailabilityProbe->statusDetail()));
     if (!available && m_rgbPreviewMode == RGBFramebufferModel::Preview_HDR)
         applyRgbPreviewMode(RGBFramebufferModel::Preview_Exposure);
-#else
-    ui->action_ModeHDR->setEnabled(false);
 #endif
+    syncPreviewModeActions();
 }
 
 void MainWindow::setupStereoActions()
@@ -964,6 +975,7 @@ void MainWindow::applyPanelVisibilityToAllTabs() const
 
 void MainWindow::updateShowActions()
 {
+    syncPreviewModeActions();
     if (m_minimalView && !m_switchingMinimalView && !m_rebindingMinimalModel) {
         const auto* currentModel = currentFileWidget()
                                      ? currentFileWidget()->activeFramebufferModel() : nullptr;
@@ -1393,6 +1405,8 @@ void MainWindow::adjustMinimalParameter(double steps)
 {
     if (auto* rgb = qobject_cast<RGBFramebufferWidget*>(m_minimalPreview.data()))
         rgb->onControlWheel(steps);
+    else if (auto* scalar = qobject_cast<YFramebufferWidget*>(m_minimalPreview.data()))
+        scalar->onControlWheel(steps);
     updateMinimalSummary();
 }
 
@@ -1858,7 +1872,7 @@ void MainWindow::on_action_ModeHDR_triggered()
     if (!ui->action_ModeHDR->isEnabled()) {
         // Checkable actions toggle before triggered(), so restore the previous
         // selection if the display changed between the last probe and the click.
-        applyRgbPreviewMode(m_rgbPreviewMode);
+        syncPreviewModeActions();
         return;
     }
     applyRgbPreviewMode(RGBFramebufferModel::Preview_HDR);
@@ -1866,9 +1880,14 @@ void MainWindow::on_action_ModeHDR_triggered()
 }
 
 
-void MainWindow::on_action_ModeFalseColor_triggered()
+void MainWindow::on_action_ModeScalarMapping_triggered()
 {
-    applyRgbPreviewMode(RGBFramebufferModel::Preview_FalseColor);
+    const auto* document = currentFileWidget();
+    if (document && qobject_cast<YFramebufferWidget*>(document->activePreviewWidget())) {
+        syncPreviewModeActions();
+        return;
+    }
+    applyRgbPreviewMode(RGBFramebufferModel::Preview_ScalarMapping);
 }
 
 

@@ -54,7 +54,7 @@ class RGBFramebufferModel: public FramebufferModel
     {
         Preview_Exposure,
         Preview_ToneMapping,
-        Preview_FalseColor,
+        Preview_ScalarMapping,
         Preview_HDR,
     };
 
@@ -107,9 +107,9 @@ class RGBFramebufferModel: public FramebufferModel
   public slots:
     void setPreviewMode(PreviewMode mode);
     void setToneMappingMethod(ToneMappingMethod method);
-    void setFalseColorColormap(ColormapModule::Map map);
-    void setFalseColorRange(double min, double max);
-    void setFalseColorAutomatic(bool enabled);
+    void setScalarMappingColormap(ColormapModule::Map map);
+    void setScalarMappingRange(double min, double max);
+    void setScalarMappingAutomatic(bool enabled);
     void setExposure(double value);
     void setToneParameters(double p0, double p1, double p2, double p3);
 
@@ -126,8 +126,8 @@ class RGBFramebufferModel: public FramebufferModel
     ToneMappingMethod               m_toneMappingMethod;
     double                          m_exposure;
     double                          m_toneParams[4];
-    double                          m_falseColorMin;
-    double                          m_falseColorMax;
-    bool m_falseColorAutomatic = false;
-    std::shared_ptr<const Colormap> m_falseColorMap;
+    double                          m_scalarMappingMin;
+    double                          m_scalarMappingMax;
+    bool m_scalarMappingAutomatic = false;
+    std::shared_ptr<const Colormap> m_scalarMappingMap;
 };

@@ -65,7 +65,7 @@ dimensions remain unchanged by preview resolution levels or projections.
 | Wheel; + / - | Zoom |
 | 0 / 1; zoom percentage button | Fit / 100%; toggle Fit and 100% |
 | Left or middle drag | Pan in the complete workspace; see projection exceptions below |
-| Ctrl+wheel | Exposure, first tone parameter or false-color upper bound; scalar views unchanged |
+| Ctrl+wheel | Exposure, first tone parameter or Scalar Mapping upper bound, including single channels |
 | Right-click image | Reset current color mode; tone mapping also returns to Reinhard |
 | Double-click image | Enter or leave minimal view |
 
@@ -82,7 +82,7 @@ active preview. Small resolution levels reserve footer space without stretching 
 
 EXR Scanline, single-level Tiled and stored Mipmap/Ripmap data are supported,
 including Multipart. Combined RGB/RGBA/YA/YC/YCA use color controls; individual
-R/G/B/A/Y/RY/BY and custom channels use scalar Colormap controls. Pure Y normally
+R/G/B/A/Y/RY/BY and custom channels use the shared Scalar Mapping controls. Pure Y normally
 opens as scalar grayscale, with range 0–1 and no exposure or sRGB transform.
 
 Pixel readouts use file coordinates, including negative/nonzero data-window
@@ -95,12 +95,20 @@ identify the actual source sample coordinates with `@ (x, y)`.
 - **Exposure** applies EV to linear display colors and encodes an SDR preview.
 - **Tone mapping** offers Reinhard, ACES, Filmic/Hable, Log and Clamp. ACES here names
   the available tone curve, not a complete color-management pipeline.
-- **False color** maps luminance through the chosen color scale.
+- **Scalar Mapping** maps RGB luminance or original single-channel values through
+  a range and colormap. Source identifies the mapped quantity. Single-channel
+  framebuffers select this mode automatically and disable Exposure, Tone Mapping
+  and HDR; returning to a color framebuffer restores the selected RGB mode.
 - **HDR** is the Windows display mode described below.
-- Scalar and false-color maps: Grayscale, BBGR, Turbo, Magma, Inferno, Plasma,
+- Scalar Mapping maps: Grayscale, BBGR, Turbo, Magma, Inferno, Plasma,
   Viridis. Manual ranges accept scientific notation and finite FLOAT extremes;
-  Auto needs finite samples. Constant ranges map finite values to the lower end.
-  Scalar ranges use source values directly; color false-color ranges use luminance.
+  Auto follows the full finite range; turning it off restores the previous manual
+  range. Editing a bound or dragging the range slider turns Auto off. Without
+  finite values, Auto cannot be enabled; an active Auto keeps its last range and
+  can still be turned off. Constant ranges map finite values to the lower end.
+  Each preview keeps its own range, colormap, Auto state and color-scale visibility.
+  RGB defaults to Turbo; single channels default to Grayscale. Both start at 0–1
+  with Auto off. Right-click reset restores those defaults and shows the scale.
 
 Clamp Min/Max accept scientific notation and stay between zero and the maximum
 finite display-linear RGB component, excluding alpha, NaN and Inf. Its default
@@ -110,7 +118,11 @@ range is zero and its controls are disabled. Source Max in the footer uses store
 channel samples, so color conversion and Deep composition can give a different
 maximum from Clamp.
 
-Preview number fields keep their width when editing. Footer readouts use fixed
+Preview number fields keep their compact width when editing and have up/down
+arrows for fine adjustments. Toolbar scientific fields
+show six significant digits at rest and full precision while editing; hover
+for the exact value. Merely focusing or leaving a field preserves its stored
+value. Long values scroll inside the editor. Footer readouts use fixed
 columns: RGB values are red, green and blue, and finite values above 1 are bold.
 Hover for full precision and source-channel details; narrow windows clip the
 readout without wrapping it.
@@ -155,8 +167,8 @@ markers merge. Outlines can enclose normal values: use readouts for exact sample
 Strokes remain opaque and independent of exposure/alpha. Copies and preview
 exports draw them after resizing. Raw EXR and projection-conversion EXR omit them.
 Finite negatives and values above one are not anomalies. With markers off, normal
-SDR component mapping sends NaN/-Inf to black and +Inf to full brightness; false
-color sends NaN to black and infinities to the range ends.
+SDR component mapping sends NaN/-Inf to black and +Inf to full brightness;
+Scalar Mapping sends NaN to black and infinities to the range ends.
 
 ## Stored resolution levels
 

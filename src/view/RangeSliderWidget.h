@@ -32,6 +32,7 @@
 
 #pragma once
 
+#include <QColor>
 #include <QWidget>
 
 class QMouseEvent;
@@ -39,12 +40,16 @@ class QMouseEvent;
 class RangeSliderWidget: public QWidget
 {
     Q_OBJECT
+    Q_PROPERTY(QColor trackColor READ trackColor WRITE setTrackColor)
 
   public:
     explicit RangeSliderWidget(QWidget* parent = nullptr);
 
     QSize minimumSizeHint() const override;
     QSize sizeHint() const override;
+
+    QColor trackColor() const { return m_trackColor; }
+    void setTrackColor(const QColor& color) { m_trackColor = color; update(); }
 
   signals:
     void rangeChanged(double min, double max);
@@ -79,4 +84,5 @@ class RangeSliderWidget: public QWidget
     double m_min;
     double m_max;
     Handle m_activeHandle;
+    QColor m_trackColor;
 };
